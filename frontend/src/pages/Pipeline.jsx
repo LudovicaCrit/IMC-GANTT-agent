@@ -197,9 +197,39 @@ function PianificazioneProgetto({ progetto, dipendenti }) {
   const deltaOre = totaleOre - progetto.budget_ore
   const profiliUsati = [...new Set(planTasks.map(t => t.profilo))].length
 
-  // Candidati assegnazione per profilo
-  function getCandidati(profilo) {
-    return dipendenti.filter(d => d.profilo === profilo)
+  // Calcola ore pianificate per persona nella tabella corrente
+  const orePianificatePerPersona = useMemo(() => {
+    const map = {}
+    planTasks.forEach(t => {
+      if (t.assegnato) {
+        map[t.assegnato] = (map[t.assegnato] || 0) + (t.ore || 0)
+      }
+    })
+    return map
+  }, [planTasks])
+
+  // Candidati assegnazione per profilo con saturazione dinamica
+  function getCandidati(profilo, currentTaskId) {
+    return dipendenti
+      .filter(d => d.profilo === profilo)
+      .map(d => {
+        // Ore pianificate per questa persona (escludendo il task corrente per non contare doppio)
+        const orePianAltri = planTasks
+          .filter(t => t.assegnato === d.nome && t.tempId !== currentTaskId)
+          .reduce((sum, t) => sum + (t.ore || 0), 0)
+        // Stima settimanale: ore pianificate / durata progetto in settimane
+        const durataSettimane = Math.max(1, Math.round(
+          (new Date(progetto.data_fine).getTime() - new Date(progetto.data_inizio).getTime()) / (7 * 86400000)
+        ))
+        const caricoExtraSett = orePianAltri / durataSettimane
+        const saturazioneDinamica = Math.round(d.saturazione_pct + (caricoExtraSett / (d.ore_sett || 40)) * 100)
+        return {
+          ...d,
+          orePianificate: orePianAltri,
+          saturazioneDinamica,
+        }
+      })
+      .sort((a, b) => a.saturazioneDinamica - b.saturazioneDinamica) // meno caricati prima
   }
 
   return (
@@ -316,15 +346,24 @@ function PianificazioneProgetto({ progetto, dipendenti }) {
 
                   {/* Assegnato a */}
                   <td className="px-3 py-2">
-                    <select value={task.assegnato} onChange={e => updateTask(task.tempId, 'assegnato', e.target.value)}
-                      className="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs w-full">
-                      <option value="">— Seleziona —</option>
-                      {getCandidati(task.profilo).map(d => (
-                        <option key={d.id} value={d.nome}>
-                          {d.nome} ({d.saturazione_pct}%)
-                        </option>
-                      ))}
-                    </select>
+                    {(() => {
+                      const candidati = getCandidati(task.profilo, task.tempId)
+                      const currentCand = candidati.find(c => c.nome === task.assegnato)
+                      const selectColor = currentCand && currentCand.saturazioneDinamica > 100
+                        ? 'border-red-600 text-red-300' : 'border-gray-700'
+                      return (
+                        <select value={task.assegnato} onChange={e => updateTask(task.tempId, 'assegnato', e.target.value)}
+                          className={`bg-gray-800 border rounded px-2 py-1 text-xs w-full ${selectColor}`}>
+                          <option value="">— Seleziona —</option>
+                          {candidati.map(d => (
+                            <option key={d.id} value={d.nome}
+                              style={{ color: d.saturazioneDinamica > 100 ? '#f87171' : d.saturazioneDinamica > 85 ? '#fbbf24' : '#86efac' }}>
+                              {d.nome} ({d.saturazioneDinamica}%{d.orePianificate > 0 ? ` · +${d.orePianificate}h plan.` : ''})
+                            </option>
+                          ))}
+                        </select>
+                      )
+                    })()}
                   </td>
 
                   {/* Dipendenze */}
@@ -383,6 +422,42 @@ function PianificazioneProgetto({ progetto, dipendenti }) {
         <span><strong className="text-gray-400">SS</strong> Inizio → Inizio (B inizia quando inizia A)</span>
         <span><strong className="text-gray-400">FF</strong> Fine → Fine (B finisce quando finisce A)</span>
       </div>
+
+      {/* ── Riepilogo saturazione risorse ────────────────────────── */}
+      {Object.keys(orePianificatePerPersona).length > 0 && (
+        <div className="bg-gray-900 rounded-xl border border-gray-800 p-4">
+          <h3 className="font-semibold text-sm mb-3">👥 Impatto sulle risorse con questo progetto</h3>
+          <div className="grid grid-cols-2 gap-3">
+            {Object.entries(orePianificatePerPersona).map(([nome, orePlan]) => {
+              const dip = dipendenti.find(d => d.nome === nome)
+              if (!dip) return null
+              const durataSettimane = Math.max(1, Math.round(
+                (new Date(progetto.data_fine).getTime() - new Date(progetto.data_inizio).getTime()) / (7 * 86400000)
+              ))
+              const caricoExtraSett = orePlan / durataSettimane
+              const satNuova = Math.round(dip.saturazione_pct + (caricoExtraSett / (dip.ore_sett || 40)) * 100)
+              const isOver = satNuova > 100
+              const isWarning = satNuova > 85 && satNuova <= 100
+              return (
+                <div key={nome} className={`p-3 rounded-lg border text-sm ${
+                  isOver ? 'border-red-700 bg-red-900/20' : isWarning ? 'border-yellow-700 bg-yellow-900/20' : 'border-gray-700 bg-gray-800/50'
+                }`}>
+                  <div className="flex justify-between items-center">
+                    <span className="font-medium">{nome}</span>
+                    <span className={`text-xs font-bold ${isOver ? 'text-red-400' : isWarning ? 'text-yellow-400' : 'text-green-400'}`}>
+                      {dip.saturazione_pct}% → {satNuova}%
+                    </span>
+                  </div>
+                  <p className="text-xs text-gray-400 mt-1">
+                    {dip.profilo} · +{orePlan}h pianificate · {dip.n_task_attivi} task attuali
+                    {isOver && ' · ⚠️ SOVRACCARICO'}
+                  </p>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
 
       {/* ── GANTT generato ───────────────────────────────────────── */}
       <div className="bg-gray-900 rounded-xl border border-gray-800 p-4">
