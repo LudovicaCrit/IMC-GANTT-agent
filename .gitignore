@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.pyc
+.venvu/
+backend/.env
+
+# Node
+node_modules/
+frontend/dist/
+
+# Vecchie pagine
+ex_pages/
+
+# OS
+.DS_Store
+Thumbs.db
