@@ -1,6 +1,9 @@
 """
 Modulo Agente AI — Gemini 2.5 Flash
 Carica i prompt dalla cartella prompts/ e gestisce la conversazione.
+
+Approccio B: il contesto include task_assegnati (per mappatura ore)
+e colleghi_task (per "ho aiutato X").
 """
 
 import os
@@ -47,9 +50,16 @@ def init_gemini(prompt_file: str = "consuntivazione.md"):
 def costruisci_contesto(dip_data, ore_compilate, stati_compilati, tasks_attivi,
                          ore_assenza=0, tipo_assenza="", nota_assenza="",
                          spese=None, ore_contrattuali=40):
-    """Costruisce il contesto JSON da passare all'agente, incluso il carico complessivo."""
+    """
+    Costruisce il contesto JSON da passare all'agente.
+    Include: carico complessivo, task_assegnati (per Approccio B),
+    colleghi_task (per "ho aiutato X"), e dati compilazione corrente.
+    """
 
-    from data import get_progetti_dipendente, carico_settimanale_dipendente
+    from data import (
+        TASKS, DIPENDENTI, PROGETTI,
+        get_progetti_dipendente, carico_settimanale_dipendente
+    )
     from datetime import datetime
 
     task_compilati = []
@@ -61,7 +71,12 @@ def costruisci_contesto(dip_data, ore_compilate, stati_compilati, tasks_attivi,
         if len(task_row) > 0:
             task_nome = task_row.iloc[0]["nome"]
             stato = stati_compilati.get(task_id, "In corso")
-            task_compilati.append({"task": task_nome, "ore": float(ore), "stato": stato})
+            task_compilati.append({
+                "task": task_nome,
+                "task_id": task_id,
+                "ore": float(ore),
+                "stato": stato,
+            })
             if stato == "Bloccato":
                 task_bloccati.append(task_nome)
             if ore == 0:
@@ -76,6 +91,42 @@ def costruisci_contesto(dip_data, ore_compilate, stati_compilati, tasks_attivi,
     carico_assegnato = carico_settimanale_dipendente(dip_data["id"], oggi)
     saturazione_pct = round(carico_assegnato / ore_contrattuali * 100)
 
+    # ── task_assegnati: lista completa dei task del dipendente.
+    #    L'agente mappa SOLO su questi (Approccio B). ──
+    task_assegnati = []
+    for _, t in tasks_attivi.iterrows():
+        proj = PROGETTI[PROGETTI["id"] == t["progetto_id"]]
+        proj_nome = proj.iloc[0]["nome"] if len(proj) > 0 else "?"
+        task_assegnati.append({
+            "id": t["id"],
+            "nome": t["nome"],
+            "progetto": proj_nome,
+            "fase": t["fase"],
+            "ore_stimate": int(t["ore_stimate"]),
+            "stato": t["stato"],
+        })
+
+    # ── colleghi_task: per ogni collega, i task attivi.
+    #    Serve quando il dipendente dice "ho aiutato Laura". ──
+    colleghi_task = {}
+    for _, collega in DIPENDENTI.iterrows():
+        if collega["id"] == dip_data["id"]:
+            continue  # salta sé stesso
+        tasks_collega = TASKS[
+            (TASKS["dipendente_id"] == collega["id"]) &
+            (TASKS["stato"].isin(["In corso", "Da iniziare"]))
+        ]
+        if len(tasks_collega) > 0:
+            colleghi_task[collega["nome"]] = []
+            for _, tc in tasks_collega.iterrows():
+                proj = PROGETTI[PROGETTI["id"] == tc["progetto_id"]]
+                proj_nome = proj.iloc[0]["nome"] if len(proj) > 0 else "?"
+                colleghi_task[collega["nome"]].append({
+                    "id": tc["id"],
+                    "nome": tc["nome"],
+                    "progetto": proj_nome,
+                })
+
     return {
         "nome_dipendente": str(dip_data["nome"]),
         "profilo": str(dip_data["profilo"]),
@@ -87,6 +138,8 @@ def costruisci_contesto(dip_data, ore_compilate, stati_compilati, tasks_attivi,
             "progetti": progetti_attivi,
             "sovraccaricato": saturazione_pct > 100,
         },
+        "task_assegnati": task_assegnati,
+        "colleghi_task": colleghi_task,
         "task_compilati": task_compilati,
         "task_con_zero_ore": task_zero_ore,
         "ore_totali_lavorate": float(ore_totali),

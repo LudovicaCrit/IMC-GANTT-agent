@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react'
-import { fetchGantt, fetchProgetti, fetchDipendenti } from '../api'
+import { fetchGantt, fetchProgetti, fetchDipendenti, exportGanttPdf } from '../api'
 
 // ── Colori stati ────────────────────────────────────────────────────
 const STATUS_COLORS = {
@@ -239,6 +239,10 @@ export default function GanttPage() {
           {profili.map(p => <option key={p} value={p}>{p}</option>)}
         </select>
         <StatusLegend />
+        <button onClick={() => exportGanttPdf(filtroProgetto || null)}
+          className="ml-auto px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm transition-colors">
+          📥 Esporta PDF
+        </button>
       </div>
 
       <GanttChart tasks={ganttData} />

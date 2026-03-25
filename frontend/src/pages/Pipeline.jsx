@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react'
-import { fetchProgetti, fetchTasks, fetchDipendenti } from '../api'
+import { fetchProgetti, fetchTasks, fetchDipendenti, anteprimaImpatto, applicaModifiche, salvaBozza, caricaBozza } from '../api'
 import { GanttChart } from './Gantt'
 
 // ── Costanti ────────────────────────────────────────────────────────
@@ -123,6 +123,10 @@ function PianificazioneProgetto({ progetto, dipendenti }) {
   ])
   const [nextId, setNextId] = useState(2)
   const [showGantt, setShowGantt] = useState(false)
+  const [impatto, setImpatto] = useState(null)      // anteprima impatto
+  const [impattoLoading, setImpattoLoading] = useState(false)
+  const [confermato, setConfermato] = useState(false)
+  const [salvataggioMsg, setSalvataggioMsg] = useState('')
 
   // Aggiungi task
   function addTask() {
@@ -182,6 +186,102 @@ function PianificazioneProgetto({ progetto, dipendenti }) {
       return { ...t, dipendenze: t.dipendenze.map(d => d.taskId === predId ? { ...d, tipo: newTipo } : d) }
     }))
   }
+
+  // ── Verifica risorse (anteprima impatto) ──
+  async function verificaRisorse() {
+    const taskValidi = planTasks.filter(t => t.nome && t.ore > 0)
+    if (taskValidi.length === 0) {
+      alert('Compila almeno un task con nome e ore.')
+      return
+    }
+    setImpattoLoading(true)
+    try {
+      const nuoviTask = taskValidi.map(t => {
+        const g = ganttData.find(g => g.id === t.tempId)
+        return {
+          nome: t.nome,
+          fase: t.fase,
+          ore_stimate: t.ore,
+          data_inizio: g?.start || progetto.data_inizio,
+          data_fine: g?.end || progetto.data_fine,
+          profilo_richiesto: t.profilo,
+          dipendente_id: t.assegnato,
+          stato: 'Da iniziare',
+        }
+      })
+      const res = await anteprimaImpatto({
+        modifiche: [],
+        nuovi_task: nuoviTask,
+        progetto_id: progetto.id,
+      })
+      setImpatto(res.impatto)
+    } catch (err) {
+      alert('Errore nella verifica risorse: ' + err.message)
+    } finally {
+      setImpattoLoading(false)
+    }
+  }
+
+  // ── Conferma e avvia progetto ──
+  async function confermaProgetto() {
+    const taskValidi = planTasks.filter(t => t.nome && t.ore > 0)
+    if (taskValidi.length === 0) {
+      alert('Compila almeno un task con nome e ore.')
+      return
+    }
+    if (!confirm(`Stai per avviare "${progetto.nome}" con ${taskValidi.length} task. I task verranno creati nel sistema e il progetto passerà a "In esecuzione". Procedere?`)) return
+
+    try {
+      const nuoviTask = taskValidi.map(t => {
+        const g = ganttData.find(g => g.id === t.tempId)
+        // Converti nome dipendente → id dipendente
+        const dipMatch = dipendenti.find(d => d.nome === t.assegnato)
+        return {
+          nome: t.nome,
+          fase: t.fase,
+          ore_stimate: t.ore,
+          data_inizio: g?.start || progetto.data_inizio,
+          data_fine: g?.end || progetto.data_fine,
+          profilo_richiesto: t.profilo,
+          dipendente_id: dipMatch ? dipMatch.id : '',
+          predecessore: '',
+          stato: 'Da iniziare',
+        }
+      })
+      const res = await applicaModifiche({
+        modifiche: [],
+        nuovi_task: nuoviTask,
+        progetto_id: progetto.id,
+        cambia_stato_progetto: 'In esecuzione',
+      })
+      if (res.stato_progetto_cambiato) {
+        setConfermato(true)
+      }
+    } catch (err) {
+      alert('Errore nella conferma: ' + err.message)
+    }
+  }
+
+  // ── Salva bozza ──
+  async function salva() {
+    try {
+      await salvaBozza(progetto.id, { planTasks, nextId })
+      setSalvataggioMsg('Bozza salvata!')
+      setTimeout(() => setSalvataggioMsg(''), 3000)
+    } catch (err) {
+      setSalvataggioMsg('Errore nel salvataggio')
+    }
+  }
+
+  // ── Carica bozza al mount ──
+  useEffect(() => {
+    caricaBozza(progetto.id).then(res => {
+      if (res.dati_json && res.dati_json.planTasks) {
+        setPlanTasks(res.dati_json.planTasks)
+        if (res.dati_json.nextId) setNextId(res.dati_json.nextId)
+      }
+    }).catch(() => {})
+  }, [progetto.id])
 
   // Calcola GANTT
   const ganttData = useMemo(() => {
@@ -464,17 +564,18 @@ function PianificazioneProgetto({ progetto, dipendenti }) {
         <div className="flex justify-between items-center mb-3">
           <h3 className="font-semibold">📅 GANTT generato</h3>
           <div className="flex gap-2">
+            <button onClick={salva}
+              className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded-lg text-xs">
+              💾 Salva bozza
+            </button>
+            {salvataggioMsg && <span className="text-xs text-green-400 py-1.5">{salvataggioMsg}</span>}
             <button onClick={() => setShowGantt(!showGantt)}
               className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded-lg text-xs">
               {showGantt ? 'Nascondi' : 'Mostra'} GANTT
             </button>
-            <button onClick={() => alert('In sviluppo: verifica disponibilità risorse nel periodo e segnala conflitti.')}
-              className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded-lg text-xs">
-              👥 Verifica risorse
-            </button>
-            <button onClick={() => alert('In sviluppo: conferma la pianificazione, crea i task nel sistema e avvia il progetto.')}
-              className="px-3 py-1.5 bg-green-600 hover:bg-green-500 rounded-lg text-xs font-medium">
-              ✅ Conferma e avvia progetto
+            <button onClick={confermaProgetto} disabled={confermato}
+              className={`px-3 py-1.5 rounded-lg text-xs font-medium ${confermato ? 'bg-green-800 text-green-300' : 'bg-green-600 hover:bg-green-500'}`}>
+              {confermato ? '✅ Progetto avviato!' : '✅ Conferma e avvia progetto'}
             </button>
           </div>
         </div>

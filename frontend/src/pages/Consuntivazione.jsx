@@ -49,6 +49,7 @@ export default function Consuntivazione() {
   const [chatInput, setChatInput] = useState('')
   const [chatLoading, setChatLoading] = useState(false)
   const [submitted, setSubmitted] = useState(false)
+  const [pendingMappatura, setPendingMappatura] = useState(null) // Approccio B
   const chatEndRef = useRef(null)
   const chatContainerRef = useRef(null)
 
@@ -136,8 +137,19 @@ export default function Consuntivazione() {
         tipo_assenza: hasAssenza ? tipoAssenza : '',
         nota_assenza: hasAssenza ? notaAssenza : '',
         spese: hasSpese ? spese.filter(s => s.importo > 0) : [],
+        chat_history: chatHistory.filter(m => m.role === 'user' || m.role === 'assistant').map(m => ({ role: m.role, content: m.content })),
       })
       setChatHistory(prev => [...prev, { role: 'assistant', content: res.risposta }])
+
+      // Approccio B: se l'agente ha proposto una mappatura ore
+      if (res.mappatura_ore && res.mappatura_ore.ore) {
+        setPendingMappatura(res.mappatura_ore)
+        setChatHistory(prev => [...prev, {
+          role: 'system',
+          content: '📝 L\'agente ha proposto una compilazione ore — vedi il riepilogo sopra la chat.'
+        }])
+      }
+
       if (res.segnalazione) {
         setChatHistory(prev => [...prev, {
           role: 'system',
@@ -149,6 +161,43 @@ export default function Consuntivazione() {
     } finally {
       setChatLoading(false)
     }
+  }
+
+  // Approccio B: applica la mappatura ore al form
+  const applicaMappatura = () => {
+    if (!pendingMappatura) return
+    const nuoveOre = { ...ore }
+    for (const [taskId, oreTask] of Object.entries(pendingMappatura.ore)) {
+      if (nuoveOre.hasOwnProperty(taskId)) {
+        nuoveOre[taskId] = oreTask
+      }
+    }
+    setOre(nuoveOre)
+
+    // Applica assenza se presente
+    if (pendingMappatura.assenza) {
+      setHasAssenza(true)
+      setOreAssenza(pendingMappatura.assenza.ore || 0)
+      setTipoAssenza(pendingMappatura.assenza.tipo || 'Permesso retribuito')
+    }
+
+    // Applica smart working se presente
+    if (pendingMappatura.giorni_sede !== undefined) setGiorniSede(pendingMappatura.giorni_sede)
+    if (pendingMappatura.giorni_remoto !== undefined) setGiorniRemoto(pendingMappatura.giorni_remoto)
+
+    setPendingMappatura(null)
+    setChatHistory(prev => [...prev, {
+      role: 'system',
+      content: '✅ Ore compilate automaticamente! Controlla il form e modifica se necessario.'
+    }])
+  }
+
+  const rifiutaMappatura = () => {
+    setPendingMappatura(null)
+    setChatHistory(prev => [...prev, {
+      role: 'system',
+      content: '❌ Mappatura annullata. Puoi compilare le ore manualmente o riscrivere al chatbot.'
+    }])
   }
 
   const addSpesa = () => setSpese(prev => [...prev, { descrizione: '', importo: 0, categoria: 'Trasporti' }])
@@ -407,10 +456,50 @@ export default function Consuntivazione() {
                     </details>
                   )}
 
+                  {/* Pannello conferma mappatura (Approccio B) */}
+                  {pendingMappatura && (
+                    <div className="mb-3 bg-blue-900/30 border border-blue-700 rounded-xl p-4">
+                      <h4 className="text-sm font-semibold text-blue-300 mb-2">📝 Proposta compilazione ore</h4>
+                      <div className="space-y-1.5 mb-3">
+                        {Object.entries(pendingMappatura.ore).map(([taskId, oreTask]) => {
+                          const task = dipDetail?.tasks.find(t => t.id === taskId)
+                          return (
+                            <div key={taskId} className="flex justify-between items-center text-sm">
+                              <span className="text-gray-300">{task ? task.nome : taskId}</span>
+                              <span className="font-mono text-blue-300">{oreTask}h</span>
+                            </div>
+                          )
+                        })}
+                        {pendingMappatura.assenza && (
+                          <div className="flex justify-between items-center text-sm border-t border-blue-800 pt-1.5 mt-1.5">
+                            <span className="text-gray-300">Assenza ({pendingMappatura.assenza.tipo})</span>
+                            <span className="font-mono text-yellow-300">{pendingMappatura.assenza.ore}h</span>
+                          </div>
+                        )}
+                        <div className="flex justify-between items-center text-sm border-t border-blue-800 pt-1.5 mt-1.5 font-semibold">
+                          <span className="text-white">Totale</span>
+                          <span className="font-mono text-white">
+                            {Object.values(pendingMappatura.ore).reduce((s, v) => s + v, 0) + (pendingMappatura.assenza?.ore || 0)}h
+                          </span>
+                        </div>
+                      </div>
+                      <div className="flex gap-2">
+                        <button onClick={applicaMappatura}
+                          className="flex-1 px-3 py-2 bg-green-600 hover:bg-green-500 rounded-lg text-sm font-medium transition-colors">
+                          ✅ Conferma e compila
+                        </button>
+                        <button onClick={rifiutaMappatura}
+                          className="px-3 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm transition-colors">
+                          ✏️ Correggo io
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
                   {/* Chat */}
                   <div ref={chatContainerRef} className="flex-1 overflow-y-auto mb-3 space-y-1 min-h-[250px]">
                     <ChatMessage role="assistant"
-                      content="Compila le ore qui a fianco. Se hai bisogno di segnalare qualcosa — un blocco, una richiesta di supporto, o qualsiasi altra cosa — scrivimi qui." />
+                      content="Compila le ore qui a fianco, oppure raccontami cosa hai fatto questa settimana e ci penso io. Se hai bisogno di segnalare qualcosa — un blocco, una richiesta di supporto, o qualsiasi altra cosa — scrivimi qui." />
                     {chatHistory.map((msg, i) => (
                       msg.role === 'system' ? (
                         <div key={i} className="text-center py-2">

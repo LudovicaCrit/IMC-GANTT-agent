@@ -1,0 +1,4 @@
+.env
+imcgroup.db
+__pycache__/
+*.pyc

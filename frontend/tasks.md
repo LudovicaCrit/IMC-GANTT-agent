@@ -12,3 +12,8 @@ Testing e QA — Testing — 80h — Tecnico Junior — dipende da #4 (FS), dipe
 Deploy e collaudo — Deploy — 40h — Tecnico Mid — dipende da #7 (FS)
 Gestione progetto — Gestione — 70h — Project Manager — dipende da #1 (SS, parte insieme e dura tutto il progetto)
 Demo e consegna Comune — Vendita — 20h — Commerciale/Pre-sales — dipende da #8 (FS)
+
+
+Martedì e mercoledì ho lavorato al modulo IoT, giovedì ho portato avanti il catalogo open data, venerdì mezza giornata di ferie.
+Ho anche lavorato un po' alle iscrizioni e fatto roba per il booking.
+Ho anche dato una mano ad Alessandro sulla dashboard

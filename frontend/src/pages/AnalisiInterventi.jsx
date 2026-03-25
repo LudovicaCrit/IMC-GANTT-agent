@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { fetchDipendenti, fetchProgetti, fetchTasks, fetchGantt, richiediAnalisiGantt, simulaRitardoMultiplo, fetchSegnalazioni } from '../api'
+import { fetchDipendenti, fetchProgetti, fetchTasks, fetchGantt, richiediAnalisiGantt, simulaRitardoMultiplo, fetchSegnalazioni, anteprimaImpatto, applicaModifiche } from '../api'
 import { GanttChart } from './Gantt'
 
 // ── Costanti ────────────────────────────────────────────────────────
@@ -58,6 +58,9 @@ export default function AnalisiInterventi() {
   const [selectedSegn, setSelectedSegn] = useState(null)
   const [analisiResult, setAnalisiResult] = useState(null)
   const [analisiLoading, setAnalisiLoading] = useState(false)
+  const [applicandoOpzione, setApplicandoOpzione] = useState(null) // opzione in anteprima
+  const [anteprimaResult, setAnteprimaResult] = useState(null)
+  const [applicato, setApplicato] = useState(false)
 
   // Segnalazione manuale
   const [segnTipo, setSegnTipo] = useState('sovraccarico')
@@ -588,10 +591,89 @@ export default function AnalisiInterventi() {
                             </div>
                           </div>
                         )}
-                        <button className="mt-4 px-4 py-2 bg-green-600 hover:bg-green-500 rounded-lg text-sm font-medium transition-colors"
-                          onClick={() => alert(`In produzione: applica Opzione ${p.id} e ridisegna il GANTT.`)}>
-                          ✅ Applica questa opzione
+                        <button className="mt-4 px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded-lg text-sm font-medium transition-colors"
+                          onClick={async () => {
+                            // Mostra anteprima impatto prima di applicare
+                            setApplicandoOpzione(p)
+                            try {
+                              const modifiche = (p.azioni || []).map(a => {
+                                if (a.tipo === 'riassegna') {
+                                  const dipTarget = dipendenti.find(d => d.nome === a.a_dipendente)
+                                  return { task_id: a.task_id, campo: 'dipendente_id', nuovo_valore: dipTarget?.id || '' }
+                                } else if (a.tipo === 'sposta_date') {
+                                  return { task_id: a.task_id, campo: 'data_fine', nuovo_valore: a.nuova_data_fine || '' }
+                                }
+                                return null
+                              }).filter(Boolean)
+                              const res = await anteprimaImpatto({ modifiche, nuovi_task: [], progetto_id: '' })
+                              setAnteprimaResult(res.impatto)
+                            } catch (err) {
+                              alert('Errore nel calcolo impatto: ' + err.message)
+                              setApplicandoOpzione(null)
+                            }
+                          }}>
+                          👁️ Anteprima impatto — Opzione {p.id}
                         </button>
+
+                        {/* Pannello anteprima impatto per questa opzione */}
+                        {applicandoOpzione?.id === p.id && anteprimaResult && (
+                          <div className="mt-3 bg-blue-900/20 border border-blue-700 rounded-xl p-4">
+                            <h4 className="text-sm font-semibold text-blue-300 mb-2">Impatto dell'Opzione {p.id}</h4>
+
+                            {anteprimaResult.alert?.length > 0 && (
+                              <div className="mb-3 space-y-1">
+                                {anteprimaResult.alert.map((a, k) => (
+                                  <div key={k} className="p-2 bg-red-900/30 border border-red-800 rounded-lg text-xs text-red-300">⚠️ {a}</div>
+                                ))}
+                              </div>
+                            )}
+
+                            {anteprimaResult.dipendenti_impattati?.length > 0 && (
+                              <div className="space-y-1 mb-3">
+                                {anteprimaResult.dipendenti_impattati.map(d => (
+                                  <div key={d.id} className="flex items-center justify-between text-sm">
+                                    <span className="text-gray-300">{d.nome}</span>
+                                    <span className="flex items-center gap-2">
+                                      <span className="font-mono text-gray-400">{d.saturazione_prima}%</span>
+                                      <span className="text-gray-600">→</span>
+                                      <span className={`font-mono font-bold ${d.saturazione_dopo > 100 ? 'text-red-400' : 'text-green-400'}`}>{d.saturazione_dopo}%</span>
+                                    </span>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+
+                            <div className="flex gap-2">
+                              <button className="flex-1 px-3 py-2 bg-green-600 hover:bg-green-500 rounded-lg text-sm font-medium"
+                                disabled={applicato}
+                                onClick={async () => {
+                                  const modifiche = (p.azioni || []).map(a => {
+                                    if (a.tipo === 'riassegna') {
+                                      const dipTarget = dipendenti.find(d => d.nome === a.a_dipendente)
+                                      return { task_id: a.task_id, campo: 'dipendente_id', nuovo_valore: dipTarget?.id || '' }
+                                    } else if (a.tipo === 'sposta_date') {
+                                      return { task_id: a.task_id, campo: 'data_fine', nuovo_valore: a.nuova_data_fine || '' }
+                                    }
+                                    return null
+                                  }).filter(Boolean)
+                                  try {
+                                    await applicaModifiche({ modifiche, nuovi_task: [], progetto_id: '', cambia_stato_progetto: '' })
+                                    setApplicato(true)
+                                    // Ricarica i task aggiornati
+                                    fetchTasks().then(setAllTasks)
+                                  } catch (err) {
+                                    alert('Errore nell\'applicazione: ' + err.message)
+                                  }
+                                }}>
+                                {applicato ? '✅ Applicato!' : '✅ Conferma e applica'}
+                              </button>
+                              <button className="px-3 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm"
+                                onClick={() => { setApplicandoOpzione(null); setAnteprimaResult(null) }}>
+                                Annulla
+                              </button>
+                            </div>
+                          </div>
+                        )}
                       </div>
                     ))}
 

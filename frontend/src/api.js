@@ -79,3 +79,57 @@ export async function fetchSegnalazioni() {
   const res = await fetch(`${API_BASE}/segnalazioni`);
   return res.json();
 }
+
+// ── Anteprima impatto e applicazione modifiche ──
+
+export async function anteprimaImpatto(data) {
+  const res = await fetch(`${API_BASE}/task/anteprima-impatto`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  return res.json();
+}
+
+export async function applicaModifiche(data) {
+  const res = await fetch(`${API_BASE}/task/applica`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  return res.json();
+}
+
+// ── Bozze pianificazione ──
+
+export async function salvaBozza(progettoId, datiJson) {
+  const res = await fetch(`${API_BASE}/pianificazione/salva-bozza`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ progetto_id: progettoId, dati_json: datiJson }),
+  });
+  return res.json();
+}
+
+export async function caricaBozza(progettoId) {
+  const res = await fetch(`${API_BASE}/pianificazione/bozza/${progettoId}`);
+  return res.json();
+}
+
+// ── Export GANTT PDF ──
+
+export async function exportGanttPdf(progettoId = null) {
+  const params = progettoId ? `?progetto_id=${progettoId}` : '';
+  const res = await fetch(`${API_BASE}/gantt/export-pdf${params}`);
+  if (!res.ok) throw new Error('Errore nella generazione PDF');
+  const blob = await res.blob();
+  // Scarica il file
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `gantt_${progettoId || 'tutti'}_${new Date().toISOString().slice(0,10)}.pdf`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
