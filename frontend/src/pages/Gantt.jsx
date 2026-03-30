@@ -90,6 +90,40 @@ export function GanttChart({ tasks, title, changedIds, compact }) {
     return { x, w }
   }
 
+  // Bande cromatiche per progetto (dark mode)
+  const projectColors = useMemo(() => {
+    const projects = []
+    tasks.forEach(t => { if (!projects.includes(t.project)) projects.push(t.project) })
+    const palettes = [
+      { bg: 'rgba(59, 130, 246, 0.08)', label: 'rgba(59, 130, 246, 0.15)' },   // blu
+      { bg: 'rgba(139, 92, 246, 0.08)', label: 'rgba(139, 92, 246, 0.15)' },    // viola
+      { bg: 'rgba(16, 185, 129, 0.08)', label: 'rgba(16, 185, 129, 0.15)' },    // verde
+      { bg: 'rgba(245, 158, 11, 0.08)', label: 'rgba(245, 158, 11, 0.15)' },    // ambra
+      { bg: 'rgba(236, 72, 153, 0.08)', label: 'rgba(236, 72, 153, 0.15)' },    // rosa
+      { bg: 'rgba(6, 182, 212, 0.08)', label: 'rgba(6, 182, 212, 0.15)' },      // ciano
+      { bg: 'rgba(249, 115, 22, 0.08)', label: 'rgba(249, 115, 22, 0.15)' },    // arancio
+      { bg: 'rgba(99, 102, 241, 0.08)', label: 'rgba(99, 102, 241, 0.15)' },    // indaco
+    ]
+    const colors = {}
+    projects.forEach((p, i) => { colors[p] = palettes[i % palettes.length] })
+    return colors
+  }, [tasks])
+
+  // Barra colore progetto per il separatore
+  const projectAccent = useMemo(() => {
+    const projects = []
+    tasks.forEach(t => { if (!projects.includes(t.project)) projects.push(t.project) })
+    const accents = ['#3b82f6', '#8b5cf6', '#10b981', '#f59e0b', '#ec4899', '#06b6d4', '#f97316', '#6366f1']
+    const map = {}
+    projects.forEach((p, i) => { map[p] = accents[i % accents.length] })
+    return map
+  }, [tasks])
+
+  // Rileva cambio progetto per mostrare separatore
+  function isNewProject(i) {
+    return i === 0 || tasks[i].project !== tasks[i - 1].project
+  }
+
   return (
     <div className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
       {title && <h3 className="font-semibold p-4 pb-2 text-sm">{title}</h3>}
@@ -102,13 +136,26 @@ export function GanttChart({ tasks, title, changedIds, compact }) {
           <div ref={labelsRef} className="overflow-hidden" style={{ maxHeight: compact ? 400 : 600 }}>
             {tasks.map((task, i) => {
               const isChanged = changedSet.has(task.id)
+              const projColor = projectColors[task.project]?.bg || 'transparent'
+              const newProj = isNewProject(i)
+              const accent = projectAccent[task.project] || '#3b82f6'
               return (
-                <div key={task.id || i}
-                  className={`border-b border-gray-800/50 px-3 flex flex-col justify-center ${isChanged ? 'bg-amber-900/20' : 'hover:bg-gray-800/30'}`}
-                  style={{ height: rowH }}>
-                  <p className={`text-sm font-medium truncate ${isChanged ? 'text-amber-200' : ''}`}>{task.name}</p>
-                  <p className="text-[11px] text-gray-500 truncate">{task.assignee} · {task.project}</p>
-                </div>
+                <React.Fragment key={task.id || i}>
+                  {/* Separatore progetto */}
+                  {newProj && !compact && (
+                    <div className="flex items-center gap-2 px-3 border-t border-gray-700"
+                      style={{ height: 22, backgroundColor: projectColors[task.project]?.label }}>
+                      <div style={{ width: 3, height: 12, backgroundColor: accent, borderRadius: 2 }} />
+                      <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: accent }}>{task.project}</span>
+                    </div>
+                  )}
+                  {/* Riga task */}
+                  <div className={`border-b border-gray-800/50 px-3 flex flex-col justify-center ${isChanged ? 'bg-amber-900/20' : ''}`}
+                    style={{ height: rowH, backgroundColor: isChanged ? undefined : projColor }}>
+                    <p className={`text-sm font-medium truncate ${isChanged ? 'text-amber-200' : ''}`}>{task.name}</p>
+                    <p className="text-[11px] text-gray-500 truncate">{task.assignee}</p>
+                  </div>
+                </React.Fragment>
               )
             })}
           </div>
@@ -164,16 +211,26 @@ export function GanttChart({ tasks, title, changedIds, compact }) {
                 const { x, w } = taskBar(task)
                 const c = STATUS_COLORS[task.status] || STATUS_COLORS['Da iniziare']
                 const isChanged = changedSet.has(task.id)
+                const projBg = projectColors[task.project]?.bg || 'transparent'
+                const newProj = isNewProject(i)
                 return (
-                  <div key={task.id || i} className={`relative border-b border-gray-800/50 ${isChanged ? 'bg-amber-900/10' : 'hover:bg-gray-800/20'}`}
-                    style={{ height: rowH, width: totalWidth }}>
-                    <div className={`absolute rounded-[3px] hover:opacity-100 cursor-default z-10 ${isChanged ? 'ring-2 ring-amber-400/60' : ''}`}
-                      style={{ left: x, width: w, top: compact ? 5 : 8, height: compact ? 22 : 24, backgroundColor: c.bar, opacity: isChanged ? 1 : 0.85, minWidth: 4 }}
-                      title={`${task.name}\n${task.assignee} · ${task.project}\n${new Date(task.start).toLocaleDateString('it-IT')} → ${new Date(task.end).toLocaleDateString('it-IT')}\nStato: ${task.status}`}>
-                      {w > 70 && <span className="text-[10px] text-white px-1.5 truncate block font-medium"
-                        style={{ lineHeight: compact ? '22px' : '24px' }}>{task.name}</span>}
+                  <React.Fragment key={task.id || i}>
+                    {/* Separatore progetto nella timeline */}
+                    {newProj && !compact && (
+                      <div className="border-t border-gray-700"
+                        style={{ height: 22, width: totalWidth, backgroundColor: projectColors[task.project]?.label }} />
+                    )}
+                    {/* Riga barra task */}
+                    <div className={`relative border-b border-gray-800/50 ${isChanged ? 'bg-amber-900/10' : ''}`}
+                      style={{ height: rowH, width: totalWidth, backgroundColor: isChanged ? undefined : projBg }}>
+                      <div className={`absolute rounded-[3px] hover:opacity-100 cursor-default z-10 ${isChanged ? 'ring-2 ring-amber-400/60' : ''}`}
+                        style={{ left: x, width: w, top: compact ? 5 : 8, height: compact ? 22 : 24, backgroundColor: c.bar, opacity: isChanged ? 1 : 0.85, minWidth: 4 }}
+                        title={`${task.name}\n${task.assignee} · ${task.project}\n${new Date(task.start).toLocaleDateString('it-IT')} → ${new Date(task.end).toLocaleDateString('it-IT')}\nStato: ${task.status}`}>
+                        {w > 70 && <span className="text-[10px] text-white px-1.5 truncate block font-medium"
+                          style={{ lineHeight: compact ? '22px' : '24px' }}>{task.name}</span>}
+                      </div>
                     </div>
-                  </div>
+                  </React.Fragment>
                 )
               })}
             </div>
@@ -239,10 +296,52 @@ export default function GanttPage() {
           {profili.map(p => <option key={p} value={p}>{p}</option>)}
         </select>
         <StatusLegend />
-        <button onClick={() => exportGanttPdf(filtroProgetto || null)}
-          className="ml-auto px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm transition-colors">
-          📥 Esporta PDF
-        </button>
+        <div className="ml-auto flex gap-2">
+          <button onClick={() => exportGanttPdf(filtroProgetto || null)}
+            className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm transition-colors">
+            📥 PDF
+          </button>
+          <button onClick={() => {
+            // Export PNG: converte il PDF in immagine
+            const params = filtroProgetto ? `?progetto_id=${filtroProgetto}` : '';
+            fetch(`/api/gantt/export-png${params}`)
+              .then(res => res.blob())
+              .then(blob => {
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `gantt_${filtroProgetto || 'tutti'}_${new Date().toISOString().slice(0,10)}.png`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+              })
+              .catch(() => alert('Errore nella generazione PNG'))
+          }}
+            className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm transition-colors">
+            🖼️ PNG
+          </button>
+          <button onClick={() => {
+            // Export Excel
+            const params = filtroProgetto ? `?progetto_id=${filtroProgetto}` : '';
+            fetch(`/api/gantt/export-excel${params}`)
+              .then(res => res.blob())
+              .then(blob => {
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `gantt_${filtroProgetto || 'tutti'}_${new Date().toISOString().slice(0,10)}.xlsx`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+              })
+              .catch(() => alert('Errore nella generazione Excel'))
+          }}
+            className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm transition-colors">
+            📊 Excel
+          </button>
+        </div>
       </div>
 
       <GanttChart tasks={ganttData} />

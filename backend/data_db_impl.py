@@ -381,3 +381,95 @@ def carica_bozza_pianificazione(progetto_id):
     result = bozza.dati_json if bozza else None
     session.close()
     return result
+
+
+# ══════════════════════════════════════════════════════════════════════
+# CONSUNTIVI — SALVATAGGIO
+# ══════════════════════════════════════════════════════════════════════
+
+def salva_consuntivo(dipendente_id, settimana, ore_per_task, stati_per_task,
+                     giorni_sede=0, giorni_remoto=0,
+                     ore_assenza=0, tipo_assenza="", nota_assenza="",
+                     spese_lista=None):
+    """
+    Salva il consuntivo settimanale completo di un dipendente.
+    ore_per_task: dict {task_id: ore}
+    stati_per_task: dict {task_id: stato}
+    """
+    from models import PresenzaSettimanale, Spesa
+    global CONSUNTIVI
+
+    session = get_session()
+    settimana_date = settimana.date() if isinstance(settimana, datetime) else settimana
+
+    # 1) Salva/aggiorna ore per ogni task
+    for task_id, ore in ore_per_task.items():
+        if ore == 0 and not stati_per_task.get(task_id):
+            continue  # salta task senza ore né stato
+
+        existing = session.query(Consuntivo).filter(
+            Consuntivo.task_id == task_id,
+            Consuntivo.dipendente_id == dipendente_id,
+            Consuntivo.settimana == settimana_date,
+        ).first()
+
+        if existing:
+            existing.ore_dichiarate = ore
+            existing.compilato = True
+            existing.data_compilazione = datetime.utcnow()
+            stato = stati_per_task.get(task_id, "In corso")
+            if stato == "Bloccato":
+                existing.motivo_fermo = "Segnalato come bloccato dal dipendente"
+        else:
+            session.add(Consuntivo(
+                task_id=task_id,
+                dipendente_id=dipendente_id,
+                settimana=settimana_date,
+                ore_dichiarate=ore,
+                compilato=True,
+                data_compilazione=datetime.utcnow(),
+                motivo_fermo="Segnalato come bloccato" if stati_per_task.get(task_id) == "Bloccato" else None,
+            ))
+
+    # 2) Salva presenze settimanali (smart working + assenze)
+    existing_pres = session.query(PresenzaSettimanale).filter(
+        PresenzaSettimanale.dipendente_id == dipendente_id,
+        PresenzaSettimanale.settimana == settimana_date,
+    ).first()
+
+    if existing_pres:
+        existing_pres.giorni_sede = giorni_sede
+        existing_pres.giorni_remoto = giorni_remoto
+        existing_pres.ore_assenza = ore_assenza
+        existing_pres.tipo_assenza = tipo_assenza if ore_assenza > 0 else None
+        existing_pres.nota_assenza = nota_assenza if ore_assenza > 0 else None
+    else:
+        session.add(PresenzaSettimanale(
+            dipendente_id=dipendente_id,
+            settimana=settimana_date,
+            giorni_sede=giorni_sede,
+            giorni_remoto=giorni_remoto,
+            ore_assenza=ore_assenza,
+            tipo_assenza=tipo_assenza if ore_assenza > 0 else None,
+            nota_assenza=nota_assenza if ore_assenza > 0 else None,
+        ))
+
+    # 3) Salva spese
+    if spese_lista:
+        for spesa in spese_lista:
+            if spesa.get("importo", 0) > 0:
+                session.add(Spesa(
+                    dipendente_id=dipendente_id,
+                    settimana=settimana_date,
+                    descrizione=spesa.get("descrizione", ""),
+                    importo=spesa["importo"],
+                    categoria=spesa.get("categoria", ""),
+                ))
+
+    session.commit()
+    session.close()
+
+    # Ricarica consuntivi nella cache
+    CONSUNTIVI = _load_consuntivi()
+
+    return True

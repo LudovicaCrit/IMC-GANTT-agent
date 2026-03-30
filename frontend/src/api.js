@@ -116,6 +116,18 @@ export async function caricaBozza(progettoId) {
   return res.json();
 }
 
+// ── Salva consuntivo ──
+
+export async function salvaConsuntivo(data) {
+
+  const res = await fetch(`${API_BASE}/consuntivi/salva`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  return res.json();
+}
+
 // ── Export GANTT PDF ──
 
 export async function exportGanttPdf(progettoId = null) {
@@ -132,4 +144,26 @@ export async function exportGanttPdf(progettoId = null) {
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
+}
+
+// ── IA verifica pianificazione ──
+
+export async function verificaPianificazione(data) {
+  const res = await fetch(`${API_BASE}/agent/verifica-pianificazione`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  return res.json();
+}
+
+// ── IA suggerisci task ──
+
+export async function suggerisciTask(data) {
+  const res = await fetch(`${API_BASE}/agent/suggerisci-task`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  return res.json();
 }

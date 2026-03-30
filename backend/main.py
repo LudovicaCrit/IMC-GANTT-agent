@@ -29,6 +29,7 @@ def _CONSUNTIVI(): return data_module.CONSUNTIVI
 try:
     from data import get_segnalazioni, aggiungi_segnalazione
     from data import salva_bozza_pianificazione, carica_bozza_pianificazione
+    from data import salva_consuntivo
     PERSISTENT_MODE = True
 except ImportError:
     PERSISTENT_MODE = False
@@ -952,6 +953,189 @@ def carica_bozza(progetto_id: str):
 
 
 # ══════════════════════════════════════════════════════════════════════
+# ENDPOINT: SALVA CONSUNTIVO
+# ══════════════════════════════════════════════════════════════════════
+
+class SalvaConsuntivoRequest(BaseModel):
+    dipendente_id: str
+    ore_per_task: dict[str, float] = {}
+    stati_per_task: dict[str, str] = {}
+    giorni_sede: int = 3
+    giorni_remoto: int = 2
+    ore_assenza: float = 0
+    tipo_assenza: str = ""
+    nota_assenza: str = ""
+    spese: list[dict] = []
+
+
+@app.post("/api/consuntivi/salva")
+def salva_consuntivo_endpoint(req: SalvaConsuntivoRequest):
+    """Salva il consuntivo settimanale di un dipendente."""
+    try:
+        dip = get_dipendente(req.dipendente_id)
+    except (IndexError, KeyError):
+        raise HTTPException(404, "Dipendente non trovato")
+
+    if PERSISTENT_MODE:
+        ok = salva_consuntivo(
+            dipendente_id=req.dipendente_id,
+            settimana=OGGI,
+            ore_per_task=req.ore_per_task,
+            stati_per_task=req.stati_per_task,
+            giorni_sede=req.giorni_sede,
+            giorni_remoto=req.giorni_remoto,
+            ore_assenza=req.ore_assenza,
+            tipo_assenza=req.tipo_assenza,
+            nota_assenza=req.nota_assenza,
+            spese_lista=req.spese if req.spese else None,
+        )
+        return {"salvato": ok, "dipendente": dip["nome"]}
+    else:
+        # Fallback: non salva ma conferma
+        return {"salvato": True, "dipendente": dip["nome"], "nota": "Dati non persistenti (db non attivo)"}
+
+
+# ══════════════════════════════════════════════════════════════════════
+# ENDPOINT: IA SUGGERISCI TASK
+# ══════════════════════════════════════════════════════════════════════
+
+class SuggerisciTaskRequest(BaseModel):
+    progetto_nome: str = ""
+    progetto_cliente: str = ""
+    descrizione: str = ""
+    budget_ore: int = 0
+    data_inizio: str = ""
+    data_fine: str = ""
+
+
+@app.post("/api/agent/suggerisci-task")
+def suggerisci_task(req: SuggerisciTaskRequest):
+    """Chiede all'agente di suggerire task per un progetto."""
+    import json as json_mod
+
+    contesto = {
+        "progetto": req.progetto_nome,
+        "cliente": req.progetto_cliente,
+        "descrizione": req.descrizione,
+        "budget_ore": req.budget_ore,
+        "periodo": f"{req.data_inizio} — {req.data_fine}" if req.data_inizio else "Non specificato",
+    }
+
+    model = init_gemini(prompt_file="suggerisci_task.md")
+    if model is None:
+        raise HTTPException(503, "Agente AI non disponibile")
+
+    contesto_json = json_mod.dumps(contesto, ensure_ascii=False, indent=2)
+    prompt = f"Suggerisci i task per questo progetto:\n\n```json\n{contesto_json}\n```"
+
+    try:
+        chat = model.start_chat(history=[])
+        response = chat.send_message(prompt)
+        risposta_raw = response.text
+
+        cleaned = risposta_raw.strip()
+        if cleaned.startswith("```json"):
+            cleaned = cleaned[7:]
+        if cleaned.startswith("```"):
+            cleaned = cleaned[3:]
+        if cleaned.endswith("```"):
+            cleaned = cleaned[:-3]
+        cleaned = cleaned.strip()
+
+        try:
+            risultato = json_mod.loads(cleaned)
+        except json_mod.JSONDecodeError:
+            risultato = {"raw_response": risposta_raw, "parse_error": True}
+
+        return risultato
+
+    except Exception as e:
+        raise HTTPException(500, f"Errore agente: {str(e)}")
+
+
+# ══════════════════════════════════════════════════════════════════════
+# ENDPOINT: IA VERIFICA PIANIFICAZIONE
+# ══════════════════════════════════════════════════════════════════════
+
+class VerificaPianificazioneRequest(BaseModel):
+    progetto_nome: str = ""
+    progetto_cliente: str = ""
+    budget_ore: int = 0
+    data_inizio: str = ""
+    data_fine: str = ""
+    task_pianificati: list[dict] = []
+
+
+@app.post("/api/agent/verifica-pianificazione")
+def verifica_pianificazione(req: VerificaPianificazioneRequest):
+    """Chiede all'agente di verificare la pianificazione GANTT."""
+    import json as json_mod
+
+    # Costruisci contesto per l'agente
+    contesto = {
+        "progetto": {
+            "nome": req.progetto_nome,
+            "cliente": req.progetto_cliente,
+            "budget_ore": req.budget_ore,
+            "data_inizio": req.data_inizio,
+            "data_fine": req.data_fine,
+        },
+        "task_pianificati": req.task_pianificati,
+        "dipendenti_coinvolti": [],
+    }
+
+    # Aggiungi info saturazione per i dipendenti coinvolti
+    nomi_coinvolti = set()
+    for t in req.task_pianificati:
+        if t.get("assegnato"):
+            nomi_coinvolti.add(t["assegnato"])
+
+    for nome in nomi_coinvolti:
+        dip_match = _DIPENDENTI()[_DIPENDENTI()["nome"] == nome]
+        if len(dip_match) > 0:
+            d = dip_match.iloc[0]
+            carico = carico_settimanale_dipendente(d["id"], OGGI)
+            contesto["dipendenti_coinvolti"].append({
+                "nome": nome,
+                "profilo": d["profilo"],
+                "saturazione_attuale": round(carico / d["ore_sett"] * 100),
+            })
+
+    # Chiama Gemini
+    model = init_gemini(prompt_file="verifica_pianificazione.md")
+    if model is None:
+        raise HTTPException(503, "Agente AI non disponibile")
+
+    contesto_json = json_mod.dumps(contesto, ensure_ascii=False, indent=2)
+    prompt = f"Verifica questa pianificazione GANTT:\n\n```json\n{contesto_json}\n```"
+
+    try:
+        chat = model.start_chat(history=[])
+        response = chat.send_message(prompt)
+        risposta_raw = response.text
+
+        # Parsa JSON
+        cleaned = risposta_raw.strip()
+        if cleaned.startswith("```json"):
+            cleaned = cleaned[7:]
+        if cleaned.startswith("```"):
+            cleaned = cleaned[3:]
+        if cleaned.endswith("```"):
+            cleaned = cleaned[:-3]
+        cleaned = cleaned.strip()
+
+        try:
+            risultato = json_mod.loads(cleaned)
+        except json_mod.JSONDecodeError:
+            risultato = {"raw_response": risposta_raw, "parse_error": True}
+
+        return risultato
+
+    except Exception as e:
+        raise HTTPException(500, f"Errore agente: {str(e)}")
+
+
+# ══════════════════════════════════════════════════════════════════════
 # ENDPOINT: EXPORT GANTT PDF
 # ══════════════════════════════════════════════════════════════════════
 
@@ -1004,6 +1188,124 @@ def export_gantt_pdf(progetto_id: Optional[str] = None):
         media_type="application/pdf",
         headers={"Content-Disposition": f"attachment; filename={filename}"}
     )
+
+
+@app.get("/api/gantt/export-png")
+def export_gantt_png(progetto_id: Optional[str] = None):
+    """Genera e scarica un PNG del GANTT (convertendo il PDF)."""
+    from gantt_pdf import genera_gantt_pdf
+    import subprocess
+    import tempfile
+    import os
+
+    # Genera il PDF
+    tasks = _TASKS().copy()
+    if progetto_id:
+        tasks = tasks[tasks["progetto_id"] == progetto_id]
+    progetti_attivi = _PROGETTI()[~_PROGETTI()["stato"].isin(["Sospeso"])]["id"].tolist()
+    if not progetto_id:
+        tasks = tasks[tasks["progetto_id"].isin(progetti_attivi)]
+
+    gantt_data = []
+    for _, t in tasks.iterrows():
+        dip = get_dipendente(t["dipendente_id"])
+        proj = _PROGETTI()[_PROGETTI()["id"] == t["progetto_id"]]
+        proj_nome = proj.iloc[0]["nome"] if len(proj) > 0 else "?"
+        gantt_data.append({
+            "id": t["id"], "name": t["nome"],
+            "start": t["data_inizio"].strftime("%Y-%m-%d"),
+            "end": t["data_fine"].strftime("%Y-%m-%d"),
+            "project": proj_nome, "assignee": dip["nome"],
+            "status": t["stato"], "estimated_hours": int(t["ore_stimate"]),
+        })
+
+    if progetto_id:
+        proj = _PROGETTI()[_PROGETTI()["id"] == progetto_id]
+        titolo = f"GANTT — {proj.iloc[0]['nome']}" if len(proj) > 0 else "GANTT"
+    else:
+        titolo = "GANTT IMC-Group — Tutti i progetti"
+
+    pdf_bytes = genera_gantt_pdf(gantt_data, titolo=titolo)
+
+    # Converti PDF → PNG con pdftoppm (poppler-utils)
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp_pdf:
+            tmp_pdf.write(pdf_bytes)
+            tmp_pdf_path = tmp_pdf.name
+
+        png_path = tmp_pdf_path.replace(".pdf", "")
+        subprocess.run(["pdftoppm", "-png", "-r", "200", "-singlefile", tmp_pdf_path, png_path],
+                       check=True, capture_output=True)
+
+        png_file = png_path + ".png"
+        with open(png_file, "rb") as f:
+            png_bytes = f.read()
+
+        os.unlink(tmp_pdf_path)
+        os.unlink(png_file)
+
+        filename = f"gantt_{progetto_id or 'tutti'}_{datetime.now().strftime('%Y%m%d')}.png"
+        return Response(content=png_bytes, media_type="image/png",
+                        headers={"Content-Disposition": f"attachment; filename={filename}"})
+
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        # Se pdftoppm non è disponibile, restituisci il PDF
+        raise HTTPException(500, "Conversione PNG non disponibile. Installa poppler-utils: sudo apt install poppler-utils")
+
+
+@app.get("/api/gantt/export-excel")
+def export_gantt_excel(progetto_id: Optional[str] = None):
+    """Genera e scarica un file Excel con i dati GANTT."""
+    import io
+
+    tasks = _TASKS().copy()
+    if progetto_id:
+        tasks = tasks[tasks["progetto_id"] == progetto_id]
+    progetti_attivi = _PROGETTI()[~_PROGETTI()["stato"].isin(["Sospeso"])]["id"].tolist()
+    if not progetto_id:
+        tasks = tasks[tasks["progetto_id"].isin(progetti_attivi)]
+
+    # Costruisci DataFrame per l'export
+    import pandas as pd
+    export_data = []
+    for _, t in tasks.iterrows():
+        dip = get_dipendente(t["dipendente_id"])
+        proj = _PROGETTI()[_PROGETTI()["id"] == t["progetto_id"]]
+        proj_nome = proj.iloc[0]["nome"] if len(proj) > 0 else "?"
+        export_data.append({
+            "Progetto": proj_nome,
+            "Task": t["nome"],
+            "Fase": t["fase"],
+            "Assegnato a": dip["nome"],
+            "Profilo": dip["profilo"],
+            "Ore stimate": int(t["ore_stimate"]),
+            "Data inizio": t["data_inizio"].strftime("%d/%m/%Y") if hasattr(t["data_inizio"], "strftime") else str(t["data_inizio"]),
+            "Data fine": t["data_fine"].strftime("%d/%m/%Y") if hasattr(t["data_fine"], "strftime") else str(t["data_fine"]),
+            "Stato": t["stato"],
+        })
+
+    df = pd.DataFrame(export_data)
+
+    # Ordina per progetto
+    df = df.sort_values(["Progetto", "Data inizio"])
+
+    buffer = io.BytesIO()
+    try:
+        # Prova con openpyxl (xlsx)
+        df.to_excel(buffer, index=False, sheet_name="GANTT", engine="openpyxl")
+        media_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        ext = "xlsx"
+    except ImportError:
+        # Fallback CSV
+        buffer = io.BytesIO()
+        df.to_csv(buffer, index=False, sep=";", encoding="utf-8-sig")
+        media_type = "text/csv"
+        ext = "csv"
+
+    buffer.seek(0)
+    filename = f"gantt_{progetto_id or 'tutti'}_{datetime.now().strftime('%Y%m%d')}.{ext}"
+    return Response(content=buffer.getvalue(), media_type=media_type,
+                    headers={"Content-Disposition": f"attachment; filename={filename}"})
 
 
 # ══════════════════════════════════════════════════════════════════════

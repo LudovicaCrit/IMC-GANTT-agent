@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react'
-import { fetchProgetti, fetchTasks, fetchDipendenti, anteprimaImpatto, applicaModifiche, salvaBozza, caricaBozza } from '../api'
+import { fetchProgetti, fetchTasks, fetchDipendenti, anteprimaImpatto, applicaModifiche, salvaBozza, caricaBozza, verificaPianificazione, suggerisciTask } from '../api'
 import { GanttChart } from './Gantt'
 
 // ── Costanti ────────────────────────────────────────────────────────
@@ -127,8 +127,13 @@ function PianificazioneProgetto({ progetto, dipendenti }) {
   const [impattoLoading, setImpattoLoading] = useState(false)
   const [confermato, setConfermato] = useState(false)
   const [salvataggioMsg, setSalvataggioMsg] = useState('')
+  const [verificaIA, setVerificaIA] = useState(null)
+  const [verificaLoading, setVerificaLoading] = useState(false)
+  const [suggerisciOpen, setSuggerisciOpen] = useState(false)
+  const [suggerisciDesc, setSuggerisciDesc] = useState('')
+  const [suggerisciLoading, setSuggerisciLoading] = useState(false)
 
-  // Aggiungi task
+  // Aggiungi task in coda
   function addTask() {
     setPlanTasks(prev => [...prev, {
       tempId: `new-${nextId}`,
@@ -140,6 +145,39 @@ function PianificazioneProgetto({ progetto, dipendenti }) {
       dipendenze: [],
     }])
     setNextId(n => n + 1)
+  }
+
+  // Inserisci task in una posizione specifica
+  function insertTaskAt(index) {
+    const newTask = {
+      tempId: `new-${nextId}`,
+      nome: '',
+      fase: 'Sviluppo',
+      ore: 40,
+      profilo: 'Tecnico Senior',
+      assegnato: '',
+      dipendenze: [],
+    }
+    setPlanTasks(prev => {
+      const copy = [...prev]
+      copy.splice(index, 0, newTask)
+      return copy
+    })
+    setNextId(n => n + 1)
+  }
+
+  // Sposta task su o giù
+  function moveTask(tempId, direction) {
+    setPlanTasks(prev => {
+      const idx = prev.findIndex(t => t.tempId === tempId)
+      if (idx < 0) return prev
+      const newIdx = idx + direction
+      if (newIdx < 0 || newIdx >= prev.length) return prev
+      const copy = [...prev]
+      const [moved] = copy.splice(idx, 1)
+      copy.splice(newIdx, 0, moved)
+      return copy
+    })
   }
 
   // Rimuovi task
@@ -379,12 +417,93 @@ function PianificazioneProgetto({ progetto, dipendenti }) {
               className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 rounded-lg text-xs font-medium">
               + Aggiungi task
             </button>
-            <button onClick={() => alert('In sviluppo: l\'agente suggerirà task e fasi basandosi su progetti simili.')}
-              className="px-3 py-1.5 bg-purple-600 hover:bg-purple-500 rounded-lg text-xs font-medium">
-              🧠 Suggerisci con IA
+            <button onClick={() => setSuggerisciOpen(!suggerisciOpen)}
+              disabled={suggerisciLoading}
+              className="px-3 py-1.5 bg-purple-600 hover:bg-purple-500 disabled:bg-purple-800 rounded-lg text-xs font-medium">
+              {suggerisciLoading ? '⏳ L\'agente sta pensando...' : '🧠 Suggerisci con IA'}
             </button>
           </div>
         </div>
+
+        {/* Pannello suggerisci con IA */}
+        {suggerisciOpen && (
+          <div className="bg-purple-900/20 border border-purple-800 rounded-xl p-4 -mt-2">
+            <p className="text-sm text-purple-300 mb-2">Descrivi il progetto in poche parole — l'agente proporrà una struttura di task.</p>
+            <div className="flex gap-2">
+              <textarea value={suggerisciDesc}
+                onChange={e => setSuggerisciDesc(e.target.value)}
+                placeholder={`Es: "Sistema per gestione ferie e presenze, con portale web per i dipendenti e dashboard per HR..."`}
+                rows={2}
+                className="flex-1 bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-sm placeholder-gray-500 focus:border-purple-500 focus:outline-none resize-none" />
+              <button onClick={async () => {
+                if (!suggerisciDesc.trim()) return
+                setSuggerisciLoading(true)
+                try {
+                  const res = await suggerisciTask({
+                    progetto_nome: progetto.nome,
+                    progetto_cliente: progetto.cliente,
+                    descrizione: suggerisciDesc,
+                    budget_ore: progetto.budget_ore,
+                    data_inizio: progetto.data_inizio,
+                    data_fine: progetto.data_fine,
+                  })
+                  if (res.task_suggeriti && res.task_suggeriti.length > 0) {
+                    // Prima crea i task con tempId
+                    const nuoviTask = res.task_suggeriti.map((t, i) => ({
+                      tempId: `new-${nextId + i}`,
+                      nome: t.nome,
+                      fase: t.fase || 'Sviluppo',
+                      ore: t.ore || 40,
+                      profilo: t.profilo || 'Tecnico Senior',
+                      assegnato: '',
+                      dipendenze: [],
+                      _dipSuggerite: t.dipendenze_suggerite || '',
+                    }))
+
+                    // Poi collega le dipendenze basandosi sui nomi
+                    nuoviTask.forEach(task => {
+                      if (!task._dipSuggerite) return
+                      const descDip = task._dipSuggerite.toLowerCase()
+                      nuoviTask.forEach(pred => {
+                        if (pred.tempId === task.tempId) return
+                        // Match se il nome del predecessore appare nella descrizione dipendenze
+                        const nomeLower = pred.nome.toLowerCase()
+                        // Prova match con parole chiave del nome
+                        const paroleNome = nomeLower.split(/\s+/).filter(w => w.length > 3)
+                        const match = paroleNome.length > 0 && paroleNome.some(parola => descDip.includes(parola))
+                        if (match || descDip.includes(nomeLower)) {
+                          // Evita duplicati
+                          if (!task.dipendenze.find(d => d.taskId === pred.tempId)) {
+                            task.dipendenze.push({ taskId: pred.tempId, tipo: 'FS' })
+                          }
+                        }
+                      })
+                      delete task._dipSuggerite
+                    })
+
+                    setPlanTasks(nuoviTask)
+                    setNextId(n => n + nuoviTask.length)
+                    setSuggerisciOpen(false)
+                    setSuggerisciDesc('')
+                  } else if (res.parse_error) {
+                    alert('L\'agente ha risposto ma non sono riuscito a interpretare la risposta. Riprova.')
+                  }
+                } catch (err) {
+                  alert('Errore: ' + err.message)
+                } finally {
+                  setSuggerisciLoading(false)
+                }
+              }}
+                disabled={suggerisciLoading || !suggerisciDesc.trim()}
+                className="px-4 py-2 bg-purple-600 hover:bg-purple-500 disabled:bg-gray-600 rounded-lg text-sm font-medium self-end">
+                Genera
+              </button>
+            </div>
+            {suggerisciDesc && (
+              <p className="text-xs text-gray-500 mt-2">⚠️ I task attuali verranno sostituiti con quelli suggeriti. Salva la bozza prima se vuoi conservarli.</p>
+            )}
+          </div>
+        )}
 
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
@@ -502,12 +621,22 @@ function PianificazioneProgetto({ progetto, dipendenti }) {
                     </div>
                   </td>
 
-                  {/* Rimuovi */}
+                  {/* Azioni riga */}
                   <td className="px-3 py-2 text-center">
-                    {planTasks.length > 1 && (
-                      <button onClick={() => removeTask(task.tempId)}
-                        className="text-gray-500 hover:text-red-400 text-sm">🗑️</button>
-                    )}
+                    <div className="flex items-center gap-1 justify-center">
+                      <button onClick={() => moveTask(task.tempId, -1)}
+                        disabled={idx === 0}
+                        className="text-gray-500 hover:text-white disabled:text-gray-700 text-xs" title="Sposta su">▲</button>
+                      <button onClick={() => moveTask(task.tempId, 1)}
+                        disabled={idx === planTasks.length - 1}
+                        className="text-gray-500 hover:text-white disabled:text-gray-700 text-xs" title="Sposta giù">▼</button>
+                      <button onClick={() => insertTaskAt(idx + 1)}
+                        className="text-gray-500 hover:text-blue-400 text-xs" title="Inserisci dopo">➕</button>
+                      {planTasks.length > 1 && (
+                        <button onClick={() => removeTask(task.tempId)}
+                          className="text-gray-500 hover:text-red-400 text-sm" title="Elimina">🗑️</button>
+                      )}
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -598,11 +727,102 @@ function PianificazioneProgetto({ progetto, dipendenti }) {
       </div>
 
       {/* ── IA: verifica ─────────────────────────────────────────── */}
-      <div className="flex justify-end">
-        <button onClick={() => alert('In sviluppo: l\'agente controllerà la pianificazione per segnalare task mancanti, stime irrealistiche, o conflitti di risorse.')}
-          className="px-4 py-2 bg-purple-600 hover:bg-purple-500 rounded-lg text-sm font-medium">
-          🧠 Chiedi all'IA di verificare la pianificazione
-        </button>
+      <div className="space-y-3">
+        <div className="flex justify-end">
+          <button onClick={async () => {
+            const taskValidi = planTasks.filter(t => t.nome && t.ore > 0)
+            if (taskValidi.length === 0) {
+              alert('Compila almeno un task con nome e ore.')
+              return
+            }
+            setVerificaLoading(true)
+            setVerificaIA(null)
+            try {
+              const taskPerIA = taskValidi.map((t, idx) => {
+                const g = ganttData.find(g => g.id === t.tempId)
+                return {
+                  nome: t.nome,
+                  fase: t.fase,
+                  ore: t.ore,
+                  profilo: t.profilo,
+                  assegnato: t.assegnato || 'Non assegnato',
+                  dipendenze: t.dipendenze.map(d => {
+                    const pred = planTasks.find(p => p.tempId === d.taskId)
+                    return { predecessore: pred?.nome || '?', tipo: d.tipo }
+                  }),
+                  data_inizio: g?.start || '',
+                  data_fine: g?.end || '',
+                }
+              })
+              const res = await verificaPianificazione({
+                progetto_nome: progetto.nome,
+                progetto_cliente: progetto.cliente,
+                budget_ore: progetto.budget_ore,
+                data_inizio: progetto.data_inizio,
+                data_fine: progetto.data_fine,
+                task_pianificati: taskPerIA,
+              })
+              setVerificaIA(res)
+            } catch (err) {
+              alert('Errore nella verifica: ' + err.message)
+            } finally {
+              setVerificaLoading(false)
+            }
+          }}
+            disabled={verificaLoading}
+            className="px-4 py-2 bg-purple-600 hover:bg-purple-500 disabled:bg-purple-800 rounded-lg text-sm font-medium">
+            {verificaLoading ? '⏳ L\'agente sta analizzando...' : '🧠 Chiedi all\'IA di verificare la pianificazione'}
+          </button>
+        </div>
+
+        {/* Risultati verifica IA */}
+        {verificaIA && !verificaIA.parse_error && (
+          <div className={`rounded-xl border p-5 ${
+            verificaIA.esito === 'ok' ? 'bg-green-900/20 border-green-800' :
+            verificaIA.esito === 'problemi' ? 'bg-red-900/20 border-red-800' :
+            'bg-yellow-900/20 border-yellow-800'
+          }`}>
+            <div className="flex items-center gap-2 mb-3">
+              <span className="text-lg">{verificaIA.esito === 'ok' ? '✅' : verificaIA.esito === 'problemi' ? '🔴' : '⚠️'}</span>
+              <h4 className="font-semibold">{verificaIA.riepilogo}</h4>
+            </div>
+
+            {verificaIA.segnalazioni && verificaIA.segnalazioni.length > 0 && (
+              <div className="space-y-2 mb-3">
+                {verificaIA.segnalazioni.map((s, i) => (
+                  <div key={i} className={`p-3 rounded-lg border text-sm ${
+                    s.gravita === 'alta' ? 'bg-red-900/30 border-red-700' :
+                    s.gravita === 'media' ? 'bg-yellow-900/30 border-yellow-700' :
+                    'bg-gray-800 border-gray-700'
+                  }`}>
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className={`text-xs font-bold uppercase px-2 py-0.5 rounded ${
+                        s.gravita === 'alta' ? 'bg-red-700 text-white' :
+                        s.gravita === 'media' ? 'bg-yellow-700 text-white' :
+                        'bg-gray-600 text-gray-200'
+                      }`}>{s.gravita}</span>
+                      <span className="text-xs text-gray-400">{s.tipo?.replace(/_/g, ' ')}</span>
+                      {s.task_coinvolto && <span className="text-xs text-gray-300 font-medium">· {s.task_coinvolto}</span>}
+                    </div>
+                    <p className="text-gray-200">{s.descrizione}</p>
+                    {s.suggerimento && <p className="text-gray-400 text-xs mt-1">💡 {s.suggerimento}</p>}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {verificaIA.nota_positiva && (
+              <p className="text-green-300 text-sm">👍 {verificaIA.nota_positiva}</p>
+            )}
+          </div>
+        )}
+
+        {verificaIA && verificaIA.parse_error && (
+          <div className="bg-gray-800 rounded-xl border border-gray-700 p-4 text-sm text-gray-300">
+            <p className="font-medium mb-2">Risposta dell'agente:</p>
+            <p className="whitespace-pre-wrap">{verificaIA.raw_response}</p>
+          </div>
+        )}
       </div>
     </div>
   )

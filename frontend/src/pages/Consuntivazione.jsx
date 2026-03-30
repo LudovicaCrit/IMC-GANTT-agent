@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { fetchDipendenti, fetchDipendente, sendChatMessage, fetchAgentStatus } from '../api'
+import { fetchDipendenti, fetchDipendente, sendChatMessage, fetchAgentStatus, salvaConsuntivo } from '../api'
 
 /* ── Chat message bubble ──────────────────────────────────────────── */
 function ChatMessage({ role, content }) {
@@ -81,7 +81,7 @@ export default function Consuntivazione() {
         setDipDetail(d)
         const oreInit = {}
         const statiInit = {}
-        d.tasks.forEach(t => { oreInit[t.id] = 0; statiInit[t.id] = 'In corso' })
+        d.tasks.forEach(t => { oreInit[t.id] = null; statiInit[t.id] = 'In corso' })
         setOre(oreInit)
         setStati(statiInit)
         setChatHistory([])
@@ -110,15 +110,18 @@ export default function Consuntivazione() {
     }
   }, [chatHistory, chatLoading])
 
-  const totaleOre = Object.values(ore).reduce((s, v) => s + v, 0)
+  const totaleOre = Object.values(ore).reduce((s, v) => s + (v || 0), 0)
   const totaleRendicontato = totaleOre + (hasAssenza ? oreAssenza : 0)
   const oreContrattuali = dipDetail?.ore_sett || 40
   const delta = totaleRendicontato - oreContrattuali
-  const taskZero = dipDetail?.tasks.filter(t => ore[t.id] === 0) || []
+  const taskZero = dipDetail?.tasks.filter(t => ore[t.id] === 0) || []           // 0 esplicito
+  const taskNonCompilati = dipDetail?.tasks.filter(t => ore[t.id] === null) || [] // non toccati
   const taskBloccati = dipDetail?.tasks.filter(t => stati[t.id] === 'Bloccato') || []
 
-  // Calcolo buoni pasto stimati (giorni sede con >4h lavorate)
-  const buoniPastoStimati = giorniSede // semplificato: si assume >4h nei giorni in sede
+  // Calcolo buoni pasto stimati (giorni con >4h lavorate, indipendente da sede/remoto)
+  const giorniLavorativi = giorniSede + giorniRemoto
+  const oreGiornaliereMedia = giorniLavorativi > 0 ? totaleOre / giorniLavorativi : 0
+  const buoniPastoStimati = oreGiornaliereMedia > 4 ? giorniLavorativi : 0
 
   const handleChat = async () => {
     if (!chatInput.trim() || chatLoading) return
@@ -131,7 +134,7 @@ export default function Consuntivazione() {
       const res = await sendChatMessage({
         dipendente_id: selectedDip,
         messaggio: userMsg,
-        ore_compilate: ore,
+        ore_compilate: Object.fromEntries(Object.entries(ore).map(([k, v]) => [k, v || 0])),
         stati_compilati: stati,
         ore_assenza: hasAssenza ? oreAssenza : 0,
         tipo_assenza: hasAssenza ? tipoAssenza : '',
@@ -254,8 +257,12 @@ export default function Consuntivazione() {
                         <p className="text-xs text-gray-400">{task.progetto} — {task.fase}</p>
                       </div>
                       <input type="number" placeholder="Ore" min="0" max="60" step="0.5"
-                        value={ore[task.id] || ''}
-                        onChange={e => setOre(prev => ({ ...prev, [task.id]: parseFloat(e.target.value) || 0 }))}
+                        value={ore[task.id] === null ? '' : ore[task.id]}
+                        onChange={e => {
+                          const val = e.target.value
+                          // '' = torna a null (non compilato), '0' = zero esplicito
+                          setOre(prev => ({ ...prev, [task.id]: val === '' ? null : (parseFloat(val) || 0) }))
+                        }}
                         className="w-24 bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-sm placeholder-gray-500 focus:border-blue-500 focus:outline-none" />
                       <select value={stati[task.id] || 'In corso'}
                         onChange={e => setStati(prev => ({ ...prev, [task.id]: e.target.value }))}
@@ -403,20 +410,60 @@ export default function Consuntivazione() {
                     </div>
                   )}
                   {taskZero.length > 0 && (
+                    <div className="mt-3 p-3 bg-gray-800 border border-gray-700 rounded-lg text-sm text-gray-400">
+                      ✓ Nessun avanzamento dichiarato: {taskZero.map(t => t.nome).join(', ')}
+                    </div>
+                  )}
+                  {taskNonCompilati.length > 0 && (
                     <div className="mt-3 p-3 bg-yellow-900/20 border border-yellow-800 rounded-lg text-sm text-yellow-300">
-                      ⚠️ Task senza avanzamento: {taskZero.map(t => t.nome).join(', ')}
+                      ⚠️ Non ancora compilati: {taskNonCompilati.map(t => t.nome).join(', ')}
                     </div>
                   )}
                 </div>
 
                 {/* Submit */}
                 <div className="flex gap-3">
-                  <button onClick={() => {
+                  <button onClick={async () => {
                     if (totaleOre === 0 && (!hasAssenza || oreAssenza === 0)) {
                       alert('Compila almeno le ore lavorate o indica un\'assenza.')
                       return
                     }
-                    setSubmitted(true)
+
+                    // Check task non compilati (null, non 0)
+                    if (taskNonCompilati.length > 0) {
+                      const nomi = taskNonCompilati.map(t => t.nome).join('\n  • ')
+                      const conferma = confirm(
+                        `Non hai compilato le ore per:\n  • ${nomi}\n\nConfermi che non ci hai lavorato questa settimana?\n\n(Clicca OK per confermare, Annulla per tornare a compilare)`
+                      )
+                      if (!conferma) return
+                      // Imposta a 0 i task confermati come non lavorati
+                      const oreAggiornate = { ...ore }
+                      taskNonCompilati.forEach(t => { oreAggiornate[t.id] = 0 })
+                      setOre(oreAggiornate)
+                    }
+
+                    try {
+                      // Converti null in 0 per il salvataggio
+                      const orePerSalvataggio = {}
+                      Object.entries(ore).forEach(([k, v]) => { orePerSalvataggio[k] = v || 0 })
+
+                      const res = await salvaConsuntivo({
+                        dipendente_id: selectedDip,
+                        ore_per_task: orePerSalvataggio,
+                        stati_per_task: stati,
+                        giorni_sede: giorniSede,
+                        giorni_remoto: giorniRemoto,
+                        ore_assenza: hasAssenza ? oreAssenza : 0,
+                        tipo_assenza: hasAssenza ? tipoAssenza : '',
+                        nota_assenza: hasAssenza ? notaAssenza : '',
+                        spese: hasSpese ? spese.filter(s => s.importo > 0) : [],
+                      })
+                      if (res.salvato) {
+                        setSubmitted(true)
+                      }
+                    } catch (err) {
+                      alert('Errore nel salvataggio: ' + err.message)
+                    }
                   }}
                     disabled={submitted}
                     className="px-6 py-2.5 bg-green-600 hover:bg-green-500 disabled:bg-gray-600 rounded-lg font-medium transition-colors">
@@ -438,16 +485,22 @@ export default function Consuntivazione() {
                   </div>
 
                   {/* Riepilogo compilazione */}
-                  {(totaleOre > 0 || taskZero.length > 0) && (
+                  {(totaleOre > 0 || taskZero.length > 0 || taskNonCompilati.length < dipDetail.tasks.length) && (
                     <details className="mb-3 text-xs">
                       <summary className="cursor-pointer text-gray-400 hover:text-white">📋 Cosa ha recepito l'agente</summary>
                       <div className="mt-1 p-2 bg-gray-800 rounded space-y-1">
-                        {dipDetail.tasks.map(t => (
-                          <p key={t.id} className={ore[t.id] === 0 ? 'text-yellow-400' : 'text-gray-300'}>
-                            {ore[t.id] === 0 ? '⚠️' : '•'} {ore[t.id] || 0}h su {t.nome}
-                            {ore[t.id] === 0 && ' — nessun avanzamento'}
-                          </p>
-                        ))}
+                        {dipDetail.tasks.map(t => {
+                          const val = ore[t.id]
+                          if (val === null) return (
+                            <p key={t.id} className="text-gray-500">· {t.nome} — non compilato</p>
+                          )
+                          if (val === 0) return (
+                            <p key={t.id} className="text-gray-400">✓ {t.nome} — 0h (nessun avanzamento)</p>
+                          )
+                          return (
+                            <p key={t.id} className="text-gray-300">• {val}h su {t.nome}</p>
+                          )
+                        })}
                         {hasAssenza && oreAssenza > 0 && (
                           <p className="text-gray-300">• {oreAssenza}h assenza ({tipoAssenza})</p>
                         )}
