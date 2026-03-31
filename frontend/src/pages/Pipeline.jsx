@@ -117,7 +117,7 @@ function calcolaGanttDaPlan(planTasks, dataInizio, oreSett = 40) {
 //  COMPONENTE PIANIFICAZIONE
 // ═════════════════════════════════════════════════════════════════════
 
-function PianificazioneProgetto({ progetto, dipendenti }) {
+function PianificazioneProgetto({ progetto, dipendenti, isBando = false }) {
   const [planTasks, setPlanTasks] = useState([
     { tempId: 'new-1', nome: '', fase: 'Analisi', ore: 40, profilo: 'Tecnico Senior', assegnato: '', dipendenze: [] },
   ])
@@ -377,7 +377,7 @@ function PianificazioneProgetto({ progetto, dipendenti }) {
         <div>
           <div className="flex items-center gap-3 mb-1">
             <h2 className="text-lg font-semibold">{progetto.nome}</h2>
-            <span className="text-xs px-2 py-1 bg-green-900/30 text-green-300 rounded-full font-medium">🎉 Vinto</span>
+            <span className={`text-xs px-2 py-1 rounded-full font-medium ${isBando ? 'bg-blue-900/30 text-blue-300' : 'bg-green-900/30 text-green-300'}`}>{isBando ? '📨 In bando' : '🎉 Vinto'}</span>
           </div>
           <p className="text-sm text-gray-400">{progetto.cliente}</p>
         </div>
@@ -448,39 +448,50 @@ function PianificazioneProgetto({ progetto, dipendenti }) {
                     data_fine: progetto.data_fine,
                   })
                   if (res.task_suggeriti && res.task_suggeriti.length > 0) {
-                    // Prima crea i task con tempId
+                    // Crea i task con tempId
                     const nuoviTask = res.task_suggeriti.map((t, i) => ({
                       tempId: `new-${nextId + i}`,
                       nome: t.nome,
                       fase: t.fase || 'Sviluppo',
                       ore: t.ore || 40,
-                      profilo: t.profilo || 'Tecnico Senior',
+                      profilo: (t.profilo || 'Tecnico Senior').split(',')[0].trim(),
                       assegnato: '',
                       dipendenze: [],
-                      _dipSuggerite: t.dipendenze_suggerite || '',
+                      _predecessori: t.predecessori || [],           // array di indici 1-based
+                      _dipSuggerite: t.dipendenze_suggerite || '',   // fallback vecchio formato
                     }))
-
-                    // Poi collega le dipendenze basandosi sui nomi
-                    nuoviTask.forEach(task => {
-                      if (!task._dipSuggerite) return
-                      const descDip = task._dipSuggerite.toLowerCase()
-                      nuoviTask.forEach(pred => {
-                        if (pred.tempId === task.tempId) return
-                        // Match se il nome del predecessore appare nella descrizione dipendenze
-                        const nomeLower = pred.nome.toLowerCase()
-                        // Prova match con parole chiave del nome
-                        const paroleNome = nomeLower.split(/\s+/).filter(w => w.length > 3)
-                        const match = paroleNome.length > 0 && paroleNome.some(parola => descDip.includes(parola))
-                        if (match || descDip.includes(nomeLower)) {
-                          // Evita duplicati
-                          if (!task.dipendenze.find(d => d.taskId === pred.tempId)) {
-                            task.dipendenze.push({ taskId: pred.tempId, tipo: 'FS' })
+ 
+                    // Collega le dipendenze usando gli indici numerici
+                    nuoviTask.forEach((task, idx) => {
+                      // Nuovo formato: array di indici numerici (1-based)
+                      if (task._predecessori && task._predecessori.length > 0) {
+                        for (const predIdx of task._predecessori) {
+                          // predIdx è 1-based, l'array è 0-based
+                          const pred = nuoviTask[predIdx - 1]
+                          if (pred && pred.tempId !== task.tempId) {
+                            if (!task.dipendenze.find(d => d.taskId === pred.tempId)) {
+                              task.dipendenze.push({ taskId: pred.tempId, tipo: 'FS' })
+                            }
                           }
                         }
-                      })
+                      }
+                      // Fallback: vecchio formato testuale (per retrocompatibilità)
+                      else if (task._dipSuggerite) {
+                        const descDip = task._dipSuggerite.toLowerCase()
+                        nuoviTask.forEach(pred => {
+                          if (pred.tempId === task.tempId) return
+                          const nomeLower = pred.nome.toLowerCase()
+                          if (descDip.includes(nomeLower)) {
+                            if (!task.dipendenze.find(d => d.taskId === pred.tempId)) {
+                              task.dipendenze.push({ taskId: pred.tempId, tipo: 'FS' })
+                            }
+                          }
+                        })
+                      }
+                      delete task._predecessori
                       delete task._dipSuggerite
                     })
-
+ 
                     setPlanTasks(nuoviTask)
                     setNextId(n => n + nuoviTask.length)
                     setSuggerisciOpen(false)
@@ -702,10 +713,18 @@ function PianificazioneProgetto({ progetto, dipendenti }) {
               className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded-lg text-xs">
               {showGantt ? 'Nascondi' : 'Mostra'} GANTT
             </button>
-            <button onClick={confermaProgetto} disabled={confermato}
-              className={`px-3 py-1.5 rounded-lg text-xs font-medium ${confermato ? 'bg-green-800 text-green-300' : 'bg-green-600 hover:bg-green-500'}`}>
-              {confermato ? '✅ Progetto avviato!' : '✅ Conferma e avvia progetto'}
-            </button>
+            {!isBando && (
+              <button onClick={confermaProgetto} disabled={confermato}
+                className={`px-3 py-1.5 rounded-lg text-xs font-medium ${confermato ? 'bg-green-800 text-green-300' : 'bg-green-600 hover:bg-green-500'}`}>
+                {confermato ? '✅ Progetto avviato!' : '✅ Conferma e avvia progetto'}
+              </button>
+            )}
+            {isBando && (
+              <button onClick={salva}
+                className="px-3 py-1.5 rounded-lg text-xs font-medium bg-blue-600 hover:bg-blue-500">
+                💾 Salva pianificazione bando
+              </button>
+            )}
           </div>
         </div>
 
@@ -890,7 +909,20 @@ export default function Pipeline() {
       {activeTab === 'bandi' && (
         <div className="space-y-6">
           {bandi.length === 0 && <div className="bg-gray-900 rounded-xl border border-gray-800 p-8 text-center text-gray-400">Nessun bando attivo.</div>}
-          {bandi.map(p => {
+ 
+          {/* Se è attiva la pianificazione di un bando, mostra il componente */}
+          {pianificazioneAttiva && pianificazioneAttiva._fromBando && (
+            <>
+              <button onClick={() => setPianificazioneAttiva(null)}
+                className="text-sm text-gray-400 hover:text-white mb-2">
+                ← Torna ai bandi
+              </button>
+              <PianificazioneProgetto progetto={pianificazioneAttiva} dipendenti={dipendenti} isBando={true} />
+            </>
+          )}
+ 
+          {/* Lista bandi (nascosta quando si pianifica) */}
+          {(!pianificazioneAttiva || !pianificazioneAttiva._fromBando) && bandi.map(p => {
             const tasks = getTasksProgetto(p.id)
             const persone = getPersoneProgetto(p.id)
             const scadenza = SCADENZE_BANDI[p.id]
@@ -900,7 +932,10 @@ export default function Pipeline() {
               <div key={p.id} className="bg-gray-900 rounded-xl border border-gray-800 p-6">
                 <div className="flex justify-between items-start mb-4">
                   <div><h2 className="text-lg font-semibold">{p.nome}</h2><p className="text-sm text-gray-400">{p.cliente}</p></div>
-                  <div className="flex items-center gap-3">{scadenza && <CountdownBadge scadenza={scadenza} />}<span className="text-xs text-gray-500">Scadenza: {scadenza ? formatDate(scadenza) : 'N/D'}</span></div>
+                  <div className="flex items-center gap-3">
+                    {scadenza && <CountdownBadge scadenza={scadenza} />}
+                    <span className="text-xs text-gray-500">Scadenza: {scadenza ? formatDate(scadenza) : 'N/D'}</span>
+                  </div>
                 </div>
                 <div className="grid grid-cols-4 gap-4 mb-4">
                   <div className="bg-gray-800 rounded-lg p-3"><p className="text-xs text-gray-400">Valore stimato</p><p className="text-lg font-bold">€{(p.valore_contratto/1000).toFixed(0)}k</p></div>
@@ -917,8 +952,17 @@ export default function Pipeline() {
                     ))}
                   </div>
                 </div>
+ 
+                {/* Bottoni azione */}
+                <div className="flex gap-3 mb-4">
+                  <button onClick={() => setPianificazioneAttiva({ ...p, _fromBando: true })}
+                    className="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded-lg text-sm font-medium transition-colors">
+                    📅 Pianifica GANTT bando
+                  </button>
+                </div>
+ 
                 <details>
-                  <summary className="cursor-pointer text-sm text-gray-400 hover:text-white">📋 Task ({tasks.length})</summary>
+                  <summary className="cursor-pointer text-sm text-gray-400 hover:text-white">📋 Task preparazione ({tasks.length})</summary>
                   <div className="mt-2 space-y-1">
                     {tasks.map(t => (
                       <div key={t.id} className="flex items-center justify-between py-2 px-3 bg-gray-800/50 rounded-lg text-sm">
@@ -1017,4 +1061,4 @@ export default function Pipeline() {
       )}
     </div>
   )
-}
+}                   

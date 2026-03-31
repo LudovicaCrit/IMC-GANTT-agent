@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react'
-import { fetchGantt, fetchProgetti, fetchDipendenti, exportGanttPdf } from '../api'
+import { fetchGantt, fetchProgetti, fetchDipendenti, fetchCaricoRisorse, exportGanttPdf } from '../api'
 
 // ── Colori stati ────────────────────────────────────────────────────
 const STATUS_COLORS = {
@@ -63,7 +63,7 @@ export function buildTimeline(tasks) {
 }
 
 // ── Componente GANTT riutilizzabile ─────────────────────────────────
-export function GanttChart({ tasks, title, changedIds, compact }) {
+export function GanttChart({ tasks, title, changedIds, compact, onTaskClick }) {
   const scrollRef = useRef(null)
   const labelsRef = useRef(null)
   const timeline = useMemo(() => buildTimeline(tasks), [tasks])
@@ -95,21 +95,20 @@ export function GanttChart({ tasks, title, changedIds, compact }) {
     const projects = []
     tasks.forEach(t => { if (!projects.includes(t.project)) projects.push(t.project) })
     const palettes = [
-      { bg: 'rgba(59, 130, 246, 0.08)', label: 'rgba(59, 130, 246, 0.15)' },   // blu
-      { bg: 'rgba(139, 92, 246, 0.08)', label: 'rgba(139, 92, 246, 0.15)' },    // viola
-      { bg: 'rgba(16, 185, 129, 0.08)', label: 'rgba(16, 185, 129, 0.15)' },    // verde
-      { bg: 'rgba(245, 158, 11, 0.08)', label: 'rgba(245, 158, 11, 0.15)' },    // ambra
-      { bg: 'rgba(236, 72, 153, 0.08)', label: 'rgba(236, 72, 153, 0.15)' },    // rosa
-      { bg: 'rgba(6, 182, 212, 0.08)', label: 'rgba(6, 182, 212, 0.15)' },      // ciano
-      { bg: 'rgba(249, 115, 22, 0.08)', label: 'rgba(249, 115, 22, 0.15)' },    // arancio
-      { bg: 'rgba(99, 102, 241, 0.08)', label: 'rgba(99, 102, 241, 0.15)' },    // indaco
+      { bg: 'rgba(59, 130, 246, 0.08)', label: 'rgba(59, 130, 246, 0.15)' },
+      { bg: 'rgba(139, 92, 246, 0.08)', label: 'rgba(139, 92, 246, 0.15)' },
+      { bg: 'rgba(16, 185, 129, 0.08)', label: 'rgba(16, 185, 129, 0.15)' },
+      { bg: 'rgba(245, 158, 11, 0.08)', label: 'rgba(245, 158, 11, 0.15)' },
+      { bg: 'rgba(236, 72, 153, 0.08)', label: 'rgba(236, 72, 153, 0.15)' },
+      { bg: 'rgba(6, 182, 212, 0.08)', label: 'rgba(6, 182, 212, 0.15)' },
+      { bg: 'rgba(249, 115, 22, 0.08)', label: 'rgba(249, 115, 22, 0.15)' },
+      { bg: 'rgba(99, 102, 241, 0.08)', label: 'rgba(99, 102, 241, 0.15)' },
     ]
     const colors = {}
     projects.forEach((p, i) => { colors[p] = palettes[i % palettes.length] })
     return colors
   }, [tasks])
 
-  // Barra colore progetto per il separatore
   const projectAccent = useMemo(() => {
     const projects = []
     tasks.forEach(t => { if (!projects.includes(t.project)) projects.push(t.project) })
@@ -119,9 +118,12 @@ export function GanttChart({ tasks, title, changedIds, compact }) {
     return map
   }, [tasks])
 
-  // Rileva cambio progetto per mostrare separatore
   function isNewProject(i) {
     return i === 0 || tasks[i].project !== tasks[i - 1].project
+  }
+
+  function handleBarClick(task) {
+    if (onTaskClick) onTaskClick(task)
   }
 
   return (
@@ -141,7 +143,6 @@ export function GanttChart({ tasks, title, changedIds, compact }) {
               const accent = projectAccent[task.project] || '#3b82f6'
               return (
                 <React.Fragment key={task.id || i}>
-                  {/* Separatore progetto */}
                   {newProj && !compact && (
                     <div className="flex items-center gap-2 px-3 border-t border-gray-700"
                       style={{ height: 22, backgroundColor: projectColors[task.project]?.label }}>
@@ -149,9 +150,9 @@ export function GanttChart({ tasks, title, changedIds, compact }) {
                       <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: accent }}>{task.project}</span>
                     </div>
                   )}
-                  {/* Riga task */}
-                  <div className={`border-b border-gray-800/50 px-3 flex flex-col justify-center ${isChanged ? 'bg-amber-900/20' : ''}`}
-                    style={{ height: rowH, backgroundColor: isChanged ? undefined : projColor }}>
+                  <div className={`border-b border-gray-800/50 px-3 flex flex-col justify-center cursor-pointer hover:bg-gray-800/40 transition-colors ${isChanged ? 'bg-amber-900/20' : ''}`}
+                    style={{ height: rowH, backgroundColor: isChanged ? undefined : projColor }}
+                    onClick={() => handleBarClick(task)}>
                     <p className={`text-sm font-medium truncate ${isChanged ? 'text-amber-200' : ''}`}>{task.name}</p>
                     <p className="text-[11px] text-gray-500 truncate">{task.assignee}</p>
                   </div>
@@ -215,17 +216,16 @@ export function GanttChart({ tasks, title, changedIds, compact }) {
                 const newProj = isNewProject(i)
                 return (
                   <React.Fragment key={task.id || i}>
-                    {/* Separatore progetto nella timeline */}
                     {newProj && !compact && (
                       <div className="border-t border-gray-700"
                         style={{ height: 22, width: totalWidth, backgroundColor: projectColors[task.project]?.label }} />
                     )}
-                    {/* Riga barra task */}
                     <div className={`relative border-b border-gray-800/50 ${isChanged ? 'bg-amber-900/10' : ''}`}
                       style={{ height: rowH, width: totalWidth, backgroundColor: isChanged ? undefined : projBg }}>
-                      <div className={`absolute rounded-[3px] hover:opacity-100 cursor-default z-10 ${isChanged ? 'ring-2 ring-amber-400/60' : ''}`}
+                      <div className={`absolute rounded-[3px] hover:brightness-110 cursor-pointer z-10 transition-all ${isChanged ? 'ring-2 ring-amber-400/60' : ''}`}
                         style={{ left: x, width: w, top: compact ? 5 : 8, height: compact ? 22 : 24, backgroundColor: c.bar, opacity: isChanged ? 1 : 0.85, minWidth: 4 }}
-                        title={`${task.name}\n${task.assignee} · ${task.project}\n${new Date(task.start).toLocaleDateString('it-IT')} → ${new Date(task.end).toLocaleDateString('it-IT')}\nStato: ${task.status}`}>
+                        onClick={() => handleBarClick(task)}
+                        title={`${task.name}\n${task.assignee} · ${task.project}\nClicca per dettagli`}>
                         {w > 70 && <span className="text-[10px] text-white px-1.5 truncate block font-medium"
                           style={{ lineHeight: compact ? '22px' : '24px' }}>{task.name}</span>}
                       </div>
@@ -236,6 +236,166 @@ export function GanttChart({ tasks, title, changedIds, compact }) {
             </div>
           </div>
         </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Pannello dettaglio task (appare al click) ───────────────────────
+function TaskDetailPanel({ task, allTasks, progetti, dipendenti, onClose }) {
+  const [showCarico, setShowCarico] = useState(false)
+
+  if (!task) return null
+
+  // Info progetto
+  const progetto = progetti?.find(p => p.nome === task.project || p.id === task.project_id)
+  const budgetOre = progetto?.budget_ore || 0
+  const pesoPercentuale = budgetOre > 0 ? ((task.estimated_hours || 0) / budgetOre * 100).toFixed(1) : '?'
+
+  // Percentuale completamento task — da dati reali se disponibili
+  const progressPct = task.progress ?? (task.status === 'Completato' ? 100 : task.status === 'In corso' ? 50 : 0)
+  const hoursDone = task.hours_done ?? 0
+  const sc = STATUS_COLORS[task.status] || STATUS_COLORS['Da iniziare']
+
+  // Predecessore e successori
+  const predecessore = task.predecessor_name || null
+  const successori = allTasks?.filter(t => {
+    return t.dependencies === task.id
+  }) || []
+
+  // Task della stessa persona (per mostrare il carico)
+  const taskStessaPersona = allTasks?.filter(t =>
+    t.assignee === task.assignee &&
+    t.id !== task.id &&
+    t.status !== 'Completato' &&
+    t.status !== 'Sospeso'
+  ) || []
+
+  // Calcolo carico approssimativo della persona
+  const calcolaOreSett = (t) => {
+    const inizio = new Date(t.start)
+    const fine = new Date(t.end)
+    const durataGiorni = Math.max(1, (fine - inizio) / 86400000)
+    const durataSett = Math.max(1, durataGiorni / 7)
+    return ((t.estimated_hours || 0) / durataSett).toFixed(1)
+  }
+
+  const oreSettTask = calcolaOreSett(task)
+  const caricoTotale = [task, ...taskStessaPersona].reduce((sum, t) => sum + parseFloat(calcolaOreSett(t)), 0)
+
+  // Durata in giorni lavorativi (approssimativa)
+  const durataGiorni = Math.round((new Date(task.end) - new Date(task.start)) / 86400000)
+  const durataSett = Math.round(durataGiorni / 7)
+
+  return (
+    <div className="bg-gray-900 rounded-xl border border-gray-800 p-5 mt-3 relative">
+      {/* Chiudi */}
+      <button onClick={onClose}
+        className="absolute top-3 right-3 text-gray-500 hover:text-white text-lg transition-colors">✕</button>
+
+      {/* Header */}
+      <div className="mb-4">
+        <h3 className="font-semibold text-lg">{task.name}</h3>
+        <p className="text-sm text-gray-400">{task.project} {progetto?.cliente ? `· ${progetto.cliente}` : ''}</p>
+      </div>
+
+      {/* Info principali — grid compatto */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
+        <div className="bg-gray-800/60 rounded-lg p-3">
+          <p className="text-[10px] text-gray-500 uppercase tracking-wider">Ore</p>
+          <p className="text-lg font-bold">{hoursDone > 0 ? `${hoursDone}` : '0'}<span className="text-sm text-gray-500 font-normal">/{task.estimated_hours || '?'}h</span></p>
+          <p className="text-[10px] text-gray-500">{pesoPercentuale}% del budget progetto</p>
+        </div>
+        <div className="bg-gray-800/60 rounded-lg p-3">
+          <p className="text-[10px] text-gray-500 uppercase tracking-wider">Avanzamento</p>
+          <div className="flex items-center gap-2 mt-1">
+            <span className="w-3 h-3 rounded" style={{ backgroundColor: sc.bar }} />
+            <span className="text-sm font-medium">{task.status}</span>
+          </div>
+          {/* Barra completamento */}
+          <div className="w-full bg-gray-700 rounded-full h-1.5 mt-2">
+            <div className="h-1.5 rounded-full transition-all" style={{ width: `${progressPct}%`, backgroundColor: sc.bar }} />
+          </div>
+          <p className="text-[10px] text-gray-500 mt-1">{progressPct}% completato</p>
+        </div>
+        <div className="bg-gray-800/60 rounded-lg p-3">
+          <p className="text-[10px] text-gray-500 uppercase tracking-wider">Periodo</p>
+          <p className="text-sm font-medium">{new Date(task.start).toLocaleDateString('it-IT', { day: 'numeric', month: 'short' })}</p>
+          <p className="text-[10px] text-gray-500">→ {new Date(task.end).toLocaleDateString('it-IT', { day: 'numeric', month: 'short', year: 'numeric' })}</p>
+          <p className="text-[10px] text-gray-500 mt-1">~{durataSett} settimane ({durataGiorni}gg)</p>
+        </div>
+        <div className="bg-gray-800/60 rounded-lg p-3">
+          <p className="text-[10px] text-gray-500 uppercase tracking-wider">Carico settimanale</p>
+          <p className="text-lg font-bold">~{oreSettTask}h<span className="text-sm text-gray-500 font-normal">/sett</span></p>
+        </div>
+      </div>
+
+      {/* Dipendenze */}
+      {(predecessore || successori.length > 0) && (
+        <div className="flex gap-4 mb-4 text-sm">
+          {predecessore && (
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] text-gray-500 uppercase">Dipende da:</span>
+              <span className="text-gray-300">{predecessore}</span>
+            </div>
+          )}
+          {successori.length > 0 && (
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] text-gray-500 uppercase">Successori:</span>
+              <span className="text-gray-300">{successori.map(s => s.name).join(', ')}</span>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Persona assegnata — riga compatta con espansione */}
+      <div className="bg-gray-800/40 rounded-lg p-3">
+        <button onClick={() => setShowCarico(!showCarico)}
+          className="w-full flex items-center justify-between text-sm">
+          <div className="flex items-center gap-3">
+            <span className="text-gray-300 font-medium">{task.assignee}</span>
+            <span className={`text-xs font-mono ${caricoTotale > 40 ? 'text-red-400' : caricoTotale > 32 ? 'text-yellow-400' : 'text-green-400'}`}>
+              {caricoTotale.toFixed(0)}h/40h
+            </span>
+            <span className="text-xs text-gray-500">{taskStessaPersona.length + 1} task attivi</span>
+          </div>
+          <span className="text-gray-500 text-xs">{showCarico ? '▼ nascondi' : '▶ vedi cosa fa'}</span>
+        </button>
+
+        {showCarico && (
+          <div className="mt-3 space-y-1.5 pt-3 border-t border-gray-700/50">
+            {/* Task corrente */}
+            <div className="flex items-center justify-between text-xs bg-blue-900/20 rounded px-2 py-1.5">
+              <div className="flex items-center gap-2 flex-1 min-w-0">
+                <span className="w-1.5 h-1.5 rounded-full bg-blue-400 flex-shrink-0" />
+                <span className="text-blue-200 font-medium truncate">{task.name}</span>
+                <span className="text-blue-300/50 truncate flex-shrink-0">({task.project})</span>
+              </div>
+              <span className="text-blue-300 font-mono ml-2">~{oreSettTask}h/sett</span>
+            </div>
+            {/* Altri task */}
+            {taskStessaPersona.map(t => {
+              const ore = calcolaOreSett(t)
+              return (
+                <div key={t.id} className="flex items-center justify-between text-xs px-2 py-1.5">
+                  <div className="flex items-center gap-2 flex-1 min-w-0">
+                    <span className="w-1.5 h-1.5 rounded-full bg-gray-500 flex-shrink-0" />
+                    <span className="text-gray-300 truncate">{t.name}</span>
+                    <span className="text-gray-500 truncate flex-shrink-0">({t.project})</span>
+                  </div>
+                  <span className="text-gray-400 font-mono ml-2">~{ore}h/sett</span>
+                </div>
+              )
+            })}
+            {/* Totale */}
+            <div className="flex items-center justify-between text-xs px-2 pt-2 border-t border-gray-700/30">
+              <span className="text-gray-400">Totale stimato</span>
+              <span className={`font-mono font-bold ${caricoTotale > 40 ? 'text-red-400' : 'text-green-400'}`}>
+                ~{caricoTotale.toFixed(0)}h/sett
+              </span>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   )
@@ -254,7 +414,7 @@ function StatusLegend() {
   )
 }
 
-// ── Pagina GANTT (solo visualizzazione) ─────────────────────────────
+// ── Pagina GANTT ────────────────────────────────────────────────────
 export default function GanttPage() {
   const [ganttData, setGanttData] = useState([])
   const [progetti, setProgetti] = useState([])
@@ -262,6 +422,7 @@ export default function GanttPage() {
   const [loading, setLoading] = useState(true)
   const [filtroProgetto, setFiltroProgetto] = useState('')
   const [filtroProfilo, setFiltroProfilo] = useState('')
+  const [selectedTask, setSelectedTask] = useState(null)
 
   useEffect(() => {
     Promise.all([fetchGantt(), fetchProgetti(), fetchDipendenti()])
@@ -272,6 +433,7 @@ export default function GanttPage() {
   useEffect(() => {
     fetchGantt(filtroProgetto || null).then(data => {
       setGanttData(filtroProfilo ? data.filter(t => t.profile === filtroProfilo) : data)
+      setSelectedTask(null) // chiudi pannello quando cambia filtro
     })
   }, [filtroProgetto, filtroProfilo])
 
@@ -302,7 +464,6 @@ export default function GanttPage() {
             📥 PDF
           </button>
           <button onClick={() => {
-            // Export PNG: converte il PDF in immagine
             const params = filtroProgetto ? `?progetto_id=${filtroProgetto}` : '';
             fetch(`/api/gantt/export-png${params}`)
               .then(res => res.blob())
@@ -322,7 +483,6 @@ export default function GanttPage() {
             🖼️ PNG
           </button>
           <button onClick={() => {
-            // Export Excel
             const params = filtroProgetto ? `?progetto_id=${filtroProgetto}` : '';
             fetch(`/api/gantt/export-excel${params}`)
               .then(res => res.blob())
@@ -344,44 +504,26 @@ export default function GanttPage() {
         </div>
       </div>
 
-      <GanttChart tasks={ganttData} />
+      <GanttChart
+        tasks={ganttData}
+        onTaskClick={setSelectedTask}
+      />
 
-      <details className="mt-4">
-        <summary className="cursor-pointer text-gray-400 hover:text-white text-sm font-medium">
-          📋 Dettaglio ({ganttData.length} task)
-        </summary>
-        <div className="mt-2 bg-gray-900 rounded-xl border border-gray-800 overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead className="bg-gray-800 text-gray-400">
-              <tr>
-                <th className="text-left px-4 py-2">Task</th>
-                <th className="text-left px-4 py-2">Progetto</th>
-                <th className="text-left px-4 py-2">Assegnato</th>
-                <th className="text-left px-4 py-2">Stato</th>
-                <th className="text-right px-4 py-2">Ore</th>
-                <th className="text-left px-4 py-2">Inizio</th>
-                <th className="text-left px-4 py-2">Fine</th>
-              </tr>
-            </thead>
-            <tbody>
-              {ganttData.map(t => {
-                const sc = STATUS_COLORS[t.status] || {}
-                return (
-                  <tr key={t.id} className="border-t border-gray-800 hover:bg-gray-800/50">
-                    <td className="px-4 py-2 font-medium">{t.name}</td>
-                    <td className="px-4 py-2 text-gray-400">{t.project}</td>
-                    <td className="px-4 py-2">{t.assignee}</td>
-                    <td className="px-4 py-2"><span className={`px-2 py-0.5 rounded text-xs ${sc.bg} ${sc.text}`}>{t.status}</span></td>
-                    <td className="px-4 py-2 text-right">{t.estimated_hours}h</td>
-                    <td className="px-4 py-2 text-gray-400">{new Date(t.start).toLocaleDateString('it-IT')}</td>
-                    <td className="px-4 py-2 text-gray-400">{new Date(t.end).toLocaleDateString('it-IT')}</td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
-        </div>
-      </details>
+      {/* Pannello dettaglio al click */}
+      {selectedTask && (
+        <TaskDetailPanel
+          task={selectedTask}
+          allTasks={ganttData}
+          progetti={progetti}
+          dipendenti={dipendenti}
+          onClose={() => setSelectedTask(null)}
+        />
+      )}
+
+      {/* Hint se nessun task selezionato */}
+      {!selectedTask && ganttData && ganttData.length > 0 && (
+        <p className="text-xs text-gray-600 mt-3 text-center">Clicca su un task nel GANTT per vedere i dettagli</p>
+      )}
     </div>
   )
 }

@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime
+from scenario_engine import simula_scenario, risultato_per_api, _to_date as scenario_to_date
 
 import data as data_module
 from data import (
@@ -237,19 +238,42 @@ def dati_gantt(progetto_id: Optional[str] = None):
     for _, t in tasks.iterrows():
         dip = get_dipendente(t["dipendente_id"])
         proj = _PROGETTI()[_PROGETTI()["id"] == t["progetto_id"]].iloc[0]
+        # Calcola ore consuntivate reali per questo task
+        cons_task = _CONSUNTIVI()[_CONSUNTIVI()["task_id"] == t["id"]]
+        ore_cons = float(cons_task["ore_dichiarate"].sum()) if len(cons_task) > 0 else 0
+        ore_stimate = int(t["ore_stimate"]) if t["ore_stimate"] else 0
+ 
+        # Progress reale: basato su ore consuntivate / ore stimate
+        if t["stato"] == "Completato":
+            progress = 100
+        elif ore_stimate > 0 and ore_cons > 0:
+            progress = min(99, round(ore_cons / ore_stimate * 100))  # max 99 se non completato
+        else:
+            progress = 0
+ 
         result.append({
             "id": t["id"],
             "name": t["nome"],
             "start": t["data_inizio"].strftime("%Y-%m-%d"),
             "end": t["data_fine"].strftime("%Y-%m-%d"),
-            "progress": 100 if t["stato"] == "Completato" else 50 if t["stato"] == "In corso" else 0,
+            "progress": progress,
             "dependencies": t["predecessore"] if t["predecessore"] else "",
+            "predecessor_name": "",  # popolato sotto se c'è predecessore
             "project": proj["nome"],
+            "project_id": t["progetto_id"],
             "assignee": dip["nome"],
             "profile": dip["profilo"],
             "status": t["stato"],
-            "estimated_hours": int(t["ore_stimate"]),
+            "estimated_hours": ore_stimate,
+            "hours_done": round(ore_cons, 1),
         })
+ 
+        # Aggiungi nome predecessore (per il pannello dettaglio)
+        if t["predecessore"]:
+            pred_row = _TASKS()[_TASKS()["id"] == t["predecessore"]]
+            if len(pred_row) > 0:
+                result[-1]["predecessor_name"] = pred_row.iloc[0]["nome"]
+
     return result
 
 
@@ -1306,6 +1330,352 @@ def export_gantt_excel(progetto_id: Optional[str] = None):
     filename = f"gantt_{progetto_id or 'tutti'}_{datetime.now().strftime('%Y%m%d')}.{ext}"
     return Response(content=buffer.getvalue(), media_type=media_type,
                     headers={"Content-Disposition": f"attachment; filename={filename}"})
+
+
+# ══════════════════════════════════════════════════════════════════════
+# ENDPOINT: SCENARIO — TAVOLO DI LAVORO
+# ══════════════════════════════════════════════════════════════════════
+ 
+class ModificaScenario(BaseModel):
+    """Singola modifica nello scenario."""
+    tipo: str                          # "sposta_task" | "cambia_focus"
+    # Per sposta_task:
+    task_id: str = ""
+    nuovo_inizio: str = ""             # ISO date
+    nuova_fine: str = ""               # ISO date
+    nuove_ore: int = 0
+    # Per cambia_focus:
+    dipendente_id: str = ""
+    progetto_focus: str = ""
+    percentuale: int = 100
+    durata_settimane: int = 2
+    data_inizio_focus: str = ""
+ 
+ 
+class SimulaRequest(BaseModel):
+    """Richiesta di simulazione scenario."""
+    modifiche: list[ModificaScenario]
+ 
+ 
+class ConfermaRequest(BaseModel):
+    """Richiesta di conferma e applicazione scenario."""
+    modifiche: list[ModificaScenario]
+ 
+ 
+class InterpretaRequest(BaseModel):
+    """Richiesta di interpretazione linguaggio naturale."""
+    testo: str
+    contesto_extra: str = ""
+ 
+ 
+# ── POST /api/scenario/simula ─────────────────────────────────────────
+ 
+@app.post("/api/scenario/simula")
+def scenario_simula(req: SimulaRequest):
+    """
+    Simula uno scenario SENZA modificare il database.
+    Riceve modifiche, calcola cascata, restituisce GANTT prima/dopo
+    + conseguenze + saturazioni.
+    """
+    from scenario_engine import simula_scenario, _to_date
+ 
+    # Converti request → formato motore
+    modifiche = []
+    for mod in req.modifiche:
+        m = {"tipo": mod.tipo}
+        if mod.tipo == "sposta_task":
+            m["task_id"] = mod.task_id
+            if mod.nuovo_inizio:
+                m["nuovo_inizio"] = mod.nuovo_inizio
+            if mod.nuova_fine:
+                m["nuova_fine"] = mod.nuova_fine
+            if mod.nuove_ore > 0:
+                m["nuove_ore"] = mod.nuove_ore
+        elif mod.tipo == "cambia_focus":
+            m["dipendente_id"] = mod.dipendente_id
+            m["progetto_focus"] = mod.progetto_focus
+            m["percentuale"] = mod.percentuale
+            m["durata_settimane"] = mod.durata_settimane
+            if mod.data_inizio_focus:
+                m["data_inizio_focus"] = mod.data_inizio_focus
+        modifiche.append(m)
+ 
+    # Esegui simulazione
+    risultato = simula_scenario(
+        _TASKS(), _DIPENDENTI(), _PROGETTI(),
+        modifiche, data_oggi=OGGI
+    )
+ 
+    # Costruisci GANTT prima/dopo per i progetti impattati
+    gantt_prima = {}
+    gantt_dopo = {}
+    progetti_impattati = set()
+ 
+    for tid in risultato["task_modificati"]:
+        if tid in risultato["tasks_dopo"]:
+            pid = risultato["tasks_dopo"][tid].get("progetto_id", "")
+            if pid:
+                progetti_impattati.add(pid)
+ 
+    for pid in progetti_impattati:
+        proj = get_progetto(pid)
+ 
+        # GANTT prima
+        tasks_prima_prog = []
+        for t in risultato["tasks_prima"].values():
+            if t.get("progetto_id") != pid:
+                continue
+            t_inizio = _to_date(t.get("data_inizio"))
+            t_fine = _to_date(t.get("data_fine"))
+            tasks_prima_prog.append({
+                "id": t["id"],
+                "name": t.get("nome", ""),
+                "start": t_inizio.isoformat() if t_inizio else "",
+                "end": t_fine.isoformat() if t_fine else "",
+                "status": t.get("stato", ""),
+                "assignee": get_dipendente(t.get("dipendente_id", ""))["nome"],
+                "estimated_hours": t.get("ore_stimate", 0),
+                "project": proj["nome"],
+            })
+ 
+        # GANTT dopo
+        tasks_dopo_prog = []
+        for t in risultato["tasks_dopo"].values():
+            if t.get("progetto_id") != pid:
+                continue
+            t_inizio = _to_date(t.get("data_inizio"))
+            t_fine = _to_date(t.get("data_fine"))
+            tasks_dopo_prog.append({
+                "id": t["id"],
+                "name": t.get("nome", ""),
+                "start": t_inizio.isoformat() if t_inizio else "",
+                "end": t_fine.isoformat() if t_fine else "",
+                "status": t.get("stato", ""),
+                "assignee": get_dipendente(t.get("dipendente_id", ""))["nome"],
+                "estimated_hours": t.get("ore_stimate", 0),
+                "project": proj["nome"],
+            })
+ 
+        gantt_prima[pid] = {
+            "progetto": proj["nome"],
+            "cliente": proj.get("cliente", ""),
+            "tasks": tasks_prima_prog,
+        }
+        gantt_dopo[pid] = {
+            "progetto": proj["nome"],
+            "cliente": proj.get("cliente", ""),
+            "tasks": tasks_dopo_prog,
+        }
+ 
+    return {
+        "gantt_prima": gantt_prima,
+        "gantt_dopo": gantt_dopo,
+        "conseguenze": risultato["conseguenze"],
+        "scadenze_bucate": risultato["scadenze_bucate"],
+        "saturazioni": risultato["saturazioni"],
+        "n_task_modificati": len(risultato["task_modificati"]),
+        "progetti_impattati": [
+            {"id": pid, "nome": get_progetto(pid)["nome"]}
+            for pid in progetti_impattati
+        ],
+    }
+ 
+ 
+# ── POST /api/scenario/conferma ───────────────────────────────────────
+ 
+@app.post("/api/scenario/conferma")
+def scenario_conferma(req: ConfermaRequest):
+    """
+    Applica le modifiche dello scenario al database.
+    Prima ri-simula per ottenere le date propagate,
+    poi scrive tutto nel db.
+    """
+    from scenario_engine import simula_scenario, _to_date
+    from datetime import datetime as dt
+ 
+    # Converti request → formato motore (stessa logica di /simula)
+    modifiche = []
+    for mod in req.modifiche:
+        m = {"tipo": mod.tipo}
+        if mod.tipo == "sposta_task":
+            m["task_id"] = mod.task_id
+            if mod.nuovo_inizio:
+                m["nuovo_inizio"] = mod.nuovo_inizio
+            if mod.nuova_fine:
+                m["nuova_fine"] = mod.nuova_fine
+            if mod.nuove_ore > 0:
+                m["nuove_ore"] = mod.nuove_ore
+        elif mod.tipo == "cambia_focus":
+            m["dipendente_id"] = mod.dipendente_id
+            m["progetto_focus"] = mod.progetto_focus
+            m["percentuale"] = mod.percentuale
+            m["durata_settimane"] = mod.durata_settimane
+            if mod.data_inizio_focus:
+                m["data_inizio_focus"] = mod.data_inizio_focus
+        modifiche.append(m)
+ 
+    risultato = simula_scenario(
+        _TASKS(), _DIPENDENTI(), _PROGETTI(),
+        modifiche, data_oggi=OGGI
+    )
+ 
+    # Applica al db ogni task che è cambiato
+    applicati = []
+    errori = []
+ 
+    for tid in risultato["task_modificati"]:
+        task_dopo = risultato["tasks_dopo"].get(tid)
+        task_prima = risultato["tasks_prima"].get(tid)
+        if not task_dopo or not task_prima:
+            continue
+ 
+        kwargs = {}
+        nuovo_inizio = _to_date(task_dopo.get("data_inizio"))
+        vecchio_inizio = _to_date(task_prima.get("data_inizio"))
+        nuova_fine = _to_date(task_dopo.get("data_fine"))
+        vecchia_fine = _to_date(task_prima.get("data_fine"))
+ 
+        if nuovo_inizio and vecchio_inizio and nuovo_inizio != vecchio_inizio:
+            kwargs["data_inizio"] = dt.combine(nuovo_inizio, dt.min.time())
+        if nuova_fine and vecchia_fine and nuova_fine != vecchia_fine:
+            kwargs["data_fine"] = dt.combine(nuova_fine, dt.min.time())
+ 
+        nuove_ore = task_dopo.get("ore_stimate")
+        vecchie_ore = task_prima.get("ore_stimate")
+        if nuove_ore and vecchie_ore and nuove_ore != vecchie_ore:
+            kwargs["ore_stimate"] = nuove_ore
+ 
+        if kwargs:
+            ok = modifica_task(tid, **kwargs)
+            if ok:
+                applicati.append({
+                    "task_id": tid,
+                    "task_nome": task_dopo.get("nome", ""),
+                    "progetto": get_progetto(task_dopo.get("progetto_id", ""))["nome"],
+                    "modifiche_applicate": {k: str(v) for k, v in kwargs.items()},
+                })
+            else:
+                errori.append({
+                    "task_id": tid,
+                    "task_nome": task_dopo.get("nome", ""),
+                    "errore": "Modifica non riuscita",
+                })
+ 
+    return {
+        "successo": len(errori) == 0,
+        "n_applicati": len(applicati),
+        "applicati": applicati,
+        "errori": errori,
+        "conseguenze_applicate": risultato["conseguenze"],
+    }
+ 
+ 
+# ── POST /api/scenario/interpreta ─────────────────────────────────────
+ 
+@app.post("/api/scenario/interpreta")
+def scenario_interpreta(req: InterpretaRequest):
+    """
+    L'IA interpreta il linguaggio naturale del management
+    e lo traduce in modifiche strutturate per /scenario/simula.
+    NON esegue la simulazione — restituisce le modifiche proposte
+    che il frontend mostrerà al management per conferma/modifica.
+    """
+    import json as json_mod
+ 
+    model = init_gemini(prompt_file="interpreta_scenario.md")
+    if model is None:
+        raise HTTPException(503, "Agente AI non disponibile")
+ 
+    # ── Costruisci contesto completo ──
+    progetti_ctx = []
+    for _, p in _PROGETTI().iterrows():
+        if p["stato"] not in ("In esecuzione", "In bando"):
+            continue
+        tasks_prog = _TASKS()[_TASKS()["progetto_id"] == p["id"]]
+        tasks_list = []
+        for _, t in tasks_prog.iterrows():
+            dip_nome = get_dipendente(t["dipendente_id"])["nome"] if t["dipendente_id"] else "Non assegnato"
+            tasks_list.append({
+                "id": t["id"],
+                "nome": t["nome"],
+                "assegnato_a": dip_nome,
+                "inizio": t["data_inizio"].strftime("%Y-%m-%d") if t["data_inizio"] else "",
+                "fine": t["data_fine"].strftime("%Y-%m-%d") if t["data_fine"] else "",
+                "ore_stimate": int(t["ore_stimate"]),
+                "stato": t["stato"],
+                "predecessore": t["predecessore"] if t["predecessore"] else "",
+            })
+        progetti_ctx.append({
+            "id": p["id"],
+            "nome": p["nome"],
+            "cliente": p["cliente"],
+            "scadenza": p["data_fine"].strftime("%Y-%m-%d") if p["data_fine"] else "",
+            "stato": p["stato"],
+            "task": tasks_list,
+        })
+ 
+    dipendenti_ctx = []
+    for _, d in _DIPENDENTI().iterrows():
+        carico = carico_settimanale_dipendente(d["id"], OGGI)
+        progetti_dip = get_progetti_dipendente(d["id"])
+        n_task = len(_TASKS()[
+            (_TASKS()["dipendente_id"] == d["id"]) &
+            (_TASKS()["stato"].isin(["In corso", "Da iniziare"]))
+        ])
+        dipendenti_ctx.append({
+            "id": d["id"],
+            "nome": d["nome"],
+            "profilo": d["profilo"],
+            "ore_sett": int(d["ore_sett"]),
+            "carico_attuale_h": float(carico),
+            "saturazione_pct": round(carico / d["ore_sett"] * 100),
+            "progetti": progetti_dip,
+            "n_task_attivi": n_task,
+        })
+ 
+    contesto = {
+        "data_corrente": OGGI.strftime("%Y-%m-%d"),
+        "progetti": progetti_ctx,
+        "dipendenti": dipendenti_ctx,
+    }
+ 
+    contesto_json = json_mod.dumps(contesto, ensure_ascii=False, indent=2)
+ 
+    prompt = f"Il management dice:\n\n\"{req.testo}\"\n\n"
+    if req.contesto_extra:
+        prompt += f"Contesto aggiuntivo dal management: {req.contesto_extra}\n\n"
+    prompt += f"Stato attuale del sistema:\n\n```json\n{contesto_json}\n```"
+ 
+    try:
+        chat = model.start_chat(history=[])
+        response = chat.send_message(prompt)
+        risposta_raw = response.text
+ 
+        # Pulisci e parsa JSON
+        cleaned = risposta_raw.strip()
+        if cleaned.startswith("```json"):
+            cleaned = cleaned[7:]
+        if cleaned.startswith("```"):
+            cleaned = cleaned[3:]
+        if cleaned.endswith("```"):
+            cleaned = cleaned[:-3]
+        cleaned = cleaned.strip()
+ 
+        try:
+            risultato = json_mod.loads(cleaned)
+        except json_mod.JSONDecodeError:
+            risultato = {
+                "interpretazione": risposta_raw,
+                "modifiche": [],
+                "domande": "",
+                "note_contesto": "",
+                "parse_error": True,
+            }
+ 
+        return risultato
+ 
+    except Exception as e:
+        raise HTTPException(500, f"Errore agente: {str(e)}")
 
 
 # ══════════════════════════════════════════════════════════════════════

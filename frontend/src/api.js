@@ -167,3 +167,35 @@ export async function suggerisciTask(data) {
   });
   return res.json();
 }
+
+// ── Scenario: Tavolo di Lavoro ──────────────────────────────────────
+
+export async function interpretaScenario(testo, contesto_extra = '') {
+  const res = await fetch(`${API_BASE}/scenario/interpreta`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ testo, contesto_extra }),
+  });
+  if (!res.ok) throw new Error(`Errore ${res.status}`);
+  return res.json();
+}
+
+export async function simulaScenario(modifiche) {
+  const res = await fetch(`${API_BASE}/scenario/simula`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ modifiche }),
+  });
+  if (!res.ok) throw new Error(`Errore ${res.status}`);
+  return res.json();
+}
+
+export async function confermaScenario(modifiche) {
+  const res = await fetch(`${API_BASE}/scenario/conferma`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ modifiche }),
+  });
+  if (!res.ok) throw new Error(`Errore ${res.status}`);
+  return res.json();
+}

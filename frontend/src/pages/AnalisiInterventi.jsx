@@ -1,247 +1,611 @@
-import React, { useState, useEffect } from 'react'
-import { fetchDipendenti, fetchProgetti, fetchTasks, fetchGantt, richiediAnalisiGantt, simulaRitardoMultiplo, fetchSegnalazioni, anteprimaImpatto, applicaModifiche } from '../api'
+import React, { useState, useEffect, useMemo } from 'react'
+import { fetchDipendenti, fetchProgetti, fetchTasks, fetchSegnalazioni, interpretaScenario, simulaScenario, confermaScenario } from '../api'
 import { GanttChart } from './Gantt'
 
 // ── Costanti ────────────────────────────────────────────────────────
-const PRIORITA_COLORS = {
+const GRAVITA_STYLE = {
   alta:  'bg-red-900/30 border-red-700 text-red-300',
   media: 'bg-yellow-900/30 border-yellow-700 text-yellow-300',
-  bassa: 'bg-gray-800 border-gray-700 text-gray-300',
+  bassa: 'bg-gray-800/60 border-gray-700 text-gray-300',
 }
 
-const FATTIBILITA_BADGE = {
-  alta:  'bg-green-600 text-white',
+const GRAVITA_BADGE = {
+  alta:  'bg-red-600 text-white',
   media: 'bg-yellow-600 text-white',
-  bassa: 'bg-red-600 text-white',
+  bassa: 'bg-gray-600 text-white',
+}
+
+const TIPO_ICON = {
+  scadenza_bucata:      '🚨',
+  task_slittato:        '📅',
+  sovraccarico_persona: '👤',
 }
 
 // ═════════════════════════════════════════════════════════════════════
-//  PAGINA PRINCIPALE
+//  COMPONENTE: Input scenario con completion
+// ═════════════════════════════════════════════════════════════════════
+
+function ScenarioInput({ onSubmit, loading, progetti, dipendenti }) {
+  const [testo, setTesto] = useState('')
+  const [showSuggestions, setShowSuggestions] = useState(false)
+
+  // Suggerimenti contestuali
+  const suggerimenti = [
+    'Il progetto [nome] anticipa di [N] giorni',
+    '[Nome persona] si concentra al 100% su [progetto] per [N] settimane',
+    '[Nome persona] aiuta su [progetto] ma continua i suoi task',
+    'Il task [nome task] slitta di [N] giorni',
+    'Servono [N] ore in più sullo sviluppo di [progetto]',
+  ]
+
+  function handleSubmit() {
+    if (!testo.trim() || loading) return
+    onSubmit(testo.trim())
+  }
+
+  function handleKeyDown(e) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault()
+      handleSubmit()
+    }
+  }
+
+  return (
+    <div className="bg-gray-900 rounded-xl border border-gray-800 p-5">
+      <div className="flex items-center gap-2 mb-3">
+        <span className="text-lg">💬</span>
+        <h3 className="font-semibold">Cosa sta cambiando?</h3>
+      </div>
+      <p className="text-sm text-gray-400 mb-3">
+        Descrivi in linguaggio naturale cosa è successo o cosa deve cambiare. L'agente interpreterà e il sistema calcolerà l'impatto su tutti i GANTT.
+      </p>
+      <div className="flex gap-3">
+        <div className="flex-1 relative">
+          <textarea
+            value={testo}
+            onChange={e => setTesto(e.target.value)}
+            onKeyDown={handleKeyDown}
+            onFocus={() => setShowSuggestions(true)}
+            onBlur={() => setTimeout(() => setShowSuggestions(false), 200)}
+            placeholder="Es: 'Sparkasse ha anticipato la scadenza di 20 giorni' oppure 'Marco si concentra su Digital Health per 2 settimane'..."
+            rows={2}
+            disabled={loading}
+            className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-3 text-sm placeholder-gray-500 focus:border-blue-500 focus:outline-none resize-none disabled:opacity-50"
+          />
+          {/* Suggerimenti */}
+          {showSuggestions && !testo && (
+            <div className="absolute top-full left-0 right-0 mt-1 bg-gray-800 border border-gray-700 rounded-lg shadow-lg z-10 py-1">
+              <p className="px-3 py-1 text-[10px] text-gray-500 uppercase tracking-wider">Esempi di input</p>
+              {suggerimenti.map((s, i) => (
+                <button key={i}
+                  onMouseDown={() => { setTesto(s); setShowSuggestions(false) }}
+                  className="w-full text-left px-3 py-2 text-sm text-gray-300 hover:bg-gray-700 transition-colors">
+                  {s}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+        <button
+          onClick={handleSubmit}
+          disabled={!testo.trim() || loading}
+          className="self-end px-5 py-3 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-700 disabled:text-gray-500 rounded-lg text-sm font-medium transition-colors whitespace-nowrap">
+          {loading ? '⏳ Interpreto...' : '→ Analizza impatto'}
+        </button>
+      </div>
+    </div>
+  )
+}
+
+
+// ═════════════════════════════════════════════════════════════════════
+//  COMPONENTE: Interpretazione IA (conferma/modifica prima di simulare)
+// ═════════════════════════════════════════════════════════════════════
+
+function InterpretazionePanel({ interpretazione, modifiche, domande, noteContesto, onConferma, onAnnulla, onRisposta, loading }) {
+  const [risposta, setRisposta] = useState('')
+
+  return (
+    <div className="bg-blue-900/20 border border-blue-800 rounded-xl p-5">
+      <div className="flex items-center gap-2 mb-3">
+        <span className="text-lg">🧠</span>
+        <h3 className="font-semibold text-blue-200">Interpretazione dell'agente</h3>
+      </div>
+
+      {interpretazione && (
+        <p className="text-sm text-gray-200 mb-4 leading-relaxed">{interpretazione}</p>
+      )}
+
+      {domande && (
+        <div className="mb-4">
+          <div className="bg-yellow-900/20 border border-yellow-800 rounded-lg p-3 mb-3">
+            <p className="text-sm text-yellow-200">❓ {domande}</p>
+          </div>
+          {/* Campo risposta alla domanda */}
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={risposta}
+              onChange={e => setRisposta(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter' && risposta.trim()) onRisposta(risposta.trim()) }}
+              placeholder="Rispondi qui..."
+              className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm placeholder-gray-500 focus:border-yellow-500 focus:outline-none"
+            />
+            <button
+              onClick={() => { if (risposta.trim()) onRisposta(risposta.trim()) }}
+              disabled={!risposta.trim() || loading}
+              className="px-4 py-2 bg-yellow-600 hover:bg-yellow-500 disabled:bg-gray-700 rounded-lg text-sm font-medium transition-colors">
+              {loading ? '⏳' : '→ Rispondi'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {noteContesto && (
+        <div className="bg-gray-800/50 rounded-lg p-3 mb-4">
+          <p className="text-xs text-gray-400">📋 Contesto: {noteContesto}</p>
+        </div>
+      )}
+
+      {modifiche && modifiche.length > 0 && (
+        <div className="mb-4">
+          <p className="text-xs text-gray-400 uppercase tracking-wider mb-2">
+            Modifiche che verranno simulate ({modifiche.length})
+          </p>
+          <div className="space-y-2">
+            {modifiche.map((m, i) => (
+              <div key={i} className="bg-gray-800 rounded-lg p-3 text-sm">
+                <div className="flex items-center gap-2 mb-1">
+                  <span className={`text-xs font-medium uppercase px-2 py-0.5 rounded ${
+                    m.tipo === 'sposta_task' ? 'bg-blue-700 text-blue-100' : 'bg-purple-700 text-purple-100'
+                  }`}>
+                    {m.tipo === 'sposta_task' ? 'Sposta date' : 'Cambia focus'}
+                  </span>
+                </div>
+                {m.tipo === 'sposta_task' && (
+                  <p className="text-gray-300">
+                    Task <strong>{m.task_id}</strong>
+                    {m.nuova_fine && <span> → nuova fine: {new Date(m.nuova_fine).toLocaleDateString('it-IT')}</span>}
+                    {m.nuovo_inizio && <span> → nuovo inizio: {new Date(m.nuovo_inizio).toLocaleDateString('it-IT')}</span>}
+                  </p>
+                )}
+                {m.tipo === 'cambia_focus' && (
+                  <p className="text-gray-300">
+                    <strong>{m.dipendente_id}</strong> → {m.percentuale}% su progetto <strong>{m.progetto_focus}</strong> per {m.durata_settimane} settimane
+                  </p>
+                )}
+                {m.motivo && <p className="text-xs text-gray-500 mt-1">{m.motivo}</p>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="flex gap-2">
+        {modifiche && modifiche.length > 0 && !domande && (
+          <button onClick={onConferma} disabled={loading}
+            className="flex-1 px-4 py-2.5 bg-blue-600 hover:bg-blue-500 disabled:bg-blue-800 rounded-lg text-sm font-medium transition-colors">
+            {loading ? '⏳ Calcolo cascata...' : '📊 Calcola impatto a cascata'}
+          </button>
+        )}
+        <button onClick={onAnnulla}
+          className="px-4 py-2.5 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm transition-colors">
+          Annulla
+        </button>
+      </div>
+    </div>
+  )
+}
+
+
+// ═════════════════════════════════════════════════════════════════════
+//  COMPONENTE: Risultato simulazione (GANTT prima/dopo + conseguenze)
+// ═════════════════════════════════════════════════════════════════════
+
+function RisultatoSimulazione({ risultato, onConferma, onReset, confermaLoading, confermato }) {
+  const [progettoAperto, setProgettoAperto] = useState(null)
+  const [showSaturazioni, setShowSaturazioni] = useState(false)
+
+  if (!risultato) return null
+
+  const { gantt_prima, gantt_dopo, conseguenze, saturazioni, n_task_modificati, progetti_impattati, scadenze_bucate } = risultato
+
+  // Prima apertura: mostra il primo progetto impattato
+  const progettiIds = Object.keys(gantt_dopo || {})
+  const progettoVisualizzato = progettoAperto || progettiIds[0]
+
+  return (
+    <div className="space-y-4">
+      {/* Header riepilogo */}
+      <div className="bg-gray-900 rounded-xl border border-gray-800 p-5">
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center gap-3">
+            <span className="text-lg">📊</span>
+            <h3 className="font-semibold">Risultato simulazione</h3>
+          </div>
+          <div className="flex items-center gap-4 text-sm">
+            <span className="text-gray-400">{n_task_modificati} task impattati</span>
+            <span className="text-gray-400">{progetti_impattati?.length || 0} progetti coinvolti</span>
+          </div>
+        </div>
+
+        {/* Scadenze bucate — alert prominente */}
+        {scadenze_bucate && scadenze_bucate.length > 0 && (
+          <div className="mb-4 space-y-2">
+            {scadenze_bucate.map((sb, i) => (
+              <div key={i} className="p-3 bg-red-900/30 border border-red-700 rounded-lg flex items-center gap-3">
+                <span className="text-xl">🚨</span>
+                <div>
+                  <p className="text-sm font-medium text-red-200">
+                    {sb.progetto} ({sb.cliente}): sfora la scadenza di {sb.giorni_sforo} giorni
+                  </p>
+                  <p className="text-xs text-red-300/70">
+                    Scadenza: {new Date(sb.scadenza).toLocaleDateString('it-IT')} → Ultimo task finisce: {new Date(sb.ultimo_task_fine).toLocaleDateString('it-IT')}
+                  </p>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Tabs progetti */}
+        {progettiIds.length > 1 && (
+          <div className="flex gap-2 mb-4 flex-wrap">
+            {progettiIds.map(pid => {
+              const info = gantt_dopo[pid]
+              const haScadenzaBucata = scadenze_bucate?.some(sb => sb.progetto_id === pid)
+              return (
+                <button key={pid}
+                  onClick={() => setProgettoAperto(pid)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                    progettoVisualizzato === pid
+                      ? 'bg-blue-600 text-white'
+                      : haScadenzaBucata
+                        ? 'bg-red-900/30 text-red-300 border border-red-700 hover:bg-red-900/50'
+                        : 'bg-gray-800 text-gray-400 hover:text-white'
+                  }`}>
+                  {haScadenzaBucata && '⚠️ '}{info?.progetto || pid}
+                </button>
+              )
+            })}
+          </div>
+        )}
+
+        {/* GANTT Prima / Dopo */}
+        {progettoVisualizzato && gantt_prima[progettoVisualizzato] && (
+          <div className="space-y-3">
+            <div>
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-xs font-semibold uppercase tracking-wider text-gray-400 bg-gray-800 px-2 py-1 rounded">Prima</span>
+                <span className="text-xs text-gray-500">{gantt_prima[progettoVisualizzato]?.progetto}</span>
+              </div>
+              <GanttChart tasks={gantt_prima[progettoVisualizzato]?.tasks || []} compact />
+            </div>
+            <div>
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-xs font-semibold uppercase tracking-wider text-amber-300 bg-amber-900/30 px-2 py-1 rounded">Dopo</span>
+                <span className="text-xs text-gray-500">{gantt_dopo[progettoVisualizzato]?.progetto}</span>
+              </div>
+              <GanttChart tasks={gantt_dopo[progettoVisualizzato]?.tasks || []} compact />
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Conseguenze */}
+      {conseguenze && conseguenze.length > 0 && (
+        <div className="bg-gray-900 rounded-xl border border-gray-800 p-5">
+          <h3 className="font-semibold mb-3">📋 Conseguenze ({conseguenze.length})</h3>
+          <div className="space-y-2 max-h-[400px] overflow-y-auto">
+            {conseguenze.map((c, i) => (
+              <div key={i} className={`p-3 rounded-lg border text-sm ${GRAVITA_STYLE[c.gravita]}`}>
+                <div className="flex items-center gap-2 mb-1">
+                  <span>{TIPO_ICON[c.tipo] || '📌'}</span>
+                  <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded ${GRAVITA_BADGE[c.gravita]}`}>
+                    {c.gravita}
+                  </span>
+                  <span className="text-[10px] text-gray-500">{c.tipo?.replace(/_/g, ' ')}</span>
+                </div>
+                <p className="text-gray-200 leading-relaxed">{c.testo}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Saturazioni settimanali */}
+      {saturazioni && Object.keys(saturazioni).length > 0 && (
+        <div className="bg-gray-900 rounded-xl border border-gray-800 p-5">
+          <button onClick={() => setShowSaturazioni(!showSaturazioni)}
+            className="w-full flex items-center justify-between">
+            <h3 className="font-semibold">👥 Dettaglio saturazioni per persona ({Object.keys(saturazioni).length})</h3>
+            <span className="text-gray-400 text-sm">{showSaturazioni ? '▼' : '▶'}</span>
+          </button>
+
+          {showSaturazioni && (
+            <div className="mt-4 space-y-4">
+              {Object.entries(saturazioni).map(([did, data]) => (
+                <div key={did} className="bg-gray-800/50 rounded-lg p-4">
+                  <div className="flex items-center gap-3 mb-3">
+                    <span className="font-medium">{data.nome}</span>
+                    <span className="text-xs text-gray-400">{data.profilo} · {data.ore_sett}h/sett</span>
+                  </div>
+                  <div className="grid grid-cols-6 gap-1 text-[10px]">
+                    {data.settimane?.slice(0, 6).map((s, i) => {
+                      const lun = new Date(s.lunedi)
+                      const overPrima = s.carico_prima > data.ore_sett
+                      const overDopo = s.carico_dopo > data.ore_sett
+                      const peggiorato = s.carico_dopo > s.carico_prima
+                      return (
+                        <div key={i} className={`p-2 rounded text-center ${
+                          overDopo && peggiorato ? 'bg-red-900/40 border border-red-700' :
+                          overDopo ? 'bg-yellow-900/30 border border-yellow-800' :
+                          'bg-gray-700/30'
+                        }`}>
+                          <p className="text-gray-500 mb-1">
+                            {lun.toLocaleDateString('it-IT', { day: 'numeric', month: 'short' })}
+                          </p>
+                          <p className="text-gray-400">{s.carico_prima}h</p>
+                          <p className="text-gray-600">↓</p>
+                          <p className={`font-bold ${overDopo ? 'text-red-400' : 'text-green-400'}`}>
+                            {s.carico_dopo}h
+                          </p>
+                          {/* Dettaglio attività dopo */}
+                          {s.dettaglio_dopo?.length > 0 && (
+                            <div className="mt-1 pt-1 border-t border-gray-600/30">
+                              {s.dettaglio_dopo.map((det, j) => (
+                                <p key={j} className="text-gray-500 truncate" title={`${det.task} (${det.ore_sett}h)`}>
+                                  {det.task?.substring(0, 12)}… {det.ore_sett}h
+                                </p>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Azioni finali */}
+      <div className="flex gap-3 justify-end">
+        <button onClick={onReset}
+          className="px-5 py-2.5 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm transition-colors">
+          🔄 Nuovo scenario
+        </button>
+        {!confermato && (
+          <button onClick={onConferma} disabled={confermaLoading}
+            className="px-5 py-2.5 bg-green-600 hover:bg-green-500 disabled:bg-green-800 rounded-lg text-sm font-medium transition-colors">
+            {confermaLoading ? '⏳ Applico...' : '✅ Conferma e applica al GANTT'}
+          </button>
+        )}
+        {confermato && (
+          <div className="px-5 py-2.5 bg-green-900/30 border border-green-700 rounded-lg text-sm text-green-300 font-medium">
+            ✅ Modifiche applicate! I GANTT sono aggiornati.
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+
+// ═════════════════════════════════════════════════════════════════════
+//  COMPONENTE: Sidebar contesto (stato dell'arte)
+// ═════════════════════════════════════════════════════════════════════
+
+function SidebarContesto({ dipendenti, progetti, segnalazioni }) {
+  // Persone con carico > 90%
+  const sovraccarichi = dipendenti
+    .filter(d => d.saturazione_pct > 90)
+    .sort((a, b) => b.saturazione_pct - a.saturazione_pct)
+
+  // Progetti in esecuzione
+  const progettiAttivi = progetti.filter(p => p.stato === 'In esecuzione')
+
+  return (
+    <div className="space-y-4">
+      {/* Persone */}
+      <div className="bg-gray-900 rounded-xl border border-gray-800 p-4">
+        <h4 className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-3">👥 Carico persone</h4>
+        <div className="space-y-2">
+          {dipendenti
+            .sort((a, b) => b.saturazione_pct - a.saturazione_pct)
+            .slice(0, 8)
+            .map(d => (
+              <div key={d.id} className="flex items-center justify-between text-sm">
+                <div className="flex-1 min-w-0">
+                  <p className="font-medium truncate">{d.nome}</p>
+                  <p className="text-[10px] text-gray-500">{d.profilo} · {d.n_task_attivi ?? '?'} task · {d.progetti_attivi?.length ?? '?'} prog.</p>
+                </div>
+                <div className="flex items-center gap-2 ml-2">
+                  <div className="w-16 bg-gray-700 rounded-full h-1.5">
+                    <div className={`h-1.5 rounded-full ${
+                      d.saturazione_pct > 100 ? 'bg-red-500' :
+                      d.saturazione_pct > 85 ? 'bg-yellow-500' : 'bg-green-500'
+                    }`} style={{ width: `${Math.min(100, d.saturazione_pct)}%` }} />
+                  </div>
+                  <span className={`text-xs font-mono w-10 text-right ${
+                    d.saturazione_pct > 100 ? 'text-red-400' :
+                    d.saturazione_pct > 85 ? 'text-yellow-400' : 'text-gray-400'
+                  }`}>
+                    {d.saturazione_pct}%
+                  </span>
+                </div>
+              </div>
+            ))}
+        </div>
+      </div>
+
+      {/* Segnalazioni recenti */}
+      {segnalazioni.length > 0 && (
+        <div className="bg-gray-900 rounded-xl border border-gray-800 p-4">
+          <h4 className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-3">
+            📥 Segnalazioni recenti ({segnalazioni.length})
+          </h4>
+          <div className="space-y-2 max-h-[200px] overflow-y-auto">
+            {segnalazioni.slice(0, 5).map(s => (
+              <div key={s.id} className="p-2 bg-gray-800/50 rounded-lg text-xs">
+                <div className="flex items-center gap-2 mb-0.5">
+                  <span className={`px-1.5 py-0.5 rounded text-[9px] font-medium ${GRAVITA_BADGE[s.priorita]}`}>
+                    {s.priorita}
+                  </span>
+                  <span className="text-gray-400">{s.dipendente || ''}</span>
+                </div>
+                <p className="text-gray-300 line-clamp-2">{s.dettaglio}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Progetti attivi */}
+      <div className="bg-gray-900 rounded-xl border border-gray-800 p-4">
+        <h4 className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-3">
+          📁 Progetti attivi ({progettiAttivi.length})
+        </h4>
+        <div className="space-y-1.5">
+          {progettiAttivi.map(p => (
+            <div key={p.id} className="flex items-center justify-between text-xs">
+              <span className="text-gray-300 truncate flex-1">{p.nome}</span>
+              <span className="text-gray-500 ml-2">{p.cliente}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+
+// ═════════════════════════════════════════════════════════════════════
+//  PAGINA PRINCIPALE — TAVOLO DI LAVORO
 // ═════════════════════════════════════════════════════════════════════
 
 export default function AnalisiInterventi() {
-  // Dati condivisi
+  // Dati di contesto
   const [dipendenti, setDipendenti] = useState([])
   const [progetti, setProgetti] = useState([])
   const [allTasks, setAllTasks] = useState([])
+  const [segnalazioni, setSegnalazioni] = useState([])
   const [loadingData, setLoadingData] = useState(true)
 
-  // ── Sezione Esplorazione ──
-  const [ritardiList, setRitardiList] = useState([])
-  const [addTaskId, setAddTaskId] = useState('')
-  const [addGiorni, setAddGiorni] = useState(14)
-  const [simResult, setSimResult] = useState(null)
-  const [simLoading, setSimLoading] = useState(false)
+  // Flusso scenario
+  const [fase, setFase] = useState('input')
+  // 'input'          → campo testo libero
+  // 'interpretazione' → IA ha interpretato, management conferma
+  // 'simulazione'     → cascata calcolata, GANTT prima/dopo visibili
+  // 'confermato'      → modifiche applicate al db
 
-  // ── Sezione Interventi ──
-  const SEGNALAZIONI_DEFAULT = [
-    {
-      id: 'S001', tipo: 'sovraccarico', priorita: 'alta',
-      dipendente_id: 'D005', dipendente: 'Alessandro Conte',
-      dettaglio: 'Saturazione al 133%, 5 progetti attivi. Non riesce a lavorare sulla proposta tecnica Allerta.',
-      timestamp: '2026-03-09 10:30',
-    },
-    {
-      id: 'S002', tipo: 'richiesta_supporto', priorita: 'alta',
-      dipendente_id: 'D001', dipendente: 'Marco Bianchi',
-      dettaglio: 'Richiede supporto tecnico junior per Design architettura HL7 FHIR.',
-      timestamp: '2026-03-09 11:15',
-    },
-    {
-      id: 'S003', tipo: 'sovraccarico', priorita: 'media',
-      dipendente_id: 'D007', dipendente: 'Roberto Esposito',
-      dettaglio: 'Saturazione al 106%, gestisce 3 backend contemporaneamente.',
-      timestamp: '2026-03-08 16:45',
-    },
-  ]
-  const [segnalazioni, setSegnalazioni] = useState(SEGNALAZIONI_DEFAULT)
-  const [selectedSegn, setSelectedSegn] = useState(null)
-  const [analisiResult, setAnalisiResult] = useState(null)
-  const [analisiLoading, setAnalisiLoading] = useState(false)
-  const [applicandoOpzione, setApplicandoOpzione] = useState(null) // opzione in anteprima
-  const [anteprimaResult, setAnteprimaResult] = useState(null)
-  const [applicato, setApplicato] = useState(false)
+  // Dati intermedi
+  const [interpretazioneResult, setInterpretazioneResult] = useState(null)
+  const [modificheConfermate, setModificheConfermate] = useState([])
+  const [simulazioneResult, setSimulazioneResult] = useState(null)
+  const [testoOriginale, setTestoOriginale] = useState('')  // salva il testo per follow-up
 
-  // Segnalazione manuale
-  const [segnTipo, setSegnTipo] = useState('sovraccarico')
-  const [segnDip, setSegnDip] = useState('')
-  const [segnDettaglio, setSegnDettaglio] = useState('')
-  const [segnPriorita, setSegnPriorita] = useState('alta')
+  // Loading states
+  const [interpretaLoading, setInterpretaLoading] = useState(false)
+  const [simulaLoading, setSimulaLoading] = useState(false)
+  const [confermaLoading, setConfermaLoading] = useState(false)
 
-  // Sezione attiva (per scroll/navigazione)
-  const [activeSection, setActiveSection] = useState('esplorazione')
+  // Storico scenari nella sessione
+  const [storico, setStorico] = useState([])
 
   // ── Caricamento dati ──
   useEffect(() => {
     Promise.all([fetchDipendenti(), fetchProgetti(), fetchTasks()])
       .then(([d, p, t]) => { setDipendenti(d); setProgetti(p); setAllTasks(t) })
       .finally(() => setLoadingData(false))
-    // Carica segnalazioni dal backend (chatbot) e merge con le default
-    fetchSegnalazioni().then(backendSegn => {
-      if (backendSegn && backendSegn.length > 0) {
-        setSegnalazioni(prev => [...backendSegn, ...prev])
-      }
-    }).catch(() => {}) // silenzioso se il backend non ha ancora segnalazioni
+    fetchSegnalazioni()
+      .then(s => { if (s && s.length > 0) setSegnalazioni(s) })
+      .catch(() => {})
   }, [])
 
-  if (loadingData) return <p className="text-gray-400">Caricamento...</p>
+  if (loadingData) return <p className="text-gray-400 p-8">Caricamento...</p>
 
-  // ── Helper ──
-  const tasksSim = allTasks.filter(t => !['Completato', 'Sospeso'].includes(t.stato))
-  const ritardiTaskIds = new Set(ritardiList.map(r => r.task_id))
-
-  function getTaskInfo(taskId) {
-    return allTasks.find(t => t.id === taskId)
-  }
-
-  function getProgettoInfo(progettoId) {
-    return progetti.find(p => p.id === progettoId)
-  }
-
-  // ── Esplorazione: gestione ritardi ──
-  function addRitardo() {
-    if (!addTaskId || ritardiTaskIds.has(addTaskId)) return
-    setRitardiList(prev => [...prev, { task_id: addTaskId, giorni_ritardo: addGiorni }])
-    setAddTaskId('')
-    setAddGiorni(14)
-  }
-
-  function removeRitardo(taskId) {
-    setRitardiList(prev => prev.filter(r => r.task_id !== taskId))
-    setSimResult(null)
-  }
-
-  async function runSimulazione() {
-    if (ritardiList.length === 0) return
-    setSimLoading(true)
+  // ── STEP 1: Interpreta input naturale ──
+  async function handleInterpreta(testo, contesto_extra = '') {
+    setInterpretaLoading(true)
+    setInterpretazioneResult(null)
+    if (!contesto_extra) setTestoOriginale(testo)  // salva solo il primo input
     try {
-      const result = await simulaRitardoMultiplo(ritardiList)
-      setSimResult(result)
-    } catch (e) {
-      console.error('Errore simulazione:', e)
-    }
-    setSimLoading(false)
-  }
-
-  function resetSimulazione() {
-    setRitardiList([])
-    setSimResult(null)
-  }
-
-  // ── Esplorazione → Interventi: passa all'agente ──
-  function passaAllAgente() {
-    if (!simResult) return
-    // Costruisci una segnalazione sintetica dal risultato della simulazione
-    const taskNomi = simResult.task_ritardati?.map(t => t.task_nome).join(', ') || ''
-    const progettiCoinvolti = [...new Set(simResult.task_ritardati?.map(t => t.progetto) || [])].join(', ')
-    const impatti = simResult.impatti?.length || 0
-    const sovraccarichi = simResult.impatti?.filter(i => i.sovraccarico)?.length || 0
-
-    // Trova il dipendente_id dal primo task ritardato (lo cerchiamo in allTasks)
-    const primoTaskId = simResult.task_ritardati?.[0]?.task_id || ritardiList[0]?.task_id
-    const primoTask = allTasks.find(t => t.id === primoTaskId)
-    const dipId = primoTask?.dipendente_id || dipendenti[0]?.id || 'D001'
-    const dipNome = primoTask?.dipendente_nome || 'Da simulazione'
-
-    const segnSim = {
-      id: `SIM-${Date.now()}`,
-      tipo: 'simulazione_ritardo',
-      priorita: sovraccarichi > 0 ? 'alta' : impatti > 2 ? 'media' : 'bassa',
-      dipendente_id: dipId,
-      dipendente: dipNome,
-      dettaglio: `Simulazione ritardo su: ${taskNomi}. Progetti: ${progettiCoinvolti}. ${impatti} task impattati a cascata, ${sovraccarichi} sovraccarichi rilevati.`,
-      timestamp: 'Ora',
-      fromSimulation: true,
-    }
-
-    setSegnalazioni(prev => [segnSim, ...prev])
-    setActiveSection('interventi')
-    // Auto-analizza
-    handleAnalizza(segnSim)
-  }
-
-  // ── Interventi: analisi agente ──
-  async function handleAnalizza(segn) {
-    setSelectedSegn(segn)
-    setAnalisiLoading(true)
-    setAnalisiResult(null)
-
-    try {
-      const result = await richiediAnalisiGantt({
-        segnalazione_tipo: segn.tipo,
-        segnalazione_dettaglio: segn.dettaglio,
-        dipendente_id: segn.dipendente_id,
-        priorita: segn.priorita,
-      })
-      setAnalisiResult(result)
-    } catch (err) {
-      setAnalisiResult({ error: err.message })
-    } finally {
-      setAnalisiLoading(false)
-    }
-  }
-
-  async function handleAnalizzaManuale() {
-    if (!segnDip || !segnDettaglio) return
-    const dip = dipendenti.find(d => d.id === segnDip)
-    const nuovaSegn = {
-      id: `MAN-${Date.now()}`,
-      tipo: segnTipo,
-      priorita: segnPriorita,
-      dipendente_id: segnDip,
-      dipendente: dip?.nome || '',
-      dettaglio: segnDettaglio,
-      timestamp: 'Ora',
-    }
-    setSegnalazioni(prev => [nuovaSegn, ...prev])
-    setSegnDettaglio('')
-    await handleAnalizza(nuovaSegn)
-  }
-
-  // ── Budget alert helpers ──
-  function calcBudgetAlerts() {
-    if (!simResult?.gantt_dopo) return []
-    const alerts = []
-    const progettiIds = [...new Set(simResult.changed_ids?.map(tid => {
-      const task = simResult.gantt_dopo.find(t => t.id === tid)
-      return task ? progetti.find(p => p.nome === task.project)?.id : null
-    }).filter(Boolean) || [])]
-
-    for (const pid of progettiIds) {
-      const proj = progetti.find(p => p.id === pid)
-      if (!proj) continue
-      // Calcola ore totali stimate dei task di questo progetto nel GANTT dopo
-      const tasksDopo = simResult.gantt_dopo.filter(t => t.project === proj.nome)
-      const oreTotali = tasksDopo.reduce((sum, t) => sum + (t.estimated_hours || 0), 0)
-      if (oreTotali > proj.budget_ore) {
-        alerts.push({
-          tipo: 'budget_ore',
-          progetto: proj.nome,
-          ore_stimate: oreTotali,
-          budget: proj.budget_ore,
-          sforamento_pct: Math.round((oreTotali / proj.budget_ore - 1) * 100),
-        })
+      const result = await interpretaScenario(testo, contesto_extra)
+      setInterpretazioneResult(result)
+      if (result.modifiche && result.modifiche.length > 0 && !result.domande) {
+        setModificheConfermate(result.modifiche)
       }
+      setFase('interpretazione')
+    } catch (err) {
+      alert('Errore nella comunicazione con l\'agente: ' + err.message)
+    } finally {
+      setInterpretaLoading(false)
     }
-    return alerts
   }
 
-  function calcSaturazioneAlerts() {
-    if (!simResult?.impatti) return []
-    return simResult.impatti
-      .filter(i => i.sovraccarico)
-      .map(i => ({
-        dipendente: i.dipendente,
-        progetto: i.progetto,
-        carico: i.carico,
-        capacita: i.capacita,
-        pct: Math.round((i.carico / i.capacita) * 100),
-      }))
+  // ── STEP 1b: Risposta a domanda IA ──
+  function handleRispostaIA(risposta) {
+    // Reinvia il testo originale + la risposta come contesto aggiuntivo
+    handleInterpreta(testoOriginale, risposta)
   }
 
-  const budgetAlerts = calcBudgetAlerts()
-  const saturazioneAlerts = calcSaturazioneAlerts()
-  const proposte = analisiResult?.proposte
+  // ── STEP 2: Simula cascata ──
+  async function handleSimula() {
+    if (modificheConfermate.length === 0) return
+    setSimulaLoading(true)
+    try {
+      const result = await simulaScenario(modificheConfermate)
+      setSimulazioneResult(result)
+      setFase('simulazione')
+    } catch (err) {
+      alert('Errore nella simulazione: ' + err.message)
+    } finally {
+      setSimulaLoading(false)
+    }
+  }
+
+  // ── STEP 3: Conferma e applica ──
+  async function handleConferma() {
+    if (modificheConfermate.length === 0) return
+    setConfermaLoading(true)
+    try {
+      const result = await confermaScenario(modificheConfermate)
+      if (result.successo) {
+        setFase('confermato')
+        // Aggiorna storico
+        setStorico(prev => [...prev, {
+          timestamp: new Date().toLocaleString('it-IT'),
+          n_modifiche: result.n_applicati,
+          applicati: result.applicati,
+        }])
+        // Ricarica tutti i dati aggiornati
+        Promise.all([fetchTasks(), fetchDipendenti(), fetchSegnalazioni()])
+          .then(([t, d, s]) => {
+            setAllTasks(t)
+            setDipendenti(d)
+            if (s && s.length > 0) setSegnalazioni(s)
+          })
+      } else {
+        alert('Alcune modifiche non sono state applicate. Errori: ' + JSON.stringify(result.errori))
+      }
+    } catch (err) {
+      alert('Errore nell\'applicazione: ' + err.message)
+    } finally {
+      setConfermaLoading(false)
+    }
+  }
+
+  // ── Reset per nuovo scenario ──
+  function handleReset() {
+    setFase('input')
+    setInterpretazioneResult(null)
+    setModificheConfermate([])
+    setSimulazioneResult(null)
+    setTestoOriginale('')
+  }
 
   // ═════════════════════════════════════════════════════════════════
   //  RENDER
@@ -249,447 +613,77 @@ export default function AnalisiInterventi() {
 
   return (
     <div>
-      <h1 className="text-3xl font-bold mb-2">🔬 Analisi e Interventi</h1>
-      <p className="text-sm text-yellow-400 mb-6">🔒 Riservato al management — Esplora scenari, analizza impatti, decidi interventi.</p>
+      <h1 className="text-3xl font-bold mb-2">🔬 Tavolo di Lavoro</h1>
+      <p className="text-sm text-gray-400 mb-6">
+        Descrivi cosa sta cambiando → visualizza l'impatto su tutti i GANTT → conferma le modifiche.
+      </p>
 
-      {/* Tab di navigazione sezioni */}
-      <div className="flex gap-2 mb-6">
-        <button onClick={() => setActiveSection('esplorazione')}
-          className={`px-5 py-2.5 rounded-lg text-sm font-medium transition-colors ${
-            activeSection === 'esplorazione' ? 'bg-blue-600 text-white' : 'bg-gray-800 text-gray-400 hover:text-white'
-          }`}>
-          🔍 Esplorazione
-        </button>
-        <button onClick={() => setActiveSection('interventi')}
-          className={`px-5 py-2.5 rounded-lg text-sm font-medium transition-colors ${
-            activeSection === 'interventi' ? 'bg-blue-600 text-white' : 'bg-gray-800 text-gray-400 hover:text-white'
-          }`}>
-          🛠️ Interventi
-          {segnalazioni.length > 0 && (
-            <span className="ml-2 px-1.5 py-0.5 bg-red-600 text-white text-[10px] rounded-full">{segnalazioni.length}</span>
+      <div className="flex gap-6">
+        {/* ── Area principale ── */}
+        <div className="flex-1 space-y-4">
+
+          {/* Input sempre visibile (tranne dopo conferma) */}
+          {fase !== 'confermato' && (
+            <ScenarioInput
+              onSubmit={handleInterpreta}
+              loading={interpretaLoading}
+              progetti={progetti}
+              dipendenti={dipendenti}
+            />
           )}
-        </button>
-      </div>
 
-      {/* ═══════════════════════════════════════════════════════════ */}
-      {/*  SEZIONE ESPLORAZIONE                                      */}
-      {/* ═══════════════════════════════════════════════════════════ */}
+          {/* Interpretazione IA */}
+          {fase === 'interpretazione' && interpretazioneResult && (
+            <InterpretazionePanel
+              interpretazione={interpretazioneResult.interpretazione}
+              modifiche={interpretazioneResult.modifiche}
+              domande={interpretazioneResult.domande}
+              noteContesto={interpretazioneResult.note_contesto}
+              onConferma={handleSimula}
+              onAnnulla={handleReset}
+              onRisposta={handleRispostaIA}
+              loading={simulaLoading || interpretaLoading}
+            />
+          )}
 
-      {activeSection === 'esplorazione' && (
-        <div className="space-y-6">
-          <div className="bg-gray-900 rounded-xl border border-gray-800 p-6">
-            <h2 className="text-lg font-semibold mb-4">⏰ Simulazione Ritardi</h2>
-            <p className="text-sm text-gray-400 mb-4">
-              Seleziona uno o più task, imposta i giorni di ritardo per ciascuno, e visualizza l'impatto complessivo su progetti e risorse.
-            </p>
+          {/* Risultato simulazione */}
+          {(fase === 'simulazione' || fase === 'confermato') && (
+            <RisultatoSimulazione
+              risultato={simulazioneResult}
+              onConferma={handleConferma}
+              onReset={handleReset}
+              confermaLoading={confermaLoading}
+              confermato={fase === 'confermato'}
+            />
+          )}
 
-            {/* Form aggiunta ritardo */}
-            <div className="flex gap-3 items-end mb-4 flex-wrap">
-              <div className="flex-1 min-w-[300px]">
-                <label className="text-sm text-gray-400 block mb-1">Task</label>
-                <select value={addTaskId} onChange={e => setAddTaskId(e.target.value)}
-                  className="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-sm">
-                  <option value="">Seleziona un task...</option>
-                  {tasksSim.filter(t => !ritardiTaskIds.has(t.id)).map(t => (
-                    <option key={t.id} value={t.id}>
-                      {t.nome} — {t.progetto_nome} ({t.dipendente_nome})
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div className="w-28">
-                <label className="text-sm text-gray-400 block mb-1">Giorni</label>
-                <input type="number" min="1" value={addGiorni}
-                  onChange={e => setAddGiorni(parseInt(e.target.value) || 1)}
-                  className="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-sm" />
-              </div>
-              <button onClick={addRitardo} disabled={!addTaskId}
-                className="px-4 py-2 bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:text-gray-600 rounded-lg text-sm font-medium">
-                + Aggiungi
-              </button>
-            </div>
-
-            {/* Lista ritardi */}
-            {ritardiList.length > 0 && (
-              <div className="mb-4 space-y-2">
-                <p className="text-xs text-gray-400 uppercase tracking-wider mb-2">
-                  Ritardi da simulare ({ritardiList.length})
-                </p>
-                {ritardiList.map(r => {
-                  const info = getTaskInfo(r.task_id)
-                  return (
-                    <div key={r.task_id} className="flex items-center justify-between p-3 bg-gray-800/60 rounded-lg border border-gray-700">
-                      <div className="flex-1">
-                        <span className="text-sm font-medium">{info?.nome || r.task_id}</span>
-                        <span className="text-xs text-gray-400 ml-2">{info?.progetto_nome} · {info?.dipendente_nome}</span>
-                      </div>
-                      <span className="text-sm text-amber-300 font-semibold mx-4">+{r.giorni_ritardo}gg</span>
-                      <button onClick={() => removeRitardo(r.task_id)} className="text-gray-500 hover:text-red-400 text-sm px-2">✕</button>
-                    </div>
-                  )
-                })}
-                <div className="flex gap-3 pt-2">
-                  <button onClick={runSimulazione} disabled={simLoading}
-                    className="px-6 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-blue-800 rounded-lg text-sm font-medium">
-                    {simLoading ? '⏳ Simulazione...' : '▶️ Simula tutto'}
-                  </button>
-                  <button onClick={resetSimulazione} className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm">
-                    🗑️ Pulisci tutto
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {ritardiList.length === 0 && !simResult && (
-              <p className="text-gray-500 text-sm italic">
-                Aggiungi uno o più task con i rispettivi giorni di ritardo, poi clicca "Simula tutto".
-              </p>
-            )}
-          </div>
-
-          {/* ── Risultato simulazione ── */}
-          {simResult && (
-            <div className="space-y-4">
-
-              {/* Riepilogo ritardi applicati */}
-              <div className="p-4 bg-amber-900/20 border border-amber-800/40 rounded-xl">
-                <p className="text-amber-300 font-semibold mb-2">⚡ {simResult.task_ritardati?.length || 0} task ritardati</p>
-                {simResult.task_ritardati?.map((tr, i) => (
-                  <p key={i} className="text-sm text-amber-200/80">
-                    • <strong>{tr.task_nome}</strong>
-                    <span className="text-gray-400"> ({tr.progetto})</span>
-                    {' → '}nuova fine: {new Date(tr.nuova_fine).toLocaleDateString('it-IT')}
-                    <span className="text-amber-400"> (+{tr.giorni}gg)</span>
-                  </p>
+          {/* Storico sessione */}
+          {storico.length > 0 && fase === 'input' && (
+            <div className="bg-gray-900/50 rounded-xl border border-gray-800 p-4">
+              <h4 className="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-2">
+                📜 Scenari applicati in questa sessione
+              </h4>
+              <div className="space-y-1">
+                {storico.map((s, i) => (
+                  <div key={i} className="flex items-center justify-between text-xs text-gray-400">
+                    <span>{s.timestamp}</span>
+                    <span>{s.n_modifiche} modifiche applicate</span>
+                  </div>
                 ))}
               </div>
-
-              {/* Alert: budget e saturazione */}
-              {(budgetAlerts.length > 0 || saturazioneAlerts.length > 0) && (
-                <div className="grid grid-cols-2 gap-4">
-                  {budgetAlerts.length > 0 && (
-                    <div className="p-4 bg-red-900/20 border border-red-800/40 rounded-xl">
-                      <p className="text-red-300 font-semibold mb-2">💰 Sforamento budget</p>
-                      {budgetAlerts.map((a, i) => (
-                        <p key={i} className="text-sm text-red-200/80">
-                          <strong>{a.progetto}</strong>: {a.ore_stimate}h / {a.budget}h budget
-                          <span className="text-red-400"> (+{a.sforamento_pct}%)</span>
-                        </p>
-                      ))}
-                    </div>
-                  )}
-                  {saturazioneAlerts.length > 0 && (
-                    <div className="p-4 bg-orange-900/20 border border-orange-800/40 rounded-xl">
-                      <p className="text-orange-300 font-semibold mb-2">👥 Risorse in sovraccarico</p>
-                      {saturazioneAlerts.map((a, i) => (
-                        <p key={i} className="text-sm text-orange-200/80">
-                          <strong>{a.dipendente}</strong> ({a.progetto}): {a.carico.toFixed(0)}h / {a.capacita}h
-                          <span className="text-orange-400"> ({a.pct}%)</span>
-                        </p>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* Impatti a cascata */}
-              {simResult.impatti?.length > 0 && (
-                <div className="bg-gray-900 rounded-xl border border-gray-800 p-5">
-                  <p className="text-sm font-semibold mb-2">🔗 Impatti a cascata ({simResult.impatti.length} task coinvolti)</p>
-                  <div className="space-y-2 max-h-[200px] overflow-y-auto">
-                    {simResult.impatti.map((imp, i) => (
-                      <div key={i} className={`text-sm p-3 rounded-lg border ${
-                        imp.sovraccarico ? 'bg-red-900/30 border-red-800 text-red-300' : 'bg-yellow-900/20 border-yellow-800 text-yellow-200'
-                      }`}>
-                        {imp.sovraccarico ? '🔴' : '🟡'}{' '}
-                        <strong>{imp.task_nome}</strong>
-                        <span className="text-gray-400"> ({imp.progetto})</span>
-                        {' · '}{imp.dipendente}:{' '}
-                        {new Date(imp.nuovo_inizio).toLocaleDateString('it-IT')} → {new Date(imp.nuova_fine).toLocaleDateString('it-IT')}
-                        {imp.sovraccarico && <span className="text-red-400 ml-1">SOVRACCARICO ({imp.carico.toFixed(0)}h/{imp.capacita}h)</span>}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-              {simResult.impatti?.length === 0 && (
-                <p className="text-green-300 text-sm p-4 bg-green-900/20 border border-green-800/40 rounded-xl">✅ Nessun impatto a cascata.</p>
-              )}
-
-              {/* GANTT Prima vs Dopo */}
-              <div className="space-y-3">
-                <div>
-                  <div className="flex items-center gap-2 mb-2">
-                    <span className="text-xs font-semibold uppercase tracking-wider text-gray-400 bg-gray-800 px-2 py-1 rounded">📊 Prima</span>
-                  </div>
-                  <GanttChart tasks={simResult.gantt_prima} compact />
-                </div>
-                <div>
-                  <div className="flex items-center gap-2 mb-2">
-                    <span className="text-xs font-semibold uppercase tracking-wider text-amber-300 bg-amber-900/30 px-2 py-1 rounded">📊 Dopo</span>
-                    <span className="text-[10px] text-gray-500">Le barre evidenziate in ambra sono i task modificati</span>
-                  </div>
-                  <GanttChart tasks={simResult.gantt_dopo} changedIds={simResult.changed_ids} compact />
-                </div>
-              </div>
-
-              {/* Ponte verso Interventi */}
-              <div className="flex justify-end pt-2">
-                <button onClick={passaAllAgente}
-                  className="px-6 py-2.5 bg-purple-600 hover:bg-purple-500 rounded-lg text-sm font-medium transition-colors">
-                  🧠 Passa all'agente per proposte di intervento →
-                </button>
-              </div>
             </div>
           )}
         </div>
-      )}
 
-      {/* ═══════════════════════════════════════════════════════════ */}
-      {/*  SEZIONE INTERVENTI                                        */}
-      {/* ═══════════════════════════════════════════════════════════ */}
-
-      {activeSection === 'interventi' && (
-        <div className="grid grid-cols-5 gap-6">
-          {/* Colonna sinistra: segnalazioni */}
-          <div className="col-span-2">
-            <h2 className="text-lg font-semibold mb-3">📥 Segnalazioni</h2>
-
-            <div className="space-y-2 mb-6 max-h-[400px] overflow-y-auto">
-              {segnalazioni.map(s => (
-                <div key={s.id}
-                  onClick={() => handleAnalizza(s)}
-                  className={`p-4 rounded-xl border cursor-pointer transition-all ${
-                    selectedSegn?.id === s.id ? 'ring-2 ring-blue-500' : ''
-                  } ${PRIORITA_COLORS[s.priorita]} ${s.fromSimulation ? 'border-l-4 border-l-purple-500' : ''}`}>
-                  <div className="flex justify-between items-start mb-1">
-                    <span className="text-xs font-medium uppercase">
-                      {s.fromSimulation ? '🔬 Da simulazione' : s.tipo.replace('_', ' ')}
-                    </span>
-                    <span className="text-xs opacity-70">{s.timestamp}</span>
-                  </div>
-                  <p className="font-medium text-sm">{s.dipendente}</p>
-                  <p className="text-xs mt-1 opacity-80">{s.dettaglio}</p>
-                </div>
-              ))}
-            </div>
-
-            {/* Segnalazione manuale */}
-            <details className="mb-4">
-              <summary className="cursor-pointer text-sm text-gray-400 hover:text-white">➕ Inserisci segnalazione manuale</summary>
-              <div className="mt-3 bg-gray-900 rounded-xl border border-gray-800 p-4 space-y-3">
-                <div className="grid grid-cols-2 gap-3">
-                  <select value={segnTipo} onChange={e => setSegnTipo(e.target.value)}
-                    className="bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-sm">
-                    <option value="sovraccarico">Sovraccarico</option>
-                    <option value="richiesta_supporto">Richiesta supporto</option>
-                    <option value="blocco_task">Task bloccato</option>
-                    <option value="scadenza_anticipata">Scadenza anticipata</option>
-                    <option value="cambio_priorita">Cambio priorità</option>
-                    <option value="espansione_progetto">Espansione progetto</option>
-                  </select>
-                  <select value={segnPriorita} onChange={e => setSegnPriorita(e.target.value)}
-                    className="bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-sm">
-                    <option value="alta">Priorità alta</option>
-                    <option value="media">Priorità media</option>
-                    <option value="bassa">Priorità bassa</option>
-                  </select>
-                </div>
-                <select value={segnDip} onChange={e => setSegnDip(e.target.value)}
-                  className="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-sm">
-                  <option value="">Seleziona dipendente coinvolto...</option>
-                  {dipendenti.map(d => <option key={d.id} value={d.id}>{d.nome} ({d.saturazione_pct}%)</option>)}
-                </select>
-                <textarea value={segnDettaglio} onChange={e => setSegnDettaglio(e.target.value)}
-                  placeholder="Descrivi la segnalazione o l'evento (es: 'Sparkasse ha anticipato la scadenza al 15 aprile')..."
-                  className="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-sm h-20 placeholder-gray-500" />
-                <button onClick={handleAnalizzaManuale} disabled={!segnDip || !segnDettaglio}
-                  className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-600 rounded-lg text-sm font-medium">
-                  🧠 Analizza
-                </button>
-              </div>
-            </details>
-          </div>
-
-          {/* Colonna destra: analisi agente */}
-          <div className="col-span-3">
-            {!selectedSegn && !analisiLoading && (
-              <div className="bg-gray-900 rounded-xl border border-gray-800 p-12 text-center text-gray-400">
-                <p className="text-lg mb-2">Seleziona una segnalazione</p>
-                <p className="text-sm">L'agente analizzerà la situazione e proporrà opzioni di redistribuzione.</p>
-              </div>
-            )}
-
-            {analisiLoading && (
-              <div className="bg-gray-900 rounded-xl border border-gray-800 p-12 text-center">
-                <p className="text-lg text-blue-400 animate-pulse">🧠 L'agente sta analizzando...</p>
-                <p className="text-sm text-gray-400 mt-2">Valuto carichi, disponibilità e dipendenze.</p>
-              </div>
-            )}
-
-            {analisiResult && !analisiLoading && (
-              <div className="space-y-4">
-                {analisiResult.error && (
-                  <div className="bg-red-900/20 border border-red-800 rounded-xl p-4 text-red-300">⚠️ {analisiResult.error}</div>
-                )}
-
-                {proposte?.parse_error && (
-                  <div className="bg-gray-900 rounded-xl border border-gray-800 p-4">
-                    <p className="text-yellow-400 text-sm mb-2">⚠️ Risposta non strutturata dall'agente:</p>
-                    <pre className="text-xs text-gray-300 whitespace-pre-wrap">{proposte.raw_response}</pre>
-                  </div>
-                )}
-
-                {proposte && !proposte.parse_error && !analisiResult.error && (
-                  <>
-                    {/* Analisi */}
-                    <div className="bg-gray-900 rounded-xl border border-gray-800 p-5">
-                      <h3 className="font-semibold mb-2">📊 Analisi della situazione</h3>
-                      <p className="text-sm text-gray-300">{proposte.analisi}</p>
-                      {proposte.urgenza && (
-                        <span className={`inline-block mt-2 px-3 py-1 rounded-full text-xs font-medium ${
-                          proposte.urgenza === 'alta' ? 'bg-red-600' : proposte.urgenza === 'media' ? 'bg-yellow-600' : 'bg-gray-600'
-                        } text-white`}>
-                          Urgenza: {proposte.urgenza}
-                        </span>
-                      )}
-                    </div>
-
-                    {/* Proposte A/B/C */}
-                    {proposte.proposte?.map((p, i) => (
-                      <div key={i} className="bg-gray-900 rounded-xl border border-gray-800 p-5">
-                        <div className="flex justify-between items-start mb-3">
-                          <h3 className="font-semibold">Opzione {p.id}: {p.titolo}</h3>
-                          {p.impatto?.fattibilita && (
-                            <span className={`px-3 py-1 rounded-full text-xs font-medium ${FATTIBILITA_BADGE[p.impatto.fattibilita] || 'bg-gray-600 text-white'}`}>
-                              Fattibilità: {p.impatto.fattibilita}
-                            </span>
-                          )}
-                        </div>
-                        <div className="space-y-2 mb-3">
-                          {p.azioni?.map((a, j) => (
-                            <div key={j} className="bg-gray-800 rounded-lg p-3 text-sm">
-                              <div className="flex items-center gap-2 mb-1">
-                                <span className="text-xs font-medium uppercase text-blue-400">{a.tipo?.replace('_', ' ')}</span>
-                                <span className="font-medium">{a.task_nome}</span>
-                              </div>
-                              {a.da_dipendente && <p className="text-gray-400">Da: {a.da_dipendente} → A: {a.a_dipendente}</p>}
-                              {a.nuova_data_inizio && <p className="text-gray-400">Nuove date: {a.nuova_data_inizio} → {a.nuova_data_fine}</p>}
-                              {a.motivazione && <p className="text-gray-500 text-xs mt-1">{a.motivazione}</p>}
-                            </div>
-                          ))}
-                        </div>
-                        {p.impatto && (
-                          <div className="grid grid-cols-2 gap-3 text-xs">
-                            <div>
-                              <p className="text-green-400 font-medium mb-1">✅ Benefici</p>
-                              {p.impatto.benefici?.map((b, k) => <p key={k} className="text-gray-300">• {b}</p>)}
-                            </div>
-                            <div>
-                              <p className="text-red-400 font-medium mb-1">⚠️ Rischi</p>
-                              {p.impatto.rischi?.map((r, k) => <p key={k} className="text-gray-300">• {r}</p>)}
-                            </div>
-                          </div>
-                        )}
-                        <button className="mt-4 px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded-lg text-sm font-medium transition-colors"
-                          onClick={async () => {
-                            // Mostra anteprima impatto prima di applicare
-                            setApplicandoOpzione(p)
-                            try {
-                              const modifiche = (p.azioni || []).map(a => {
-                                if (a.tipo === 'riassegna') {
-                                  const dipTarget = dipendenti.find(d => d.nome === a.a_dipendente)
-                                  return { task_id: a.task_id, campo: 'dipendente_id', nuovo_valore: dipTarget?.id || '' }
-                                } else if (a.tipo === 'sposta_date') {
-                                  return { task_id: a.task_id, campo: 'data_fine', nuovo_valore: a.nuova_data_fine || '' }
-                                }
-                                return null
-                              }).filter(Boolean)
-                              const res = await anteprimaImpatto({ modifiche, nuovi_task: [], progetto_id: '' })
-                              setAnteprimaResult(res.impatto)
-                            } catch (err) {
-                              alert('Errore nel calcolo impatto: ' + err.message)
-                              setApplicandoOpzione(null)
-                            }
-                          }}>
-                          👁️ Anteprima impatto — Opzione {p.id}
-                        </button>
-
-                        {/* Pannello anteprima impatto per questa opzione */}
-                        {applicandoOpzione?.id === p.id && anteprimaResult && (
-                          <div className="mt-3 bg-blue-900/20 border border-blue-700 rounded-xl p-4">
-                            <h4 className="text-sm font-semibold text-blue-300 mb-2">Impatto dell'Opzione {p.id}</h4>
-
-                            {anteprimaResult.alert?.length > 0 && (
-                              <div className="mb-3 space-y-1">
-                                {anteprimaResult.alert.map((a, k) => (
-                                  <div key={k} className="p-2 bg-red-900/30 border border-red-800 rounded-lg text-xs text-red-300">⚠️ {a}</div>
-                                ))}
-                              </div>
-                            )}
-
-                            {anteprimaResult.dipendenti_impattati?.length > 0 && (
-                              <div className="space-y-1 mb-3">
-                                {anteprimaResult.dipendenti_impattati.map(d => (
-                                  <div key={d.id} className="flex items-center justify-between text-sm">
-                                    <span className="text-gray-300">{d.nome}</span>
-                                    <span className="flex items-center gap-2">
-                                      <span className="font-mono text-gray-400">{d.saturazione_prima}%</span>
-                                      <span className="text-gray-600">→</span>
-                                      <span className={`font-mono font-bold ${d.saturazione_dopo > 100 ? 'text-red-400' : 'text-green-400'}`}>{d.saturazione_dopo}%</span>
-                                    </span>
-                                  </div>
-                                ))}
-                              </div>
-                            )}
-
-                            <div className="flex gap-2">
-                              <button className="flex-1 px-3 py-2 bg-green-600 hover:bg-green-500 rounded-lg text-sm font-medium"
-                                disabled={applicato}
-                                onClick={async () => {
-                                  const modifiche = (p.azioni || []).map(a => {
-                                    if (a.tipo === 'riassegna') {
-                                      const dipTarget = dipendenti.find(d => d.nome === a.a_dipendente)
-                                      return { task_id: a.task_id, campo: 'dipendente_id', nuovo_valore: dipTarget?.id || '' }
-                                    } else if (a.tipo === 'sposta_date') {
-                                      return { task_id: a.task_id, campo: 'data_fine', nuovo_valore: a.nuova_data_fine || '' }
-                                    }
-                                    return null
-                                  }).filter(Boolean)
-                                  try {
-                                    await applicaModifiche({ modifiche, nuovi_task: [], progetto_id: '', cambia_stato_progetto: '' })
-                                    setApplicato(true)
-                                    // Ricarica i task aggiornati
-                                    fetchTasks().then(setAllTasks)
-                                  } catch (err) {
-                                    alert('Errore nell\'applicazione: ' + err.message)
-                                  }
-                                }}>
-                                {applicato ? '✅ Applicato!' : '✅ Conferma e applica'}
-                              </button>
-                              <button className="px-3 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm"
-                                onClick={() => { setApplicandoOpzione(null); setAnteprimaResult(null) }}>
-                                Annulla
-                              </button>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    ))}
-
-                    {proposte.conflitti && (
-                      <div className="bg-red-900/20 border border-red-800 rounded-xl p-4">
-                        <p className="text-red-300 font-semibold">⚠️ Conflitti irrisolvibili</p>
-                        <p className="text-sm text-red-200 mt-1">{proposte.conflitti}</p>
-                      </div>
-                    )}
-                  </>
-                )}
-              </div>
-            )}
-          </div>
+        {/* ── Sidebar contesto ── */}
+        <div className="w-72 flex-shrink-0">
+          <SidebarContesto
+            dipendenti={dipendenti}
+            progetti={progetti}
+            segnalazioni={segnalazioni}
+          />
         </div>
-      )}
+      </div>
     </div>
   )
 }
