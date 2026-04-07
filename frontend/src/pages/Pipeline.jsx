@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react'
 import { fetchProgetti, fetchTasks, fetchDipendenti, anteprimaImpatto, applicaModifiche, salvaBozza, caricaBozza, verificaPianificazione, suggerisciTask } from '../api'
-import { GanttChart } from './Gantt'
+import { GanttChart, StatusLegend } from './Gantt'
 
 // ── Costanti ────────────────────────────────────────────────────────
 const OGGI = new Date('2026-03-09')
@@ -737,7 +737,12 @@ function PianificazioneProgetto({ progetto, dipendenti, isBando = false }) {
         )}
 
         {(showGantt || ganttData.length > 0) && (
-          <GanttChart tasks={ganttData} compact />
+          <>
+            <div className="flex justify-end mb-2">
+              <StatusLegend />
+            </div>
+            <GanttChart tasks={ganttData} compact />
+          </>
         )}
 
         {ganttData.length === 0 && (

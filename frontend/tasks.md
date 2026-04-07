@@ -63,3 +63,5 @@ Se il GANTT precedente ha ancora 7 task, cancella tutto e ricrea con questi 8. P
 
 
 Ci serve un sistema interno per gestire le presenze dei dipendenti, le richieste di ferie e permessi, e le note spese. Deve avere un portale dove ogni dipendente può inserire le proprie richieste e vedere lo storico, e una dashboard per l'ufficio HR dove approvare/rifiutare le richieste e avere una visione d'insieme. Vorremmo anche integrare il calcolo delle buste paga con il sistema payroll esistente. Il progetto è interno, non ha un cliente esterno.
+
+Lunedì e martedì ho lavorato tutto il giorno sulla piattaforma GRC, mercoledì mattina call con Reale Mutua, mercoledì pomeriggio e giovedì ho fatto backend per Duferco, venerdì ho fixato un bug sulla piattaforma BPM di Boggi

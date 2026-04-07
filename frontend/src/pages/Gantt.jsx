@@ -9,7 +9,7 @@ const STATUS_COLORS = {
   'Sospeso':    { bar: '#d97706', bg: 'bg-amber-900/30', text: 'text-amber-300'  },
 }
 
-const OGGI = new Date('2026-03-09')
+const OGGI = new Date()
 const LABEL_W = 300
 const WEEK_PX_DEFAULT = 48
 const WEEK_PX_MAX = 80
@@ -242,7 +242,7 @@ export function GanttChart({ tasks, title, changedIds, compact, onTaskClick }) {
 }
 
 // ── Pannello dettaglio task (appare al click) ───────────────────────
-function TaskDetailPanel({ task, allTasks, progetti, dipendenti, onClose }) {
+function TaskDetailPanel({ task, allTasks, progetti, dipendenti, onClose, onElimina }) {
   const [showCarico, setShowCarico] = useState(false)
 
   if (!task) return null
@@ -397,12 +397,24 @@ function TaskDetailPanel({ task, allTasks, progetti, dipendenti, onClose }) {
           </div>
         )}
       </div>
+
+      {/* Bottone elimina */}
+      <div className="mt-4 pt-3 border-t border-gray-800 flex justify-end">
+        <button onClick={() => {
+          if (confirm(`Eliminare il task "${task.name}"? L'operazione è reversibile dal database.`)) {
+            onElimina(task.id)
+          }
+        }}
+          className="px-3 py-1.5 text-xs bg-red-900/30 border border-red-800 text-red-400 hover:bg-red-900/50 hover:text-red-300 rounded-lg transition-colors">
+          🗑 Elimina task
+        </button>
+      </div>
     </div>
   )
 }
 
 // ── Legenda ─────────────────────────────────────────────────────────
-function StatusLegend() {
+export function StatusLegend() {
   return (
     <div className="flex gap-4 text-xs">
       {Object.entries(STATUS_COLORS).map(([st, c]) => (
@@ -517,11 +529,23 @@ export default function GanttPage() {
           progetti={progetti}
           dipendenti={dipendenti}
           onClose={() => setSelectedTask(null)}
+          onElimina={async (taskId) => {
+            try {
+              const res = await fetch(`/api/tasks/${taskId}/elimina`, { method: 'PATCH' })
+              if (!res.ok) throw new Error('Errore')
+              setSelectedTask(null)
+              // Ricarica GANTT
+              const newData = await fetchGantt(filtroProgetto || null)
+              setGanttData(filtroProfilo ? newData.filter(t => t.profile === filtroProfilo) : newData)
+            } catch (err) {
+              alert('Errore nell\'eliminazione: ' + err.message)
+            }
+          }}
         />
       )}
 
       {/* Hint se nessun task selezionato */}
-      {!selectedTask && ganttData && ganttData.length > 0 && (
+      {!selectedTask && ganttData.length > 0 && (
         <p className="text-xs text-gray-600 mt-3 text-center">Clicca su un task nel GANTT per vedere i dettagli</p>
       )}
     </div>

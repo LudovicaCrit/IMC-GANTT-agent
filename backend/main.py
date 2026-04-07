@@ -64,6 +64,17 @@ def _next_segn_id():
 # ══════════════════════════════════════════════════════════════════════
 # MODELLI REQUEST/RESPONSE
 # ══════════════════════════════════════════════════════════════════════
+ 
+class AttivitaInternaRequest(BaseModel):
+    dipendente_id: str
+    nome: str
+    categoria: str = "Formazione"
+    ore_settimanali: int = 4
+    ore_stimate: int = 0
+    data_inizio: str
+    data_fine: str
+    note: str = ""
+
 
 class ChatRequest(BaseModel):
     dipendente_id: str
@@ -200,6 +211,7 @@ def lista_progetti():
 @app.get("/api/tasks")
 def lista_tasks(progetto_id: Optional[str] = None, profilo: Optional[str] = None):
     tasks = _TASKS().copy()
+    tasks = tasks[tasks["stato"] != "Eliminato"]
     if progetto_id:
         tasks = tasks[tasks["progetto_id"] == progetto_id]
     if profilo:
@@ -231,6 +243,7 @@ def lista_tasks(progetto_id: Optional[str] = None, profilo: Optional[str] = None
 def dati_gantt(progetto_id: Optional[str] = None):
     """Restituisce i dati formattati per un componente GANTT."""
     tasks = _TASKS().copy()
+    tasks = tasks[tasks["stato"] != "Eliminato"]
     if progetto_id:
         tasks = tasks[tasks["progetto_id"] == progetto_id]
 
@@ -1676,6 +1689,71 @@ def scenario_interpreta(req: InterpretaRequest):
  
     except Exception as e:
         raise HTTPException(500, f"Errore agente: {str(e)}")
+
+# ══════════════════════════════════════════════════════════════════
+# ENDPOINT: ATTIVITÀ INTERNE (P010)
+# ══════════════════════════════════════════════════════════════════
+
+@app.post("/api/attivita-interne")
+def crea_attivita_interna(req: AttivitaInternaRequest):
+    """Crea un task su P010 (Attività Interne) per un dipendente."""
+    try:
+        dip = get_dipendente(req.dipendente_id)
+    except (IndexError, KeyError):
+        raise HTTPException(404, "Dipendente non trovato")
+ 
+    p010 = _PROGETTI()[_PROGETTI()["id"] == "P010"]
+    if p010.empty:
+        raise HTTPException(400, "Progetto P010 non trovato")
+ 
+    from datetime import datetime as dt
+    import time
+    time.sleep(0.3)
+ 
+    new_id = aggiungi_task(
+        progetto_id="P010",
+        nome=req.nome,
+        fase=req.categoria,
+        ore_stimate=req.ore_stimate if req.ore_stimate > 0 else req.ore_settimanali * 20,
+        data_inizio=dt.fromisoformat(req.data_inizio),
+        data_fine=dt.fromisoformat(req.data_fine),
+        stato="In corso",
+        profilo_richiesto=dip.get("profilo", ""),
+        dipendente_id=req.dipendente_id,
+    )
+ 
+    return {"ok": True, "task_id": new_id, "messaggio": f"Attività '{req.nome}' creata per {dip['nome']}"}
+ 
+ 
+@app.delete("/api/attivita-interne/{task_id}")
+def elimina_attivita_interna(task_id: str):
+    """Elimina (soft) un task di attività interna (solo P010)."""
+    tasks = _TASKS()
+    task = tasks[tasks["id"] == task_id]
+    if task.empty:
+        raise HTTPException(404, "Task non trovato")
+    if task.iloc[0]["progetto_id"] != "P010":
+        raise HTTPException(400, "Solo task di Attività Interne possono essere eliminati da qui")
+
+    ok = modifica_task(task_id, stato="Eliminato")
+    if ok:
+        return {"ok": True, "messaggio": f"Task {task_id} eliminato"}
+    raise HTTPException(500, "Errore nell'eliminazione")
+
+
+@app.patch("/api/tasks/{task_id}/elimina")
+def elimina_task_generico(task_id: str):
+    """Elimina (soft) qualsiasi task cambiando lo stato a 'Eliminato'."""
+    tasks = _TASKS()
+    task = tasks[tasks["id"] == task_id]
+    if task.empty:
+        raise HTTPException(404, "Task non trovato")
+
+    task_nome = task.iloc[0]["nome"]
+    ok = modifica_task(task_id, stato="Eliminato")
+    if ok:
+        return {"ok": True, "messaggio": f"Task '{task_nome}' eliminato"}
+    raise HTTPException(500, "Errore nell'eliminazione")
 
 
 # ══════════════════════════════════════════════════════════════════════

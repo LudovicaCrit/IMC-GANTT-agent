@@ -552,7 +552,7 @@ export default function Consuntivazione() {
                   {/* Chat */}
                   <div ref={chatContainerRef} className="flex-1 overflow-y-auto mb-3 space-y-1 min-h-[250px]">
                     <ChatMessage role="assistant"
-                      content="Compila le ore qui a fianco, oppure raccontami cosa hai fatto questa settimana e ci penso io. Se hai bisogno di segnalare qualcosa — un blocco, una richiesta di supporto, o qualsiasi altra cosa — scrivimi qui." />
+                      content={dipDetail ? `Ciao ${dipDetail.nome.split(' ')[0]}! Questa settimana hai ${dipDetail.tasks.length} task attivi: ${dipDetail.tasks.map(t => t.nome).join(', ')}. Raccontami cosa hai fatto e ci penso io a compilare le ore, oppure compila il form qui a fianco. Se hai bisogno di segnalare un blocco o una richiesta di supporto, scrivimi qui.` : "Seleziona il tuo nome dal menu per iniziare."} />
                     {chatHistory.map((msg, i) => (
                       msg.role === 'system' ? (
                         <div key={i} className="text-center py-2">

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react'
 import { fetchDipendenti, fetchProgetti, fetchTasks, fetchSegnalazioni, interpretaScenario, simulaScenario, confermaScenario } from '../api'
-import { GanttChart } from './Gantt'
+import { GanttChart, StatusLegend } from './Gantt'
 
 // ── Costanti ────────────────────────────────────────────────────────
 const GRAVITA_STYLE = {
@@ -274,6 +274,10 @@ function RisultatoSimulazione({ risultato, onConferma, onReset, confermaLoading,
         {/* GANTT Prima / Dopo */}
         {progettoVisualizzato && gantt_prima[progettoVisualizzato] && (
           <div className="space-y-3">
+            {/* Legenda stati */}
+            <div className="flex justify-end">
+              <StatusLegend />
+            </div>
             <div>
               <div className="flex items-center gap-2 mb-2">
                 <span className="text-xs font-semibold uppercase tracking-wider text-gray-400 bg-gray-800 px-2 py-1 rounded">Prima</span>

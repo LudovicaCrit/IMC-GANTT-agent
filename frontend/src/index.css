@@ -1,1 +1,184 @@
 @import "tailwindcss";
+
+/* ═══════════════════════════════════════════════════════════════════
+   IMC-Group GANTT Agent — Design System
+   Font: DM Sans (corpo) + JetBrains Mono (dati numerici)
+   Palette: Dark slate con accent teal-cyan
+   ═══════════════════════════════════════════════════════════════════ */
+
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+/* ── Theme tokens ─────────────────────────────────────────────────── */
+@theme {
+  --font-sans: 'DM Sans', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+
+  /* Superficie — grigi caldi con sottotono blu */
+  --color-surface-950: #0b0e14;
+  --color-surface-900: #0f1219;
+  --color-surface-850: #141820;
+  --color-surface-800: #1a1f2b;
+  --color-surface-700: #252b3a;
+  --color-surface-600: #323a4e;
+
+  /* Accent — blu IMC-Group dal logo */
+  --color-accent-600: #1e4d8c;
+  --color-accent-500: #2b5ea7;
+  --color-accent-400: #3b82f6;
+  --color-accent-300: #60a5fa;
+
+  /* Bordi */
+  --color-border-subtle: rgba(148, 163, 184, 0.08);
+  --color-border-default: rgba(148, 163, 184, 0.12);
+  --color-border-strong: rgba(148, 163, 184, 0.2);
+}
+
+/* ── Base ──────────────────────────────────────────────────────────── */
+body {
+  font-family: 'DM Sans', system-ui, sans-serif;
+  background-color: var(--color-surface-950);
+  color: #e2e8f0;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ── Scrollbar raffinata ──────────────────────────────────────────── */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.15);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.3);
+}
+
+/* ── Selezione testo ──────────────────────────────────────────────── */
+::selection {
+  background-color: rgba(43, 94, 167, 0.3);
+  color: white;
+}
+
+/* ── Focus ring accessibile ───────────────────────────────────────── */
+*:focus-visible {
+  outline: 2px solid var(--color-accent-400);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* ── Transizioni globali ──────────────────────────────────────────── */
+button, a, input, select, textarea {
+  transition: all 0.15s ease;
+}
+
+/* ── Card styling ─────────────────────────────────────────────────── */
+.card {
+  background: var(--color-surface-900);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 12px;
+  transition: border-color 0.2s ease;
+}
+.card:hover {
+  border-color: var(--color-border-default);
+}
+
+/* ── Animazioni ───────────────────────────────────────────────────── */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes slideIn {
+  from { opacity: 0; transform: translateX(-12px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes pulse-soft {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.3s ease-out;
+}
+
+.animate-slide-in {
+  animation: slideIn 0.25s ease-out;
+}
+
+.animate-pulse-soft {
+  animation: pulse-soft 2s ease-in-out infinite;
+}
+
+/* ── Badge e pill ─────────────────────────────────────────────────── */
+.badge-accent {
+  background: rgba(43, 94, 167, 0.15);
+  color: var(--color-accent-300);
+  border: 1px solid rgba(43, 94, 167, 0.2);
+}
+
+/* ── Input styling ────────────────────────────────────────────────── */
+input, select, textarea {
+  background-color: var(--color-surface-800) !important;
+  border-color: var(--color-border-default) !important;
+  font-family: 'DM Sans', system-ui, sans-serif;
+}
+input:focus, select:focus, textarea:focus {
+  border-color: var(--color-accent-400) !important;
+  box-shadow: 0 0 0 3px rgba(43, 94, 167, 0.1);
+}
+
+/* ── Numeri e dati — font mono ────────────────────────────────────── */
+.font-data {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Tooltip custom ───────────────────────────────────────────────── */
+[title] {
+  position: relative;
+}
+
+/* ── Sidebar active state ─────────────────────────────────────────── */
+.nav-active {
+  background: linear-gradient(135deg, rgba(43, 94, 167, 0.15), rgba(43, 94, 167, 0.05));
+  border-left: 3px solid var(--color-accent-400);
+  color: white;
+}
+
+/* ── GANTT bar hover effect ───────────────────────────────────────── */
+.gantt-bar {
+  transition: filter 0.15s ease, transform 0.15s ease;
+}
+.gantt-bar:hover {
+  filter: brightness(1.15);
+  transform: scaleY(1.1);
+}
+
+/* ── Conseguenze gravità ──────────────────────────────────────────── */
+.conseguenza-alta {
+  border-left: 3px solid #ef4444;
+}
+.conseguenza-media {
+  border-left: 3px solid #f59e0b;
+}
+.conseguenza-bassa {
+  border-left: 3px solid #6b7280;
+}
+
+/* ── Progress bar smooth ──────────────────────────────────────────── */
+.progress-bar {
+  transition: width 0.5s ease-out;
+}
+
+/* ── Glassmorphism per pannelli sovrapposti ────────────────────────── */
+.glass {
+  background: rgba(15, 18, 25, 0.85);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}

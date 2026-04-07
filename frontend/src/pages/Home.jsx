@@ -17,16 +17,17 @@ export default function Home() {
 
   if (loading) return <p className="text-gray-400">Caricamento...</p>
 
-  const attivi = progetti.filter(p => p.stato === 'In esecuzione')
+  const attivi = progetti.filter(p => p.stato === 'In esecuzione' && p.id !== 'P010')
   const inBando = progetti.filter(p => p.stato === 'In bando')
   const daPianificare = progetti.filter(p => p.stato === 'Vinto - Da pianificare')
   const sospesi = progetti.filter(p => p.stato === 'Sospeso')
   const sovraccarichi = dipendenti.filter(d => d.saturazione_pct > 100)
+  const tasksProgetto = tasks.filter(t => t.progetto_id !== 'P010')
   const mediaCompilazione = attivi.length > 0
     ? Math.round(attivi.reduce((s, p) => s + p.tasso_compilazione, 0) / attivi.length) : 0
 
-  const oggi = new Date('2026-03-09')
-  const taskInRitardo = tasks.filter(t => t.stato === 'In corso' && new Date(t.data_fine) < oggi)
+  const oggi = new Date()
+  const taskInRitardo = tasksProgetto.filter(t => t.stato === 'In corso' && new Date(t.data_fine) < oggi)
 
   return (
     <div>
@@ -49,7 +50,7 @@ export default function Home() {
         </div>
         <div className="bg-gray-800 rounded-xl p-5 border border-gray-700">
           <p className="text-sm text-gray-400">Task totali</p>
-          <p className="text-3xl font-bold mt-1">{tasks.length}</p>
+          <p className="text-3xl font-bold mt-1">{tasksProgetto.length}</p>
           <p className="text-xs text-gray-500 mt-1">{taskInRitardo.length > 0 ? `${taskInRitardo.length} in ritardo` : 'Nessuno in ritardo'}</p>
         </div>
         <div className="bg-gray-800 rounded-xl p-5 border border-gray-700 cursor-pointer hover:border-blue-600 transition-colors"
@@ -97,7 +98,7 @@ export default function Home() {
         <h2 className="text-xl font-semibold">🚨 Alert</h2>
         {(sovraccarichi.length > 0 || taskInRitardo.length > 0) && (
           <button onClick={() => navigate('/analisi')} className="text-sm text-blue-400 hover:text-blue-300">
-            Vai ad Analisi e Interventi →
+            Vai al Tavolo di Lavoro →
           </button>
         )}
       </div>
@@ -109,7 +110,7 @@ export default function Home() {
             <p className="text-sm text-red-200 mt-1">
               {sovraccarichi.map(d => `${d.nome} (${d.saturazione_pct}%, ${d.progetti_attivi.length} progetti)`).join(' · ')}
             </p>
-            <p className="text-xs text-red-400 mt-2">Clicca per analizzare e intervenire</p>
+            <p className="text-xs text-red-400 mt-2">Clicca per aprire il Tavolo di Lavoro</p>
           </div>
         )}
 
