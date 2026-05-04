@@ -1026,9 +1026,15 @@ def agent_status(_: Utente = Depends(get_current_user)):
 
 
 @app.post("/api/agent/chat")
-def agent_chat(req: ChatRequest):
+def agent_chat(
+    req: ChatRequest,
+    current_user: Utente = Depends(get_current_user),
+):
     import json as json_mod
 
+    # User può chattare solo per sé stesso (anti-impersonation)
+    if current_user.ruolo_app != "manager":
+        req.dipendente_id = current_user.dipendente_id
     try:
         dip = get_dipendente(req.dipendente_id)
     except (IndexError, KeyError):
@@ -1166,8 +1172,10 @@ def lista_segnalazioni(_: Utente = Depends(require_manager)):
 # ══════════════════════════════════════════════════════════════
  
 @app.get("/api/consuntivi/settimana")
-def consuntivi_settimana_corrente():
-    """Restituisce i consuntivi della settimana corrente per tutti i dipendenti."""
+def consuntivi_settimana_corrente(_: Utente = Depends(require_manager)):
+    """Restituisce i consuntivi della settimana corrente per tutti i dipendenti.
+    Vista MANAGER-ONLY (riepilogo aziendale). 
+    Per la vista utente personale vedi /api/consuntivi/me."""
     from datetime import timedelta, datetime as dt_now
     lun = dt_now.now() - timedelta(days=dt_now.now().weekday())
     lun_date = lun.date() if hasattr(lun, 'date') else lun
@@ -1239,12 +1247,89 @@ def consuntivi_settimana_corrente():
     return sorted(risultato, key=lambda x: (-x["compilato"], x["nome"]))
 
 
+@app.get("/api/consuntivi/me")
+def consuntivi_settimana_me(current_user: Utente = Depends(get_current_user)):
+    """Restituisce il consuntivo della settimana corrente del SOLO chiamante.
+    Vista PERSONALE per il dipendente loggato (anche manager se vuole vedere se stesso)."""
+    from datetime import timedelta, datetime as dt_now
+    
+    if not current_user.dipendente_id:
+        raise HTTPException(400, "Utente non collegato a un dipendente")
+    
+    lun = dt_now.now() - timedelta(days=dt_now.now().weekday())
+    lun_date = lun.date() if hasattr(lun, 'date') else lun
+    ven_date = lun_date + timedelta(days=6)
+    
+    consuntivi = _CONSUNTIVI()
+    if consuntivi.empty:
+        return _consuntivo_vuoto_per_user(current_user.dipendente_id)
+    
+    # Filtra per dipendente_id del chiamante + settimana corrente
+    cons_user = consuntivi[
+        (consuntivi["dipendente_id"] == current_user.dipendente_id) &
+        (consuntivi["settimana"].apply(
+            lambda x: lun_date <= (x.date() if hasattr(x, 'date') else x) <= ven_date
+        ))
+    ]
+    
+    try:
+        dip = get_dipendente(current_user.dipendente_id)
+    except (IndexError, KeyError):
+        raise HTTPException(404, "Dipendente non trovato")
+    
+    ore_per_task = []
+    totale = 0
+    for _, c in cons_user.iterrows():
+        if c["ore_dichiarate"] > 0:
+            task_row = _TASKS()[_TASKS()["id"] == c["task_id"]]
+            if not task_row.empty:
+                t = task_row.iloc[0]
+                proj = _PROGETTI()[_PROGETTI()["id"] == t["progetto_id"]]
+                proj_nome = proj.iloc[0]["nome"] if not proj.empty else "?"
+                ore_per_task.append({
+                    "task_nome": t["nome"],
+                    "progetto": proj_nome,
+                    "ore": float(c["ore_dichiarate"]),
+                })
+                totale += float(c["ore_dichiarate"])
+    
+    return {
+        "dipendente_id": current_user.dipendente_id,
+        "nome": dip["nome"],
+        "profilo": dip["profilo"],
+        "ore_contrattuali": int(dip["ore_sett"]),
+        "totale_ore": round(totale, 1),
+        "ore_per_task": ore_per_task,
+        "compilato": bool(ore_per_task),
+    }
+
+
+def _consuntivo_vuoto_per_user(dipendente_id: str):
+    """Helper: restituisce un payload 'vuoto' coerente quando non ci sono consuntivi."""
+    try:
+        dip = get_dipendente(dipendente_id)
+    except (IndexError, KeyError):
+        raise HTTPException(404, "Dipendente non trovato")
+    return {
+        "dipendente_id": dipendente_id,
+        "nome": dip["nome"],
+        "profilo": dip["profilo"],
+        "ore_contrattuali": int(dip["ore_sett"]),
+        "totale_ore": 0,
+        "ore_per_task": [],
+        "compilato": False,
+    }
+
+
 # ══════════════════════════════════════════════════════════════════════
 # ENDPOINT: SIMULAZIONI
 # ══════════════════════════════════════════════════════════════════════
 
 @app.post("/api/simulazione/ritardo")
-def simula_ritardo(req: SimulaRitardoRequest):
+def simula_ritardo(
+    req: SimulaRitardoRequest,
+    _: Utente = Depends(require_manager),
+):
     from datetime import timedelta
 
     tasks_sim = _TASKS().copy()
@@ -1311,7 +1396,10 @@ def simula_ritardo(req: SimulaRitardoRequest):
 
 
 @app.post("/api/simulazione/ritardo-multiplo")
-def simula_ritardo_multiplo(req: SimulaRitardoMultiploRequest):
+def simula_ritardo_multiplo(
+    req: SimulaRitardoMultiploRequest,
+    _: Utente = Depends(require_manager),
+):
     """Simula il ritardo di più task contemporaneamente con propagazione a cascata."""
     from datetime import timedelta
 
@@ -1438,7 +1526,10 @@ class AnalisiRequest(BaseModel):
 
 
 @app.post("/api/agent/analisi-gantt")
-def analisi_gantt(req: AnalisiRequest):
+def analisi_gantt(
+    req: AnalisiRequest,
+    _: Utente = Depends(require_manager),
+):
     """Riceve una segnalazione e restituisce proposte di redistribuzione."""
     import json as json_mod
 
@@ -1779,8 +1870,15 @@ class SalvaConsuntivoRequest(BaseModel):
 
 
 @app.post("/api/consuntivi/salva")
-def salva_consuntivo_endpoint(req: SalvaConsuntivoRequest):
+def salva_consuntivo_endpoint(
+    req: SalvaConsuntivoRequest,
+    current_user: Utente = Depends(get_current_user),
+):
     """Salva il consuntivo settimanale di un dipendente."""
+    # user può salvare solo i propri consuntivi
+    if current_user.ruolo_app != "manager" and req.dipendente_id != current_user.dipendente_id:
+        raise HTTPException(403, "Puoi salvare solo i tuoi consuntivi")
+    
     try:
         dip = get_dipendente(req.dipendente_id)
     except (IndexError, KeyError):
@@ -1819,7 +1917,10 @@ class SuggerisciTaskRequest(BaseModel):
 
 
 @app.post("/api/agent/suggerisci-task")
-def suggerisci_task(req: SuggerisciTaskRequest):
+def suggerisci_task(
+    req: SuggerisciTaskRequest,
+    _: Utente = Depends(require_manager),
+):
     """Chiede all'agente di suggerire task per un progetto."""
     import json as json_mod
 
@@ -1877,7 +1978,10 @@ class VerificaPianificazioneRequest(BaseModel):
 
 
 @app.post("/api/agent/verifica-pianificazione")
-def verifica_pianificazione(req: VerificaPianificazioneRequest):
+def verifica_pianificazione(
+    req: VerificaPianificazioneRequest,
+    _: Utente = Depends(require_manager),
+):
     """Chiede all'agente di verificare la pianificazione GANTT."""
     import json as json_mod
 
@@ -2592,8 +2696,15 @@ def scenario_interpreta(req: InterpretaRequest, _: Utente = Depends(require_mana
 # ══════════════════════════════════════════════════════════════════
 
 @app.post("/api/attivita-interne")
-def crea_attivita_interna(req: AttivitaInternaRequest):
+def crea_attivita_interna(
+    req: AttivitaInternaRequest,
+    current_user: Utente = Depends(get_current_user),
+):
     """Crea un task su P010 (Attività Interne) per un dipendente."""
+    # user può creare attività solo per sé stesso
+    if current_user.ruolo_app != "manager" and req.dipendente_id != current_user.dipendente_id:
+        raise HTTPException(403, "Puoi creare attività solo per te stesso")
+
     try:
         dip = get_dipendente(req.dipendente_id)
     except (IndexError, KeyError):
@@ -2623,7 +2734,10 @@ def crea_attivita_interna(req: AttivitaInternaRequest):
  
  
 @app.delete("/api/attivita-interne/{task_id}")
-def elimina_attivita_interna(task_id: str):
+def elimina_attivita_interna(
+    task_id: str,
+    current_user: Utente = Depends(get_current_user),
+):
     """Elimina (soft) un task di attività interna (solo P010)."""
     tasks = _TASKS()
     task = tasks[tasks["id"] == task_id]
@@ -2632,6 +2746,10 @@ def elimina_attivita_interna(task_id: str):
     if task.iloc[0]["progetto_id"] != "P010":
         raise HTTPException(400, "Solo task di Attività Interne possono essere eliminati da qui")
 
+    # user può cancellare solo le proprie attività
+    if current_user.ruolo_app != "manager" and task.iloc[0]["dipendente_id"] != current_user.dipendente_id:
+        raise HTTPException(403, "Puoi cancellare solo le tue attività")
+    
     ok = modifica_task(task_id, stato="Eliminato")
     if ok:
         return {"ok": True, "messaggio": f"Task {task_id} eliminato"}
