@@ -1,6 +1,6 @@
 """
 Dati fittizi realistici per il prototipo IMC-Group GANTT Agent.
-Clienti reali, progetti GRC/compliance credibili, 13 dipendenti.
+Clienti reali, progetti GRC/compliance credibili, 15 dipendenti.
 
 STATI PROGETTO:
 - "In bando"         → si lavora per vincerlo
@@ -17,26 +17,30 @@ import random
 # ── ANAGRAFICA DIPENDENTI ──────────────────────────────────────────────
 
 DIPENDENTI = pd.DataFrame([
-    # Direzione
-    {"id": "D001", "nome": "Giorgio Ferretti",     "profilo": "Direzione",             "ore_sett": 40, "costo_ora": 65.0, "competenze": ["strategia", "GRC", "relazioni clienti", "bandi"]},
-    # Tecnici
-    {"id": "D002", "nome": "Luca Martinelli",      "profilo": "Tecnico Senior",        "ore_sett": 40, "costo_ora": 48.0, "competenze": ["sviluppo", "architettura", "ARIS", "database", "cloud"]},
-    {"id": "D003", "nome": "Stefano Colombo",      "profilo": "Tecnico Senior",        "ore_sett": 40, "costo_ora": 45.0, "competenze": ["sviluppo", "backend", "API", "integrazione sistemi"]},
-    {"id": "D004", "nome": "Elena Ferrara",         "profilo": "Tecnico Junior",        "ore_sett": 40, "costo_ora": 28.0, "competenze": ["sviluppo", "python", "AI/ML", "testing"]},
-    # Commerciale / Relazioni clienti
-    {"id": "D005", "nome": "Andrea Pellegrini",     "profilo": "Commerciale/Pre-sales", "ore_sett": 40, "costo_ora": 50.0, "competenze": ["bandi", "proposte tecniche", "marketing", "design prodotto"]},
-    {"id": "D006", "nome": "Silvia Moretti",        "profilo": "Relazioni Clienti",     "ore_sett": 40, "costo_ora": 40.0, "competenze": ["gestione clienti", "coordinamento", "emergenze"]},
-    {"id": "D007", "nome": "Nicola Esposito",       "profilo": "Relazioni Clienti",     "ore_sett": 40, "costo_ora": 38.0, "competenze": ["gestione clienti", "coordinamento"]},
-    # Consulente operativo (lavora con ARIS/db, non informatico)
-    {"id": "D008", "nome": "Paolo Santoro",         "profilo": "Consulente Operativo",  "ore_sett": 40, "costo_ora": 38.0, "competenze": ["ARIS", "processi", "database", "relazioni clienti"]},
-    # Operativa filiale Sud
-    {"id": "D009", "nome": "Tetiana Kovalenko",     "profilo": "Consulente Operativo",  "ore_sett": 40, "costo_ora": 35.0, "competenze": ["coordinamento", "relazioni clienti", "filiale sud"]},
-    # Project Manager
-    {"id": "D010", "nome": "Marco Vietti",          "profilo": "Project Manager",       "ore_sett": 40, "costo_ora": 50.0, "competenze": ["gestione progetti", "bandi", "rendicontazione", "PMO"]},
-    # Amministrazione/HR
-    {"id": "D011", "nome": "Daniele Barbieri",      "profilo": "Amministrativo",        "ore_sett": 40, "costo_ora": 30.0, "competenze": ["amministrazione", "rendicontazione", "fatturazione"]},
-    {"id": "D012", "nome": "Carolina Fabbri",       "profilo": "Amministrativo",        "ore_sett": 24, "costo_ora": 30.0, "competenze": ["amministrazione", "documentazione"]},
-    {"id": "D013", "nome": "Cosimo Ferro",          "profilo": "HR",                    "ore_sett": 40, "costo_ora": 35.0, "competenze": ["risorse umane", "formazione", "organizzazione"]},
+    # AD
+    {"id": "D001", "nome": "Vincenzo Carolla",       "profilo": "AD",                          "ore_sett": 40, "costo_ora": 75.0, "competenze": ["strategia", "GRC", "relazioni clienti", "bandi"]},
+    # Manager IT (anche PM e sviluppo)
+    {"id": "D002", "nome": "Roberto Pezzuto",        "profilo": "Manager IT",                  "ore_sett": 40, "costo_ora": 55.0, "competenze": ["PM", "sviluppo", "architettura", "cloud", "gestione progetti"]},
+    # Senior IT Consultant
+    {"id": "D003", "nome": "Davide Guidi",           "profilo": "Senior IT Consultant",        "ore_sett": 40, "costo_ora": 48.0, "competenze": ["sviluppo", "backend", "API", "integrazione sistemi", "database"]},
+    # IT Consultant
+    {"id": "D004", "nome": "Helena Ullah",           "profilo": "IT Consultant",               "ore_sett": 40, "costo_ora": 30.0, "competenze": ["sviluppo", "python", "AI/ML", "testing"]},
+    # Senior Consultant (anche PM)
+    {"id": "D005", "nome": "Andrea Morstabilini",    "profilo": "Senior Consultant",           "ore_sett": 40, "costo_ora": 50.0, "competenze": ["PM", "GRC", "compliance", "bandi", "gestione progetti"]},
+    {"id": "D006", "nome": "Paolo Di Prizio",        "profilo": "Senior Consultant",           "ore_sett": 40, "costo_ora": 50.0, "competenze": ["PM", "risk management", "processi", "gestione progetti"]},
+    {"id": "D007", "nome": "Carolina Coccorese",     "profilo": "Senior Consultant",           "ore_sett": 40, "costo_ora": 48.0, "competenze": ["PM", "compliance", "coordinamento", "gestione progetti"]},
+    {"id": "D008", "nome": "Fausto Garzillo",        "profilo": "Senior Consultant",           "ore_sett": 40, "costo_ora": 45.0, "competenze": ["GRC", "processi", "ARIS", "relazioni clienti"]},
+    # Consultant
+    {"id": "D009", "nome": "Tetiana Matveichuk",     "profilo": "Consultant",                  "ore_sett": 40, "costo_ora": 35.0, "competenze": ["coordinamento", "relazioni clienti", "documentazione"]},
+    {"id": "D010", "nome": "Nicola Coccorese",       "profilo": "Consultant",                  "ore_sett": 40, "costo_ora": 35.0, "competenze": ["GRC", "analisi", "relazioni clienti"]},
+    {"id": "D011", "nome": "Ludovica Di Cianni",     "profilo": "Consultant",                  "ore_sett": 40, "costo_ora": 25.0, "competenze": ["IA", "python", "backend", "sviluppo"]},
+    # Manager HR
+    {"id": "D012", "nome": "Cosimo Pacifico",        "profilo": "Manager HR",                  "ore_sett": 40, "costo_ora": 40.0, "competenze": ["risorse umane", "formazione", "organizzazione", "contratti"]},
+    # Responsabile amministrazione
+    {"id": "D013", "nome": "Francesco Carolla",      "profilo": "Responsabile amministrazione","ore_sett": 40, "costo_ora": 42.0, "competenze": ["amministrazione", "rendicontazione", "fatturazione", "controllo gestione"]},
+    # Addetto amministrazione
+    {"id": "D014", "nome": "Carolina Jori",          "profilo": "Addetto amministrazione",     "ore_sett": 20, "costo_ora": 28.0, "competenze": ["amministrazione", "documentazione", "archivio"]},
+    {"id": "D015", "nome": "Daniele Tagliabue",      "profilo": "Addetto amministrazione",     "ore_sett": 40, "costo_ora": 30.0, "competenze": ["amministrazione", "rendicontazione", "fatturazione"]},
 ])
 
 # ── PROGETTI ───────────────────────────────────────────────────────────
@@ -179,137 +183,139 @@ TASKS = pd.DataFrame([
     # ══════════════════════════════════════════════════════════════════
     # P001: Adeguamento DORA — Sparkasse (in esecuzione — fase Implementazione)
     # ══════════════════════════════════════════════════════════════════
-    {"id": "T001", "progetto_id": "P001", "nome": "Gap analysis DORA",                  "fase": "Analisi",        "ore_stimate": 160, "data_inizio": datetime(2025, 9, 1),   "data_fine": datetime(2025, 11, 15), "stato": "Completato",  "profilo_richiesto": "Tecnico Senior",        "dipendente_id": "D002", "predecessore": None},
-    {"id": "T002", "progetto_id": "P001", "nome": "Remediation plan ICT risk",          "fase": "Design",         "ore_stimate": 120, "data_inizio": datetime(2025, 11, 1),  "data_fine": datetime(2026, 1, 15),  "stato": "Completato",  "profilo_richiesto": "Tecnico Senior",        "dipendente_id": "D002", "predecessore": "T001"},
-    {"id": "T003", "progetto_id": "P001", "nome": "Implementazione framework ICT",      "fase": "Sviluppo",       "ore_stimate": 280, "data_inizio": datetime(2026, 1, 15),  "data_fine": datetime(2026, 5, 15),  "stato": "In corso",    "profilo_richiesto": "Tecnico Senior",        "dipendente_id": "D003", "predecessore": "T002"},
-    {"id": "T004", "progetto_id": "P001", "nome": "Testing e validazione DORA",         "fase": "Testing",        "ore_stimate": 120, "data_inizio": datetime(2026, 4, 15),  "data_fine": datetime(2026, 6, 15),  "stato": "Da iniziare", "profilo_richiesto": "Tecnico Junior",        "dipendente_id": "D004", "predecessore": "T003"},
-    {"id": "T005", "progetto_id": "P001", "nome": "Coordinamento cliente Sparkasse",    "fase": "Gestione",       "ore_stimate": 100, "data_inizio": datetime(2025, 9, 1),   "data_fine": datetime(2026, 6, 30),  "stato": "In corso",    "profilo_richiesto": "Relazioni Clienti",     "dipendente_id": "D006", "predecessore": None},
-    {"id": "T006", "progetto_id": "P001", "nome": "Gestione progetto DORA",             "fase": "Gestione",       "ore_stimate": 140, "data_inizio": datetime(2025, 9, 1),   "data_fine": datetime(2026, 6, 30),  "stato": "In corso",    "profilo_richiesto": "Project Manager",       "dipendente_id": "D010", "predecessore": None},
-    {"id": "T007", "progetto_id": "P001", "nome": "Rendicontazione DORA",               "fase": "Amministrazione","ore_stimate": 50,  "data_inizio": datetime(2025, 9, 1),   "data_fine": datetime(2026, 6, 30),  "stato": "In corso",    "profilo_richiesto": "Amministrativo",        "dipendente_id": "D011", "predecessore": None},
-    {"id": "T008", "progetto_id": "P001", "nome": "Configurazione ARIS processi DORA",  "fase": "Sviluppo",       "ore_stimate": 80,  "data_inizio": datetime(2026, 2, 1),   "data_fine": datetime(2026, 4, 30),  "stato": "In corso",    "profilo_richiesto": "Consulente Operativo",  "dipendente_id": "D008", "predecessore": "T002"},
+    {"id": "T001", "progetto_id": "P001", "nome": "Gap analysis DORA",                  "fase": "Analisi",        "ore_stimate": 160, "data_inizio": datetime(2025, 9, 1),   "data_fine": datetime(2025, 11, 15), "stato": "Completato",  "profilo_richiesto": "Senior IT Consultant",  "dipendente_id": "D003", "predecessore": None},
+    {"id": "T002", "progetto_id": "P001", "nome": "Remediation plan ICT risk",          "fase": "Design",         "ore_stimate": 120, "data_inizio": datetime(2025, 11, 1),  "data_fine": datetime(2026, 1, 15),  "stato": "Completato",  "profilo_richiesto": "Manager IT",            "dipendente_id": "D002", "predecessore": "T001"},
+    {"id": "T003", "progetto_id": "P001", "nome": "Implementazione framework ICT",      "fase": "Sviluppo",       "ore_stimate": 280, "data_inizio": datetime(2026, 1, 15),  "data_fine": datetime(2026, 5, 15),  "stato": "In corso",    "profilo_richiesto": "Manager IT",            "dipendente_id": "D002", "predecessore": "T002"},
+    {"id": "T004", "progetto_id": "P001", "nome": "Testing e validazione DORA",         "fase": "Testing",        "ore_stimate": 120, "data_inizio": datetime(2026, 4, 15),  "data_fine": datetime(2026, 6, 15),  "stato": "Da iniziare", "profilo_richiesto": "IT Consultant",         "dipendente_id": "D004", "predecessore": "T003"},
+    {"id": "T005", "progetto_id": "P001", "nome": "Coordinamento cliente Sparkasse",    "fase": "Gestione",       "ore_stimate": 100, "data_inizio": datetime(2025, 9, 1),   "data_fine": datetime(2026, 6, 30),  "stato": "In corso",    "profilo_richiesto": "Senior Consultant",     "dipendente_id": "D007", "predecessore": None},
+    {"id": "T006", "progetto_id": "P001", "nome": "Gestione progetto DORA",             "fase": "Gestione",       "ore_stimate": 140, "data_inizio": datetime(2025, 9, 1),   "data_fine": datetime(2026, 6, 30),  "stato": "In corso",    "profilo_richiesto": "PM",                    "dipendente_id": "D005", "predecessore": None},
+    {"id": "T007", "progetto_id": "P001", "nome": "Rendicontazione DORA",               "fase": "Amministrazione","ore_stimate": 50,  "data_inizio": datetime(2025, 9, 1),   "data_fine": datetime(2026, 6, 30),  "stato": "In corso",    "profilo_richiesto": "Addetto amministrazione","dipendente_id": "D015", "predecessore": None},
+    {"id": "T008", "progetto_id": "P001", "nome": "Configurazione processi DORA",       "fase": "Sviluppo",       "ore_stimate": 80,  "data_inizio": datetime(2026, 2, 1),   "data_fine": datetime(2026, 4, 30),  "stato": "In corso",    "profilo_richiesto": "Senior Consultant",     "dipendente_id": "D008", "predecessore": "T002"},
 
     # ══════════════════════════════════════════════════════════════════
     # P002: Framework Compliance 262 — Reale Mutua (in esecuzione)
     # ══════════════════════════════════════════════════════════════════
-    {"id": "T009", "progetto_id": "P002", "nome": "Analisi requisiti compliance 262",   "fase": "Analisi",        "ore_stimate": 140, "data_inizio": datetime(2025, 11, 1),  "data_fine": datetime(2026, 1, 31),  "stato": "Completato",  "profilo_richiesto": "Project Manager",       "dipendente_id": "D010", "predecessore": None},
-    {"id": "T010", "progetto_id": "P002", "nome": "Mappatura controlli L.262",          "fase": "Analisi",        "ore_stimate": 200, "data_inizio": datetime(2026, 1, 15),  "data_fine": datetime(2026, 4, 15),  "stato": "In corso",    "profilo_richiesto": "Consulente Operativo",  "dipendente_id": "D008", "predecessore": "T009"},
-    {"id": "T011", "progetto_id": "P002", "nome": "Sviluppo piattaforma GRC",          "fase": "Sviluppo",       "ore_stimate": 350, "data_inizio": datetime(2026, 3, 1),   "data_fine": datetime(2026, 7, 31),  "stato": "In corso",    "profilo_richiesto": "Tecnico Senior",        "dipendente_id": "D003", "predecessore": "T009"},
-    {"id": "T012", "progetto_id": "P002", "nome": "Modulo certificazione flussi",       "fase": "Sviluppo",       "ore_stimate": 180, "data_inizio": datetime(2026, 5, 1),   "data_fine": datetime(2026, 8, 31),  "stato": "Da iniziare", "profilo_richiesto": "Tecnico Senior",        "dipendente_id": "D002", "predecessore": "T011"},
-    {"id": "T013", "progetto_id": "P002", "nome": "Integrazione sistemi Reale Mutua",   "fase": "Sviluppo",       "ore_stimate": 160, "data_inizio": datetime(2026, 4, 1),   "data_fine": datetime(2026, 7, 31),  "stato": "Da iniziare", "profilo_richiesto": "Tecnico Junior",        "dipendente_id": "D004", "predecessore": "T011"},
-    {"id": "T014", "progetto_id": "P002", "nome": "Testing e UAT compliance",           "fase": "Testing",        "ore_stimate": 150, "data_inizio": datetime(2026, 8, 1),   "data_fine": datetime(2026, 10, 15), "stato": "Da iniziare", "profilo_richiesto": "Tecnico Junior",        "dipendente_id": "D004", "predecessore": "T012"},
-    {"id": "T015", "progetto_id": "P002", "nome": "Coordinamento Reale Mutua",          "fase": "Gestione",       "ore_stimate": 120, "data_inizio": datetime(2025, 11, 1),  "data_fine": datetime(2026, 10, 31), "stato": "In corso",    "profilo_richiesto": "Relazioni Clienti",     "dipendente_id": "D006", "predecessore": None},
-    {"id": "T016", "progetto_id": "P002", "nome": "Gestione progetto Compliance 262",   "fase": "Gestione",       "ore_stimate": 180, "data_inizio": datetime(2025, 11, 1),  "data_fine": datetime(2026, 10, 31), "stato": "In corso",    "profilo_richiesto": "Project Manager",       "dipendente_id": "D010", "predecessore": None},
-    {"id": "T017", "progetto_id": "P002", "nome": "Rendicontazione Compliance 262",     "fase": "Amministrazione","ore_stimate": 60,  "data_inizio": datetime(2025, 11, 1),  "data_fine": datetime(2026, 10, 31), "stato": "In corso",    "profilo_richiesto": "Amministrativo",        "dipendente_id": "D011", "predecessore": None},
-    {"id": "T018", "progetto_id": "P002", "nome": "Demo intermedia Reale Mutua",        "fase": "Vendita",        "ore_stimate": 24,  "data_inizio": datetime(2026, 6, 1),   "data_fine": datetime(2026, 6, 15),  "stato": "Da iniziare", "profilo_richiesto": "Commerciale/Pre-sales", "dipendente_id": "D005", "predecessore": "T011"},
+    {"id": "T009", "progetto_id": "P002", "nome": "Analisi requisiti compliance 262",   "fase": "Analisi",        "ore_stimate": 140, "data_inizio": datetime(2025, 11, 1),  "data_fine": datetime(2026, 1, 31),  "stato": "Completato",  "profilo_richiesto": "PM",                    "dipendente_id": "D006", "predecessore": None},
+    {"id": "T010", "progetto_id": "P002", "nome": "Mappatura controlli L.262",          "fase": "Analisi",        "ore_stimate": 200, "data_inizio": datetime(2026, 1, 15),  "data_fine": datetime(2026, 4, 15),  "stato": "In corso",    "profilo_richiesto": "Senior Consultant",     "dipendente_id": "D008", "predecessore": "T009"},
+    {"id": "T011", "progetto_id": "P002", "nome": "Sviluppo piattaforma GRC",          "fase": "Sviluppo",       "ore_stimate": 350, "data_inizio": datetime(2026, 3, 1),   "data_fine": datetime(2026, 7, 31),  "stato": "In corso",    "profilo_richiesto": "Senior IT Consultant",  "dipendente_id": "D003", "predecessore": "T009"},
+    {"id": "T012", "progetto_id": "P002", "nome": "Modulo certificazione flussi",       "fase": "Sviluppo",       "ore_stimate": 180, "data_inizio": datetime(2026, 5, 1),   "data_fine": datetime(2026, 8, 31),  "stato": "Da iniziare", "profilo_richiesto": "Manager IT",            "dipendente_id": "D002", "predecessore": "T011"},
+    {"id": "T013", "progetto_id": "P002", "nome": "Integrazione sistemi Reale Mutua",   "fase": "Sviluppo",       "ore_stimate": 160, "data_inizio": datetime(2026, 4, 1),   "data_fine": datetime(2026, 7, 31),  "stato": "Da iniziare", "profilo_richiesto": "IT Consultant",         "dipendente_id": "D004", "predecessore": "T011"},
+    {"id": "T014", "progetto_id": "P002", "nome": "Testing e UAT compliance",           "fase": "Testing",        "ore_stimate": 150, "data_inizio": datetime(2026, 8, 1),   "data_fine": datetime(2026, 10, 15), "stato": "Da iniziare", "profilo_richiesto": "IT Consultant",         "dipendente_id": "D004", "predecessore": "T012"},
+    {"id": "T015", "progetto_id": "P002", "nome": "Coordinamento Reale Mutua",          "fase": "Gestione",       "ore_stimate": 120, "data_inizio": datetime(2025, 11, 1),  "data_fine": datetime(2026, 10, 31), "stato": "In corso",    "profilo_richiesto": "Consultant",            "dipendente_id": "D009", "predecessore": None},
+    {"id": "T016", "progetto_id": "P002", "nome": "Gestione progetto Compliance 262",   "fase": "Gestione",       "ore_stimate": 180, "data_inizio": datetime(2025, 11, 1),  "data_fine": datetime(2026, 10, 31), "stato": "In corso",    "profilo_richiesto": "PM",                    "dipendente_id": "D006", "predecessore": None},
+    {"id": "T017", "progetto_id": "P002", "nome": "Rendicontazione Compliance 262",     "fase": "Amministrazione","ore_stimate": 60,  "data_inizio": datetime(2025, 11, 1),  "data_fine": datetime(2026, 10, 31), "stato": "In corso",    "profilo_richiesto": "Addetto amministrazione","dipendente_id": "D015", "predecessore": None},
+    {"id": "T018", "progetto_id": "P002", "nome": "Demo intermedia Reale Mutua",        "fase": "Vendita",        "ore_stimate": 24,  "data_inizio": datetime(2026, 6, 1),   "data_fine": datetime(2026, 6, 15),  "stato": "Da iniziare", "profilo_richiesto": "Senior Consultant",     "dipendente_id": "D005", "predecessore": "T011"},
 
     # ══════════════════════════════════════════════════════════════════
     # P003: Digitalizzazione Corpo Normativo — Duferco Energia (in esecuzione)
     # ══════════════════════════════════════════════════════════════════
-    {"id": "T019", "progetto_id": "P003", "nome": "Analisi corpo normativo Duferco",    "fase": "Analisi",        "ore_stimate": 100, "data_inizio": datetime(2026, 1, 15),  "data_fine": datetime(2026, 3, 15),  "stato": "In corso",    "profilo_richiesto": "Consulente Operativo",  "dipendente_id": "D009", "predecessore": None},
-    {"id": "T020", "progetto_id": "P003", "nome": "Design piattaforma normativa AI",    "fase": "Design",         "ore_stimate": 120, "data_inizio": datetime(2026, 3, 1),   "data_fine": datetime(2026, 4, 30),  "stato": "Da iniziare", "profilo_richiesto": "Tecnico Senior",        "dipendente_id": "D002", "predecessore": "T019"},
-    {"id": "T021", "progetto_id": "P003", "nome": "Sviluppo classificatore AI norme",   "fase": "Sviluppo",       "ore_stimate": 250, "data_inizio": datetime(2026, 4, 15),  "data_fine": datetime(2026, 7, 31),  "stato": "Da iniziare", "profilo_richiesto": "Tecnico Junior",        "dipendente_id": "D004", "predecessore": "T020"},
-    {"id": "T022", "progetto_id": "P003", "nome": "Sviluppo backend piattaforma",       "fase": "Sviluppo",       "ore_stimate": 200, "data_inizio": datetime(2026, 4, 15),  "data_fine": datetime(2026, 7, 15),  "stato": "Da iniziare", "profilo_richiesto": "Tecnico Senior",        "dipendente_id": "D003", "predecessore": "T020"},
-    {"id": "T023", "progetto_id": "P003", "nome": "Testing piattaforma normativa",      "fase": "Testing",        "ore_stimate": 80,  "data_inizio": datetime(2026, 7, 15),  "data_fine": datetime(2026, 9, 15),  "stato": "Da iniziare", "profilo_richiesto": "Tecnico Junior",        "dipendente_id": "D004", "predecessore": "T022"},
-    {"id": "T024", "progetto_id": "P003", "nome": "Coordinamento Duferco",              "fase": "Gestione",       "ore_stimate": 80,  "data_inizio": datetime(2026, 1, 15),  "data_fine": datetime(2026, 9, 30),  "stato": "In corso",    "profilo_richiesto": "Relazioni Clienti",     "dipendente_id": "D007", "predecessore": None},
-    {"id": "T025", "progetto_id": "P003", "nome": "Gestione progetto Duferco",          "fase": "Gestione",       "ore_stimate": 100, "data_inizio": datetime(2026, 1, 15),  "data_fine": datetime(2026, 9, 30),  "stato": "In corso",    "profilo_richiesto": "Project Manager",       "dipendente_id": "D010", "predecessore": None},
-    {"id": "T026", "progetto_id": "P003", "nome": "Rendicontazione Duferco",            "fase": "Amministrazione","ore_stimate": 40,  "data_inizio": datetime(2026, 1, 15),  "data_fine": datetime(2026, 9, 30),  "stato": "In corso",    "profilo_richiesto": "Amministrativo",        "dipendente_id": "D012", "predecessore": None},
+    {"id": "T019", "progetto_id": "P003", "nome": "Analisi corpo normativo Duferco",    "fase": "Analisi",        "ore_stimate": 100, "data_inizio": datetime(2026, 1, 15),  "data_fine": datetime(2026, 3, 15),  "stato": "In corso",    "profilo_richiesto": "Consultant",            "dipendente_id": "D010", "predecessore": None},
+    {"id": "T020", "progetto_id": "P003", "nome": "Design piattaforma normativa AI",    "fase": "Design",         "ore_stimate": 120, "data_inizio": datetime(2026, 3, 1),   "data_fine": datetime(2026, 4, 30),  "stato": "Da iniziare", "profilo_richiesto": "Manager IT",            "dipendente_id": "D002", "predecessore": "T019"},
+    {"id": "T021", "progetto_id": "P003", "nome": "Sviluppo classificatore AI norme",   "fase": "Sviluppo",       "ore_stimate": 250, "data_inizio": datetime(2026, 4, 15),  "data_fine": datetime(2026, 7, 31),  "stato": "Da iniziare", "profilo_richiesto": "IT Consultant",         "dipendente_id": "D004", "predecessore": "T020"},
+    {"id": "T022", "progetto_id": "P003", "nome": "Sviluppo backend piattaforma",       "fase": "Sviluppo",       "ore_stimate": 200, "data_inizio": datetime(2026, 4, 15),  "data_fine": datetime(2026, 7, 15),  "stato": "Da iniziare", "profilo_richiesto": "Senior IT Consultant",  "dipendente_id": "D003", "predecessore": "T020"},
+    {"id": "T023", "progetto_id": "P003", "nome": "Testing piattaforma normativa",      "fase": "Testing",        "ore_stimate": 80,  "data_inizio": datetime(2026, 7, 15),  "data_fine": datetime(2026, 9, 15),  "stato": "Da iniziare", "profilo_richiesto": "IT Consultant",         "dipendente_id": "D004", "predecessore": "T022"},
+    {"id": "T024", "progetto_id": "P003", "nome": "Coordinamento Duferco",              "fase": "Gestione",       "ore_stimate": 80,  "data_inizio": datetime(2026, 1, 15),  "data_fine": datetime(2026, 9, 30),  "stato": "In corso",    "profilo_richiesto": "Consultant",            "dipendente_id": "D009", "predecessore": None},
+    {"id": "T025", "progetto_id": "P003", "nome": "Gestione progetto Duferco",          "fase": "Gestione",       "ore_stimate": 100, "data_inizio": datetime(2026, 1, 15),  "data_fine": datetime(2026, 9, 30),  "stato": "In corso",    "profilo_richiesto": "PM",                    "dipendente_id": "D007", "predecessore": None},
+    {"id": "T026", "progetto_id": "P003", "nome": "Rendicontazione Duferco",            "fase": "Amministrazione","ore_stimate": 40,  "data_inizio": datetime(2026, 1, 15),  "data_fine": datetime(2026, 9, 30),  "stato": "In corso",    "profilo_richiesto": "Addetto amministrazione","dipendente_id": "D014", "predecessore": None},
 
     # ══════════════════════════════════════════════════════════════════
     # P004: Risk Assessment Operativo — BNP Paribas (in esecuzione)
     # ══════════════════════════════════════════════════════════════════
-    {"id": "T027", "progetto_id": "P004", "nome": "Mappatura processi operativi BNP",   "fase": "Analisi",        "ore_stimate": 180, "data_inizio": datetime(2025, 10, 1),  "data_fine": datetime(2026, 1, 31),  "stato": "Completato",  "profilo_richiesto": "Consulente Operativo",  "dipendente_id": "D008", "predecessore": None},
-    {"id": "T028", "progetto_id": "P004", "nome": "Identificazione e scoring rischi",   "fase": "Analisi",        "ore_stimate": 160, "data_inizio": datetime(2026, 1, 15),  "data_fine": datetime(2026, 3, 31),  "stato": "In corso",    "profilo_richiesto": "Tecnico Senior",        "dipendente_id": "D002", "predecessore": "T027"},
-    {"id": "T029", "progetto_id": "P004", "nome": "Piano mitigazione rischi",           "fase": "Design",         "ore_stimate": 120, "data_inizio": datetime(2026, 3, 15),  "data_fine": datetime(2026, 5, 15),  "stato": "Da iniziare", "profilo_richiesto": "Tecnico Senior",        "dipendente_id": "D002", "predecessore": "T028"},
-    {"id": "T030", "progetto_id": "P004", "nome": "Configurazione ARIS risk BNP",       "fase": "Sviluppo",       "ore_stimate": 100, "data_inizio": datetime(2026, 2, 15),  "data_fine": datetime(2026, 4, 30),  "stato": "In corso",    "profilo_richiesto": "Consulente Operativo",  "dipendente_id": "D008", "predecessore": "T027"},
-    {"id": "T031", "progetto_id": "P004", "nome": "Coordinamento BNP Paribas",          "fase": "Gestione",       "ore_stimate": 80,  "data_inizio": datetime(2025, 10, 1),  "data_fine": datetime(2026, 5, 31),  "stato": "In corso",    "profilo_richiesto": "Relazioni Clienti",     "dipendente_id": "D007", "predecessore": None},
-    {"id": "T032", "progetto_id": "P004", "nome": "Gestione progetto BNP",              "fase": "Gestione",       "ore_stimate": 100, "data_inizio": datetime(2025, 10, 1),  "data_fine": datetime(2026, 5, 31),  "stato": "In corso",    "profilo_richiesto": "Project Manager",       "dipendente_id": "D010", "predecessore": None},
-    {"id": "T033", "progetto_id": "P004", "nome": "Rendicontazione BNP",                "fase": "Amministrazione","ore_stimate": 40,  "data_inizio": datetime(2025, 10, 1),  "data_fine": datetime(2026, 5, 31),  "stato": "In corso",    "profilo_richiesto": "Amministrativo",        "dipendente_id": "D011", "predecessore": None},
+    {"id": "T027", "progetto_id": "P004", "nome": "Mappatura processi operativi BNP",   "fase": "Analisi",        "ore_stimate": 180, "data_inizio": datetime(2025, 10, 1),  "data_fine": datetime(2026, 1, 31),  "stato": "Completato",  "profilo_richiesto": "Senior Consultant",     "dipendente_id": "D008", "predecessore": None},
+    {"id": "T028", "progetto_id": "P004", "nome": "Identificazione e scoring rischi",   "fase": "Analisi",        "ore_stimate": 160, "data_inizio": datetime(2026, 1, 15),  "data_fine": datetime(2026, 3, 31),  "stato": "In corso",    "profilo_richiesto": "Senior Consultant",     "dipendente_id": "D006", "predecessore": "T027"},
+    {"id": "T029", "progetto_id": "P004", "nome": "Piano mitigazione rischi",           "fase": "Design",         "ore_stimate": 120, "data_inizio": datetime(2026, 3, 15),  "data_fine": datetime(2026, 5, 15),  "stato": "Da iniziare", "profilo_richiesto": "Senior Consultant",     "dipendente_id": "D006", "predecessore": "T028"},
+    {"id": "T030", "progetto_id": "P004", "nome": "Configurazione risk framework",      "fase": "Sviluppo",       "ore_stimate": 100, "data_inizio": datetime(2026, 2, 15),  "data_fine": datetime(2026, 4, 30),  "stato": "In corso",    "profilo_richiesto": "Senior Consultant",     "dipendente_id": "D008", "predecessore": "T027"},
+    {"id": "T031", "progetto_id": "P004", "nome": "Coordinamento BNP Paribas",          "fase": "Gestione",       "ore_stimate": 80,  "data_inizio": datetime(2025, 10, 1),  "data_fine": datetime(2026, 5, 31),  "stato": "In corso",    "profilo_richiesto": "Consultant",            "dipendente_id": "D010", "predecessore": None},
+    {"id": "T032", "progetto_id": "P004", "nome": "Gestione progetto BNP",              "fase": "Gestione",       "ore_stimate": 100, "data_inizio": datetime(2025, 10, 1),  "data_fine": datetime(2026, 5, 31),  "stato": "In corso",    "profilo_richiesto": "PM",                    "dipendente_id": "D005", "predecessore": None},
+    {"id": "T033", "progetto_id": "P004", "nome": "Rendicontazione BNP",                "fase": "Amministrazione","ore_stimate": 40,  "data_inizio": datetime(2025, 10, 1),  "data_fine": datetime(2026, 5, 31),  "stato": "In corso",    "profilo_richiesto": "Addetto amministrazione","dipendente_id": "D015", "predecessore": None},
 
     # ══════════════════════════════════════════════════════════════════
     # P005: ProcessBook Aziendale — Boggi Milano (in esecuzione)
     # ══════════════════════════════════════════════════════════════════
-    {"id": "T034", "progetto_id": "P005", "nome": "Interviste e raccolta processi",     "fase": "Analisi",        "ore_stimate": 120, "data_inizio": datetime(2025, 12, 1),  "data_fine": datetime(2026, 2, 15),  "stato": "Completato",  "profilo_richiesto": "Consulente Operativo",  "dipendente_id": "D009", "predecessore": None},
-    {"id": "T035", "progetto_id": "P005", "nome": "Mappatura processi in ARIS",         "fase": "Sviluppo",       "ore_stimate": 200, "data_inizio": datetime(2026, 2, 1),   "data_fine": datetime(2026, 5, 31),  "stato": "In corso",    "profilo_richiesto": "Consulente Operativo",  "dipendente_id": "D008", "predecessore": "T034"},
-    {"id": "T036", "progetto_id": "P005", "nome": "Sviluppo piattaforma BPM",           "fase": "Sviluppo",       "ore_stimate": 180, "data_inizio": datetime(2026, 3, 1),   "data_fine": datetime(2026, 6, 30),  "stato": "In corso",    "profilo_richiesto": "Tecnico Senior",        "dipendente_id": "D003", "predecessore": "T034"},
-    {"id": "T037", "progetto_id": "P005", "nome": "Testing ProcessBook",                "fase": "Testing",        "ore_stimate": 80,  "data_inizio": datetime(2026, 6, 15),  "data_fine": datetime(2026, 7, 31),  "stato": "Da iniziare", "profilo_richiesto": "Tecnico Junior",        "dipendente_id": "D004", "predecessore": "T036"},
-    {"id": "T038", "progetto_id": "P005", "nome": "Coordinamento Boggi",                "fase": "Gestione",       "ore_stimate": 60,  "data_inizio": datetime(2025, 12, 1),  "data_fine": datetime(2026, 7, 31),  "stato": "In corso",    "profilo_richiesto": "Relazioni Clienti",     "dipendente_id": "D007", "predecessore": None},
-    {"id": "T039", "progetto_id": "P005", "nome": "Gestione progetto Boggi",            "fase": "Gestione",       "ore_stimate": 80,  "data_inizio": datetime(2025, 12, 1),  "data_fine": datetime(2026, 7, 31),  "stato": "In corso",    "profilo_richiesto": "Project Manager",       "dipendente_id": "D010", "predecessore": None},
+    {"id": "T034", "progetto_id": "P005", "nome": "Interviste e raccolta processi",     "fase": "Analisi",        "ore_stimate": 120, "data_inizio": datetime(2025, 12, 1),  "data_fine": datetime(2026, 2, 15),  "stato": "Completato",  "profilo_richiesto": "Consultant",            "dipendente_id": "D009", "predecessore": None},
+    {"id": "T035", "progetto_id": "P005", "nome": "Mappatura processi",                 "fase": "Sviluppo",       "ore_stimate": 200, "data_inizio": datetime(2026, 2, 1),   "data_fine": datetime(2026, 5, 31),  "stato": "In corso",    "profilo_richiesto": "Senior Consultant",     "dipendente_id": "D008", "predecessore": "T034"},
+    {"id": "T036", "progetto_id": "P005", "nome": "Sviluppo piattaforma BPM",           "fase": "Sviluppo",       "ore_stimate": 180, "data_inizio": datetime(2026, 3, 1),   "data_fine": datetime(2026, 6, 30),  "stato": "In corso",    "profilo_richiesto": "Senior IT Consultant",  "dipendente_id": "D003", "predecessore": "T034"},
+    {"id": "T037", "progetto_id": "P005", "nome": "Testing ProcessBook",                "fase": "Testing",        "ore_stimate": 80,  "data_inizio": datetime(2026, 6, 15),  "data_fine": datetime(2026, 7, 31),  "stato": "Da iniziare", "profilo_richiesto": "IT Consultant",         "dipendente_id": "D004", "predecessore": "T036"},
+    {"id": "T038", "progetto_id": "P005", "nome": "Coordinamento Boggi",                "fase": "Gestione",       "ore_stimate": 60,  "data_inizio": datetime(2025, 12, 1),  "data_fine": datetime(2026, 7, 31),  "stato": "In corso",    "profilo_richiesto": "Consultant",            "dipendente_id": "D010", "predecessore": None},
+    {"id": "T039", "progetto_id": "P005", "nome": "Gestione progetto Boggi",            "fase": "Gestione",       "ore_stimate": 80,  "data_inizio": datetime(2025, 12, 1),  "data_fine": datetime(2026, 7, 31),  "stato": "In corso",    "profilo_richiesto": "PM",                    "dipendente_id": "D007", "predecessore": None},
 
     # ══════════════════════════════════════════════════════════════════
     # P006: Piattaforma Antiriciclaggio — Banca Pop. Bari (SOSPESO)
     # ══════════════════════════════════════════════════════════════════
-    {"id": "T040", "progetto_id": "P006", "nome": "Analisi requisiti AML",              "fase": "Analisi",        "ore_stimate": 100, "data_inizio": datetime(2025, 7, 1),   "data_fine": datetime(2025, 9, 30),  "stato": "Completato",  "profilo_richiesto": "Tecnico Senior",        "dipendente_id": "D002", "predecessore": None},
-    {"id": "T041", "progetto_id": "P006", "nome": "Sviluppo algoritmi AI AML",          "fase": "Sviluppo",       "ore_stimate": 300, "data_inizio": datetime(2025, 10, 1),  "data_fine": datetime(2026, 2, 28),  "stato": "Sospeso",     "profilo_richiesto": "Tecnico Senior",        "dipendente_id": "D002", "predecessore": "T040"},
-    {"id": "T042", "progetto_id": "P006", "nome": "Gestione progetto AML",              "fase": "Gestione",       "ore_stimate": 60,  "data_inizio": datetime(2025, 7, 1),   "data_fine": datetime(2026, 3, 31),  "stato": "Sospeso",     "profilo_richiesto": "Project Manager",       "dipendente_id": "D010", "predecessore": None},
+    {"id": "T040", "progetto_id": "P006", "nome": "Analisi requisiti AML",              "fase": "Analisi",        "ore_stimate": 100, "data_inizio": datetime(2025, 7, 1),   "data_fine": datetime(2025, 9, 30),  "stato": "Completato",  "profilo_richiesto": "Manager IT",            "dipendente_id": "D002", "predecessore": None},
+    {"id": "T041", "progetto_id": "P006", "nome": "Sviluppo algoritmi AI AML",          "fase": "Sviluppo",       "ore_stimate": 300, "data_inizio": datetime(2025, 10, 1),  "data_fine": datetime(2026, 2, 28),  "stato": "Sospeso",     "profilo_richiesto": "Manager IT",            "dipendente_id": "D002", "predecessore": "T040"},
+    {"id": "T042", "progetto_id": "P006", "nome": "Gestione progetto AML",              "fase": "Gestione",       "ore_stimate": 60,  "data_inizio": datetime(2025, 7, 1),   "data_fine": datetime(2026, 3, 31),  "stato": "Sospeso",     "profilo_richiesto": "PM",                    "dipendente_id": "D005", "predecessore": None},
 
     # ══════════════════════════════════════════════════════════════════
     # P008 e P009: BANDI
     # ══════════════════════════════════════════════════════════════════
-    {"id": "T043", "progetto_id": "P008", "nome": "Proposta tecnica Business Continuity","fase": "Bando",         "ore_stimate": 60,  "data_inizio": datetime(2026, 2, 15),  "data_fine": datetime(2026, 4, 10),  "stato": "In corso",    "profilo_richiesto": "Commerciale/Pre-sales", "dipendente_id": "D005", "predecessore": None},
-    {"id": "T044", "progetto_id": "P008", "nome": "Stima costi ITAS",                   "fase": "Bando",          "ore_stimate": 30,  "data_inizio": datetime(2026, 3, 1),   "data_fine": datetime(2026, 4, 10),  "stato": "In corso",    "profilo_richiesto": "Project Manager",       "dipendente_id": "D010", "predecessore": None},
-    {"id": "T045", "progetto_id": "P008", "nome": "Documentazione bando ITAS",          "fase": "Bando",          "ore_stimate": 20,  "data_inizio": datetime(2026, 3, 15),  "data_fine": datetime(2026, 4, 10),  "stato": "Da iniziare", "profilo_richiesto": "Amministrativo",        "dipendente_id": "D011", "predecessore": None},
+    {"id": "T043", "progetto_id": "P008", "nome": "Proposta tecnica Business Continuity","fase": "Bando",         "ore_stimate": 60,  "data_inizio": datetime(2026, 2, 15),  "data_fine": datetime(2026, 4, 10),  "stato": "In corso",    "profilo_richiesto": "Senior Consultant",     "dipendente_id": "D005", "predecessore": None},
+    {"id": "T044", "progetto_id": "P008", "nome": "Stima costi ITAS",                   "fase": "Bando",          "ore_stimate": 30,  "data_inizio": datetime(2026, 3, 1),   "data_fine": datetime(2026, 4, 10),  "stato": "In corso",    "profilo_richiesto": "PM",                    "dipendente_id": "D006", "predecessore": None},
+    {"id": "T045", "progetto_id": "P008", "nome": "Documentazione bando ITAS",          "fase": "Bando",          "ore_stimate": 20,  "data_inizio": datetime(2026, 3, 15),  "data_fine": datetime(2026, 4, 10),  "stato": "Da iniziare", "profilo_richiesto": "Addetto amministrazione","dipendente_id": "D015", "predecessore": None},
 
-    {"id": "T046", "progetto_id": "P009", "nome": "Proposta GRC Platform Banco Desio",  "fase": "Bando",          "ore_stimate": 50,  "data_inizio": datetime(2026, 3, 1),   "data_fine": datetime(2026, 4, 25),  "stato": "In corso",    "profilo_richiesto": "Commerciale/Pre-sales", "dipendente_id": "D005", "predecessore": None},
-    {"id": "T047", "progetto_id": "P009", "nome": "Stima costi Banco Desio",            "fase": "Bando",          "ore_stimate": 25,  "data_inizio": datetime(2026, 3, 15),  "data_fine": datetime(2026, 4, 25),  "stato": "Da iniziare", "profilo_richiesto": "Project Manager",       "dipendente_id": "D010", "predecessore": None},
-    {"id": "T048", "progetto_id": "P009", "nome": "Documentazione bando Banco Desio",   "fase": "Bando",          "ore_stimate": 20,  "data_inizio": datetime(2026, 3, 20),  "data_fine": datetime(2026, 4, 25),  "stato": "Da iniziare", "profilo_richiesto": "Amministrativo",        "dipendente_id": "D012", "predecessore": None},
-
-    # ══════════════════════════════════════════════════════════════════
-    # TASK TRASVERSALI SU PROGETTI (manteniamo quelli credibili)
-    # ══════════════════════════════════════════════════════════════════
-    # Tetiana Kovalenko — supporto filiale sud per BNP e Boggi
-    {"id": "T049", "progetto_id": "P004", "nome": "Supporto operativo filiale sud BNP",   "fase": "Gestione",       "ore_stimate": 60,  "data_inizio": datetime(2026, 1, 15),  "data_fine": datetime(2026, 5, 31),  "stato": "In corso",    "profilo_richiesto": "Consulente Operativo",  "dipendente_id": "D009", "predecessore": None},
-    {"id": "T050", "progetto_id": "P005", "nome": "Interviste processi filiale Boggi",    "fase": "Analisi",        "ore_stimate": 40,  "data_inizio": datetime(2026, 2, 1),   "data_fine": datetime(2026, 4, 30),  "stato": "In corso",    "profilo_richiesto": "Consulente Operativo",  "dipendente_id": "D009", "predecessore": None},
-
-    # Elena Ferrara — task attuali sui progetti
-    {"id": "T051", "progetto_id": "P002", "nome": "Preparazione ambienti test Compliance","fase": "Sviluppo",       "ore_stimate": 80,  "data_inizio": datetime(2026, 2, 15),  "data_fine": datetime(2026, 4, 15),  "stato": "In corso",    "profilo_richiesto": "Tecnico Junior",        "dipendente_id": "D004", "predecessore": None},
-    {"id": "T052", "progetto_id": "P003", "nome": "Prototipo classificatore norme",       "fase": "Sviluppo",       "ore_stimate": 60,  "data_inizio": datetime(2026, 3, 1),   "data_fine": datetime(2026, 4, 30),  "stato": "In corso",    "profilo_richiesto": "Tecnico Junior",        "dipendente_id": "D004", "predecessore": None},
+    {"id": "T046", "progetto_id": "P009", "nome": "Proposta GRC Platform Banco Desio",  "fase": "Bando",          "ore_stimate": 50,  "data_inizio": datetime(2026, 3, 1),   "data_fine": datetime(2026, 4, 25),  "stato": "In corso",    "profilo_richiesto": "Senior Consultant",     "dipendente_id": "D005", "predecessore": None},
+    {"id": "T047", "progetto_id": "P009", "nome": "Stima costi Banco Desio",            "fase": "Bando",          "ore_stimate": 25,  "data_inizio": datetime(2026, 3, 15),  "data_fine": datetime(2026, 4, 25),  "stato": "Da iniziare", "profilo_richiesto": "PM",                    "dipendente_id": "D006", "predecessore": None},
+    {"id": "T048", "progetto_id": "P009", "nome": "Documentazione bando Banco Desio",   "fase": "Bando",          "ore_stimate": 20,  "data_inizio": datetime(2026, 3, 20),  "data_fine": datetime(2026, 4, 25),  "stato": "Da iniziare", "profilo_richiesto": "Addetto amministrazione","dipendente_id": "D014", "predecessore": None},
 
     # ══════════════════════════════════════════════════════════════════
-    # P010: ATTIVITÀ INTERNE — ore non a progetto per ogni persona
-    # Queste completano la settimana lavorativa portando tutti al 80-100%
-    # In futuro verranno compilate tramite consuntivazione, non stimate
+    # TASK TRASVERSALI
     # ══════════════════════════════════════════════════════════════════
-    # Giorgio Ferretti (Direzione) — ~6h su progetti → ~34h interne
-    {"id": "T053", "progetto_id": "P010", "nome": "Strategia e relazioni clienti",        "fase": "Gestione",       "ore_stimate": 1400, "data_inizio": datetime(2025, 9, 1),  "data_fine": datetime(2026, 6, 30),  "stato": "In corso",    "profilo_richiesto": "Direzione",             "dipendente_id": "D001", "predecessore": None},
-    {"id": "T054", "progetto_id": "P010", "nome": "Review bandi e proposte commerciali",  "fase": "Vendita",        "ore_stimate": 200,  "data_inizio": datetime(2025, 9, 1),  "data_fine": datetime(2026, 6, 30),  "stato": "In corso",    "profilo_richiesto": "Direzione",             "dipendente_id": "D001", "predecessore": None},
+    {"id": "T049", "progetto_id": "P004", "nome": "Supporto analisi BNP",                 "fase": "Gestione",       "ore_stimate": 60,  "data_inizio": datetime(2026, 1, 15),  "data_fine": datetime(2026, 5, 31),  "stato": "In corso",    "profilo_richiesto": "Consultant",            "dipendente_id": "D009", "predecessore": None},
+    {"id": "T050", "progetto_id": "P005", "nome": "Interviste processi Boggi",            "fase": "Analisi",        "ore_stimate": 40,  "data_inizio": datetime(2026, 2, 1),   "data_fine": datetime(2026, 4, 30),  "stato": "In corso",    "profilo_richiesto": "Consultant",            "dipendente_id": "D009", "predecessore": None},
 
-    # Cosimo Ferro (HR) — 0h su progetti → ~38h interne
-    {"id": "T055", "progetto_id": "P010", "nome": "Gestione presenze e contratti",        "fase": "Gestione",       "ore_stimate": 860,  "data_inizio": datetime(2025, 9, 1),  "data_fine": datetime(2026, 6, 30),  "stato": "In corso",    "profilo_richiesto": "HR",                    "dipendente_id": "D013", "predecessore": None},
-    {"id": "T056", "progetto_id": "P010", "nome": "Formazione e onboarding",              "fase": "Gestione",       "ore_stimate": 430,  "data_inizio": datetime(2025, 9, 1),  "data_fine": datetime(2026, 6, 30),  "stato": "In corso",    "profilo_richiesto": "HR",                    "dipendente_id": "D013", "predecessore": None},
-    {"id": "T057", "progetto_id": "P010", "nome": "Selezione e recruiting",               "fase": "Gestione",       "ore_stimate": 430,  "data_inizio": datetime(2025, 9, 1),  "data_fine": datetime(2026, 6, 30),  "stato": "In corso",    "profilo_richiesto": "HR",                    "dipendente_id": "D013", "predecessore": None},
+    {"id": "T051", "progetto_id": "P002", "nome": "Preparazione ambienti test Compliance","fase": "Sviluppo",       "ore_stimate": 80,  "data_inizio": datetime(2026, 2, 15),  "data_fine": datetime(2026, 4, 15),  "stato": "In corso",    "profilo_richiesto": "IT Consultant",         "dipendente_id": "D004", "predecessore": None},
+    {"id": "T052", "progetto_id": "P003", "nome": "Prototipo classificatore norme",       "fase": "Sviluppo",       "ore_stimate": 60,  "data_inizio": datetime(2026, 3, 1),   "data_fine": datetime(2026, 4, 30),  "stato": "In corso",    "profilo_richiesto": "IT Consultant",         "dipendente_id": "D004", "predecessore": None},
 
-    # Silvia Moretti (Relazioni Clienti) — ~5h su progetti → ~33h interne
-    {"id": "T058", "progetto_id": "P010", "nome": "Coordinamento interno e comunicazione","fase": "Gestione",       "ore_stimate": 1200, "data_inizio": datetime(2025, 9, 1),  "data_fine": datetime(2026, 6, 30),  "stato": "In corso",    "profilo_richiesto": "Relazioni Clienti",     "dipendente_id": "D006", "predecessore": None},
+    # ══════════════════════════════════════════════════════════════════
+    # P010: ATTIVITÀ INTERNE
+    # ══════════════════════════════════════════════════════════════════
+    # Vincenzo Carolla (AD)
+    {"id": "T053", "progetto_id": "P010", "nome": "Strategia e relazioni clienti",        "fase": "Gestione",       "ore_stimate": 1400, "data_inizio": datetime(2025, 9, 1),  "data_fine": datetime(2026, 6, 30),  "stato": "In corso",    "profilo_richiesto": "AD",                    "dipendente_id": "D001", "predecessore": None},
+    {"id": "T054", "progetto_id": "P010", "nome": "Review bandi e proposte",              "fase": "Vendita",        "ore_stimate": 200,  "data_inizio": datetime(2025, 9, 1),  "data_fine": datetime(2026, 6, 30),  "stato": "In corso",    "profilo_richiesto": "AD",                    "dipendente_id": "D001", "predecessore": None},
 
-    # Nicola Esposito (Relazioni Clienti) — ~6h su progetti → ~32h interne
-    {"id": "T059", "progetto_id": "P010", "nome": "Gestione relazioni clienti correnti",  "fase": "Gestione",       "ore_stimate": 1100, "data_inizio": datetime(2025, 9, 1),  "data_fine": datetime(2026, 6, 30),  "stato": "In corso",    "profilo_richiesto": "Relazioni Clienti",     "dipendente_id": "D007", "predecessore": None},
+    # Cosimo Pacifico (Manager HR)
+    {"id": "T055", "progetto_id": "P010", "nome": "Gestione presenze e contratti",        "fase": "Gestione",       "ore_stimate": 860,  "data_inizio": datetime(2025, 9, 1),  "data_fine": datetime(2026, 6, 30),  "stato": "In corso",    "profilo_richiesto": "Manager HR",            "dipendente_id": "D012", "predecessore": None},
+    {"id": "T056", "progetto_id": "P010", "nome": "Formazione e onboarding",              "fase": "Gestione",       "ore_stimate": 430,  "data_inizio": datetime(2025, 9, 1),  "data_fine": datetime(2026, 6, 30),  "stato": "In corso",    "profilo_richiesto": "Manager HR",            "dipendente_id": "D012", "predecessore": None},
+    {"id": "T057", "progetto_id": "P010", "nome": "Selezione e recruiting",               "fase": "Gestione",       "ore_stimate": 430,  "data_inizio": datetime(2025, 9, 1),  "data_fine": datetime(2026, 6, 30),  "stato": "In corso",    "profilo_richiesto": "Manager HR",            "dipendente_id": "D012", "predecessore": None},
 
-    # Daniele Barbieri (Amministrativo) — ~4h su progetti → ~34h interne
-    {"id": "T060", "progetto_id": "P010", "nome": "Amministrazione corrente e fatturazione","fase": "Amministrazione","ore_stimate": 1200, "data_inizio": datetime(2025, 9, 1),  "data_fine": datetime(2026, 6, 30),  "stato": "In corso",    "profilo_richiesto": "Amministrativo",        "dipendente_id": "D011", "predecessore": None},
+    # Responsabile amministrazione
+    {"id": "T058", "progetto_id": "P010", "nome": "Controllo gestione e reporting",       "fase": "Amministrazione","ore_stimate": 1200, "data_inizio": datetime(2025, 9, 1),  "data_fine": datetime(2026, 6, 30),  "stato": "In corso",    "profilo_richiesto": "Responsabile amministrazione","dipendente_id": "D013", "predecessore": None},
 
-    # Carolina Fabbri (Amministrativo part-time 24h) — ~1h su progetti → ~22h interne
-    {"id": "T061", "progetto_id": "P010", "nome": "Documentazione e archivio",            "fase": "Amministrazione","ore_stimate": 500,  "data_inizio": datetime(2025, 9, 1),  "data_fine": datetime(2026, 6, 30),  "stato": "In corso",    "profilo_richiesto": "Amministrativo",        "dipendente_id": "D012", "predecessore": None},
+    # Daniele Tagliabue (Addetto amministrazione)
+    {"id": "T059", "progetto_id": "P010", "nome": "Amministrazione corrente e fatturazione","fase": "Amministrazione","ore_stimate": 1000, "data_inizio": datetime(2025, 9, 1),  "data_fine": datetime(2026, 6, 30),  "stato": "In corso",    "profilo_richiesto": "Addetto amministrazione","dipendente_id": "D015", "predecessore": None},
 
-    # Andrea Pellegrini (Commerciale) — ~14h su progetti → ~24h interne
-    {"id": "T062", "progetto_id": "P010", "nome": "Scouting bandi e networking",          "fase": "Vendita",        "ore_stimate": 860,  "data_inizio": datetime(2025, 9, 1),  "data_fine": datetime(2026, 6, 30),  "stato": "In corso",    "profilo_richiesto": "Commerciale/Pre-sales", "dipendente_id": "D005", "predecessore": None},
+    # Carolina Jori (Addetto amministrazione part-time 20h)
+    {"id": "T060", "progetto_id": "P010", "nome": "Documentazione e archivio",            "fase": "Amministrazione","ore_stimate": 400,  "data_inizio": datetime(2025, 9, 1),  "data_fine": datetime(2026, 6, 30),  "stato": "In corso",    "profilo_richiesto": "Addetto amministrazione","dipendente_id": "D014", "predecessore": None},
 
-    # Tetiana Kovalenko (Consulente Operativo) — ~18h su progetti → ~20h interne
-    {"id": "T063", "progetto_id": "P010", "nome": "Coordinamento filiale sud",            "fase": "Gestione",       "ore_stimate": 700,  "data_inizio": datetime(2025, 9, 1),  "data_fine": datetime(2026, 6, 30),  "stato": "In corso",    "profilo_richiesto": "Consulente Operativo",  "dipendente_id": "D009", "predecessore": None},
+    # Andrea Morstabilini (Senior Consultant/PM)
+    {"id": "T061", "progetto_id": "P010", "nome": "Scouting bandi e networking",          "fase": "Vendita",        "ore_stimate": 500,  "data_inizio": datetime(2025, 9, 1),  "data_fine": datetime(2026, 6, 30),  "stato": "In corso",    "profilo_richiesto": "Senior Consultant",     "dipendente_id": "D005", "predecessore": None},
 
-    # Elena Ferrara (Tecnico Junior) — ~17h su progetti → ~20h interne
-    {"id": "T064", "progetto_id": "P010", "nome": "Formazione tecnica e autoapprendimento","fase": "Gestione",      "ore_stimate": 700,  "data_inizio": datetime(2025, 9, 1),  "data_fine": datetime(2026, 6, 30),  "stato": "In corso",    "profilo_richiesto": "Tecnico Junior",        "dipendente_id": "D004", "predecessore": None},
+    # Tetiana Matveichuk (Consultant)
+    {"id": "T062", "progetto_id": "P010", "nome": "Coordinamento e supporto interno",     "fase": "Gestione",       "ore_stimate": 500,  "data_inizio": datetime(2025, 9, 1),  "data_fine": datetime(2026, 6, 30),  "stato": "In corso",    "profilo_richiesto": "Consultant",            "dipendente_id": "D009", "predecessore": None},
 
-    # Marco Vietti (PM) — ~20h su progetti → ~18h interne
-    {"id": "T065", "progetto_id": "P010", "nome": "Riunioni interne e coordinamento PM",  "fase": "Gestione",       "ore_stimate": 640,  "data_inizio": datetime(2025, 9, 1),  "data_fine": datetime(2026, 6, 30),  "stato": "In corso",    "profilo_richiesto": "Project Manager",       "dipendente_id": "D010", "predecessore": None},
+    # Helena Ullah (IT Consultant)
+    {"id": "T063", "progetto_id": "P010", "nome": "Formazione tecnica e autoapprendimento","fase": "Gestione",      "ore_stimate": 500,  "data_inizio": datetime(2025, 9, 1),  "data_fine": datetime(2026, 6, 30),  "stato": "In corso",    "profilo_richiesto": "IT Consultant",         "dipendente_id": "D004", "predecessore": None},
 
-    # Luca Martinelli (Tecnico Senior) — già ~72% su progetti → aggiungere formazione
-    {"id": "T066", "progetto_id": "P010", "nome": "Aggiornamento certificazioni e studio","fase": "Gestione",       "ore_stimate": 300,  "data_inizio": datetime(2025, 9, 1),  "data_fine": datetime(2026, 6, 30),  "stato": "In corso",    "profilo_richiesto": "Tecnico Senior",        "dipendente_id": "D002", "predecessore": None},
+    # Nicola Coccorese (Consultant)
+    {"id": "T064", "progetto_id": "P010", "nome": "Supporto analisi e documentazione",    "fase": "Gestione",       "ore_stimate": 600,  "data_inizio": datetime(2025, 9, 1),  "data_fine": datetime(2026, 6, 30),  "stato": "In corso",    "profilo_richiesto": "Consultant",            "dipendente_id": "D010", "predecessore": None},
 
-    # Stefano Colombo (Tecnico Senior) — già ~107% su progetti → solo formazione minima
-    {"id": "T067", "progetto_id": "P010", "nome": "Formazione interna e knowledge sharing","fase": "Gestione",      "ore_stimate": 86,   "data_inizio": datetime(2025, 9, 1),  "data_fine": datetime(2026, 6, 30),  "stato": "In corso",    "profilo_richiesto": "Tecnico Senior",        "dipendente_id": "D003", "predecessore": None},
+    # Ludovica Di Cianni (Consultant - stage IA)
+    {"id": "T065", "progetto_id": "P010", "nome": "Sviluppo GANTT Agent e progetti IA",   "fase": "Sviluppo",       "ore_stimate": 700,  "data_inizio": datetime(2025, 9, 1),  "data_fine": datetime(2026, 6, 30),  "stato": "In corso",    "profilo_richiesto": "Consultant",            "dipendente_id": "D011", "predecessore": None},
 
-    # Paolo Santoro (Consulente Operativo) — già ~108% su progetti → solo formazione minima
-    {"id": "T068", "progetto_id": "P010", "nome": "Aggiornamento ARIS e formazione",      "fase": "Gestione",       "ore_stimate": 86,   "data_inizio": datetime(2025, 9, 1),  "data_fine": datetime(2026, 6, 30),  "stato": "In corso",    "profilo_richiesto": "Consulente Operativo",  "dipendente_id": "D008", "predecessore": None},
+    # Roberto Pezzuto (Manager IT)
+    {"id": "T066", "progetto_id": "P010", "nome": "Architettura e aggiornamento tecnico",  "fase": "Gestione",       "ore_stimate": 200,  "data_inizio": datetime(2025, 9, 1),  "data_fine": datetime(2026, 6, 30),  "stato": "In corso",    "profilo_richiesto": "Manager IT",            "dipendente_id": "D002", "predecessore": None},
+
+    # Davide Guidi (Senior IT Consultant)
+    {"id": "T067", "progetto_id": "P010", "nome": "Formazione interna e knowledge sharing","fase": "Gestione",      "ore_stimate": 86,   "data_inizio": datetime(2025, 9, 1),  "data_fine": datetime(2026, 6, 30),  "stato": "In corso",    "profilo_richiesto": "Senior IT Consultant",  "dipendente_id": "D003", "predecessore": None},
+
+    # Fausto Garzillo (Senior Consultant)
+    {"id": "T068", "progetto_id": "P010", "nome": "Aggiornamento metodologie e formazione","fase": "Gestione",       "ore_stimate": 86,   "data_inizio": datetime(2025, 9, 1),  "data_fine": datetime(2026, 6, 30),  "stato": "In corso",    "profilo_richiesto": "Senior Consultant",     "dipendente_id": "D008", "predecessore": None},
+
+    # Carolina Coccorese (Senior Consultant/PM)
+    {"id": "T069", "progetto_id": "P010", "nome": "Coordinamento interno e riunioni",      "fase": "Gestione",       "ore_stimate": 400,  "data_inizio": datetime(2025, 9, 1),  "data_fine": datetime(2026, 6, 30),  "stato": "In corso",    "profilo_richiesto": "Senior Consultant",     "dipendente_id": "D007", "predecessore": None},
+
+    # Paolo Di Prizio (Senior Consultant/PM)
+    {"id": "T070", "progetto_id": "P010", "nome": "Analisi rischi e compliance interna",   "fase": "Gestione",       "ore_stimate": 300,  "data_inizio": datetime(2025, 9, 1),  "data_fine": datetime(2026, 6, 30),  "stato": "In corso",    "profilo_richiesto": "Senior Consultant",     "dipendente_id": "D006", "predecessore": None},
 ])
 
 TASKS = TASKS.fillna({"predecessore": ""})
@@ -319,7 +325,7 @@ TASKS = TASKS.fillna({"predecessore": ""})
 def genera_consuntivi():
     """Genera consuntivi settimanali realistici con buchi."""
     records = []
-    oggi = datetime(2026, 3, 9)
+    oggi = datetime.now()
 
     for _, task in TASKS.iterrows():
         if task["stato"] in ["Completato", "In corso"]:
@@ -436,13 +442,13 @@ def get_progetti_dipendente(did):
 
 def _next_task_id():
     existing = TASKS["id"].tolist()
-    nums = [int(tid[1:]) for tid in existing if tid.startswith("T")]
+    nums = [int(tid[1:]) for tid in existing if tid.startswith("T") and tid[1:].isdigit()]
     return f"T{max(nums) + 1:03d}" if nums else "T001"
 
 
 def _next_progetto_id():
     existing = PROGETTI["id"].tolist()
-    nums = [int(pid[1:]) for pid in existing if pid.startswith("P")]
+    nums = [int(pid[1:]) for pid in existing if pid.startswith("P") and pid[1:].isdigit()]
     return f"P{max(nums) + 1:03d}" if nums else "P001"
 
 
@@ -502,7 +508,7 @@ def calcola_impatto_saturazione(task_modifiche, task_nuovi=None):
         if nt.get("dipendente_id"):
             dipendenti_coinvolti.add(nt["dipendente_id"])
 
-    oggi = datetime(2026, 3, 9)
+    oggi = datetime.now()
     risultati_dip = []
     for did in dipendenti_coinvolti:
         if not did:

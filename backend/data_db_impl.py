@@ -165,14 +165,23 @@ def get_progetti_dipendente(did):
 # ══════════════════════════════════════════════════════════════════════
 
 def _next_task_id():
-    existing = TASKS["id"].tolist()
-    nums = [int(tid[1:]) for tid in existing if tid.startswith("T") and tid[1:].isdigit()]
-    return f"T{max(nums) + 1:03d}" if nums else "T001"
+    session = get_session()
+    from sqlalchemy import func
+    max_id = session.query(func.max(Task.id)).scalar()
+    session.close()
+    if max_id and max_id.startswith("T") and max_id[1:].isdigit():
+        return f"T{int(max_id[1:]) + 1:03d}"
+    return "T001"
+
 
 def _next_progetto_id():
-    existing = PROGETTI["id"].tolist()
-    nums = [int(pid[1:]) for pid in existing if pid.startswith("P") and pid[1:].isdigit()]
-    return f"P{max(nums) + 1:03d}" if nums else "P001"
+    session = get_session()
+    from sqlalchemy import func
+    max_id = session.query(func.max(Progetto.id)).scalar()
+    session.close()
+    if max_id and max_id.startswith("P") and max_id[1:].isdigit():
+        return f"P{int(max_id[1:]) + 1:03d}"
+    return "P001"
 
 
 def aggiungi_task(progetto_id, nome, fase, ore_stimate, data_inizio, data_fine,
@@ -256,7 +265,7 @@ def calcola_impatto_saturazione(task_modifiche, task_nuovi=None):
         if nt.get("dipendente_id"):
             dipendenti_coinvolti.add(nt["dipendente_id"])
 
-    oggi = datetime(2026, 3, 9)
+    oggi = datetime.now()
     risultati_dip = []
     for did in dipendenti_coinvolti:
         if not did:
@@ -316,8 +325,6 @@ def calcola_impatto_saturazione(task_modifiche, task_nuovi=None):
 # SEGNALAZIONI PERSISTENTI
 # ══════════════════════════════════════════════════════════════════════
 
-_segn_counter = 3
-
 def get_segnalazioni():
     session = get_session()
     rows = session.query(Segnalazione).order_by(Segnalazione.created_at.desc()).all()
@@ -341,10 +348,15 @@ def get_segnalazioni():
 
 
 def aggiungi_segnalazione(tipo, priorita, dipendente_id, dettaglio):
-    global _segn_counter
-    _segn_counter += 1
-    new_id = f"S{_segn_counter:03d}"
     session = get_session()
+    # Leggi MAX id dal database
+    from sqlalchemy import func
+    max_id = session.query(func.max(Segnalazione.id)).scalar()
+    if max_id and max_id.startswith("S") and max_id[1:].isdigit():
+        next_num = int(max_id[1:]) + 1
+    else:
+        next_num = 1
+    new_id = f"S{next_num:03d}"
     session.add(Segnalazione(
         id=new_id, tipo=tipo, priorita=priorita,
         dipendente_id=dipendente_id, dettaglio=dettaglio,

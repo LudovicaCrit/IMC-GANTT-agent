@@ -1,5 +1,11 @@
 """
 IMC-Group GANTT Agent — Modelli Database (SQLAlchemy)
+Release 1 — Modello Fase consolidato
+
+Gerarchia: Progetto → Fase → Task/Deliverable
+Configurazione: Ruolo, Competenza, FaseStandard
+Autenticazione: Utente con JWT (user/manager)
+
 Funziona con SQLite (sviluppo) e PostgreSQL (produzione).
 Cambiare solo DATABASE_URL per switchare.
 """
@@ -8,14 +14,11 @@ import os
 from datetime import datetime, date
 from sqlalchemy import (
     create_engine, Column, Integer, String, Float, Boolean, Text, Date,
-    DateTime, ForeignKey, UniqueConstraint, CheckConstraint, JSON,
-    Numeric, SmallInteger, Enum as SAEnum,
+    DateTime, ForeignKey, UniqueConstraint, JSON, SmallInteger,
 )
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 
 # ── Configurazione ──
-# SQLite per sviluppo, PostgreSQL per produzione
-# Basta cambiare questa riga:
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///imcgroup.db")
 
 engine = create_engine(DATABASE_URL, echo=False)
@@ -24,18 +27,98 @@ Base = declarative_base()
 
 
 # ══════════════════════════════════════════════════════════════════════
-# MODELLI
+# CONFIGURAZIONE — Entità gestite dalla pagina admin
+# ══════════════════════════════════════════════════════════════════════
+
+class Ruolo(Base):
+    """Ruoli aziendali censiti in Configurazione."""
+    __tablename__ = "ruoli"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    nome = Column(String(80), nullable=False, unique=True)
+    descrizione = Column(Text, nullable=True)
+    attivo = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    dipendenti = relationship("Dipendente", back_populates="ruolo_rel")
+
+
+class Competenza(Base):
+    """Competenze censibili (ARIS, GRC, Python, ecc.). Lista piatta, senza categoria."""
+    __tablename__ = "competenze"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    nome = Column(String(80), nullable=False, unique=True)
+    attivo = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    dipendenti = relationship("DipendentiCompetenze", back_populates="competenza")
+
+
+class DipendentiCompetenze(Base):
+    """Tabella associativa M2M tra Dipendente e Competenza."""
+    __tablename__ = "dipendenti_competenze"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    dipendente_id = Column(String(10), ForeignKey("dipendenti.id", ondelete="CASCADE"), nullable=False)
+    competenza_id = Column(Integer, ForeignKey("competenze.id", ondelete="CASCADE"), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("dipendente_id", "competenza_id", name="uq_dip_comp"),
+    )
+
+    dipendente = relationship("Dipendente", back_populates="competenze_rel")
+    competenza = relationship("Competenza", back_populates="dipendenti")
+
+
+class FaseStandard(Base):
+    """Template di fasi per tipo progetto. Usato per precompilare i GANTT in Pipeline."""
+    __tablename__ = "fasi_standard"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    template_nome = Column(String(80), nullable=False)  # "Template DORA", "Template GRC"
+    fase_nome = Column(String(80), nullable=False)       # "Analisi", "Design"
+    ordine = Column(SmallInteger, nullable=False, default=1)
+    percentuale_ore = Column(Float, nullable=True)        # 25.0 = 25% del budget
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+# ══════════════════════════════════════════════════════════════════════
+# AUTENTICAZIONE
+# ══════════════════════════════════════════════════════════════════════
+
+class Utente(Base):
+    """Utente per login JWT. Collegato 1:1 a Dipendente."""
+    __tablename__ = "utenti"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    email = Column(String(120), nullable=False, unique=True)
+    password_hash = Column(String(256), nullable=False)
+    ruolo_app = Column(String(20), nullable=False, default="user")  # "user" | "manager"
+    dipendente_id = Column(String(10), ForeignKey("dipendenti.id"), nullable=True)
+    attivo = Column(Boolean, nullable=False, default=True)
+    ultimo_login = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    dipendente = relationship("Dipendente", back_populates="utente")
+
+
+# ══════════════════════════════════════════════════════════════════════
+# ANAGRAFICA
 # ══════════════════════════════════════════════════════════════════════
 
 class Dipendente(Base):
     __tablename__ = "dipendenti"
 
-    id = Column(String(10), primary_key=True)  # "D001", "D002"...
+    id = Column(String(10), primary_key=True)
     nome = Column(String(100), nullable=False)
-    profilo = Column(String(60), nullable=False)
+    profilo = Column(String(60), nullable=False)  # legacy, resta per compatibilità
+    ruolo_id = Column(Integer, ForeignKey("ruoli.id"), nullable=True)
     ore_sett = Column(SmallInteger, nullable=False, default=40)
     costo_ora = Column(Float, nullable=True)
-    competenze = Column(JSON, default=[])
+    competenze = Column(JSON, default=[])  # legacy JSON, le competenze M2M sono in dipendenti_competenze
     sede = Column(String(40), nullable=True)
     email = Column(String(120), nullable=True)
     data_assunzione = Column(Date, nullable=True)
@@ -44,23 +127,31 @@ class Dipendente(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-    # Relazioni
+    ruolo_rel = relationship("Ruolo", back_populates="dipendenti")
+    competenze_rel = relationship("DipendentiCompetenze", back_populates="dipendente")
     assegnazioni = relationship("Assegnazione", back_populates="dipendente")
     consuntivi = relationship("Consuntivo", back_populates="dipendente")
+    utente = relationship("Utente", back_populates="dipendente", uselist=False)
 
+
+# ══════════════════════════════════════════════════════════════════════
+# GERARCHIA — Progetto → Fase → Task/Deliverable
+# ══════════════════════════════════════════════════════════════════════
 
 class Progetto(Base):
     __tablename__ = "progetti"
 
-    id = Column(String(10), primary_key=True)  # "P001", "P002"...
+    id = Column(String(10), primary_key=True)
     nome = Column(String(150), nullable=False)
     cliente = Column(String(150), nullable=True)
     stato = Column(String(30), nullable=False, default="In esecuzione")
     tipo = Column(String(20), nullable=False, default="progetto")
     priorita = Column(String(10), nullable=False, default="media")
+    ritardabilita = Column(String(10), nullable=True, default="media")
     data_inizio = Column(Date, nullable=True)
     data_fine = Column(Date, nullable=True)
     budget_ore = Column(Integer, nullable=True)
+    giornate_vendute = Column(Float, nullable=True)
     valore_contratto = Column(Float, nullable=True)
     descrizione = Column(Text, nullable=True)
     fase_corrente = Column(String(80), nullable=True)
@@ -73,21 +164,50 @@ class Progetto(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-    # Relazioni
+    fasi = relationship("Fase", back_populates="progetto", cascade="all, delete-orphan",
+                        order_by="Fase.ordine")
     task = relationship("Task", back_populates="progetto", cascade="all, delete-orphan")
 
 
+class Fase(Base):
+    """Fase di un progetto. Le ore nascono qui, i deliverable le dettagliano."""
+    __tablename__ = "fasi"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    progetto_id = Column(String(10), ForeignKey("progetti.id", ondelete="CASCADE"), nullable=False)
+    nome = Column(String(100), nullable=False)
+    ordine = Column(SmallInteger, nullable=False, default=1)
+    data_inizio = Column(Date, nullable=True)
+    data_fine = Column(Date, nullable=True)
+    ore_vendute = Column(Float, nullable=True)
+    ore_pianificate = Column(Float, nullable=True)
+    stato = Column(String(20), nullable=False, default="Da iniziare")
+    note = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    progetto = relationship("Progetto", back_populates="fasi")
+    task = relationship("Task", back_populates="fase_rel", cascade="all, delete-orphan",
+                        order_by="Task.ordine")
+
+
 class Task(Base):
+    """Task/Deliverable dentro una fase. Unità operativa."""
     __tablename__ = "task"
 
-    id = Column(String(10), primary_key=True)  # "T001", "T002"...
+    id = Column(String(10), primary_key=True)
     progetto_id = Column(String(10), ForeignKey("progetti.id", ondelete="CASCADE"), nullable=False)
+    fase_id = Column(Integer, ForeignKey("fasi.id", ondelete="SET NULL"), nullable=True)
     nome = Column(String(200), nullable=False)
-    fase = Column(String(60), nullable=True)
-    ore_stimate = Column(Integer, nullable=True)
+    fase = Column(String(60), nullable=True)  # legacy stringa
+    ore_stimate = Column(Integer, nullable=True)        # "Iniziale"
+    ore_consumate = Column(Float, nullable=True, default=0)
+    ore_rimanenti = Column(Float, nullable=True)
+    ore_pianificate = Column(Float, nullable=True)
     data_inizio = Column(Date, nullable=True)
     data_fine = Column(Date, nullable=True)
     stato = Column(String(20), nullable=False, default="Da iniziare")
+    motivo_blocco = Column(Text, nullable=True)  # "Perché?" quando Bloccato/In ritardo
     profilo_richiesto = Column(String(60), nullable=True)
     predecessore = Column(String(10), nullable=True, default="")
     ordine = Column(SmallInteger, nullable=True)
@@ -95,15 +215,16 @@ class Task(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-    # Relazioni
     progetto = relationship("Progetto", back_populates="task")
+    fase_rel = relationship("Fase", back_populates="task")
     assegnazioni = relationship("Assegnazione", back_populates="task", cascade="all, delete-orphan")
     consuntivi = relationship("Consuntivo", back_populates="task")
-
-    # Campo legacy per compatibilità con data.py
-    # In futuro le assegnazioni saranno SOLO nella tabella assegnazioni
     dipendente_id = Column(String(10), ForeignKey("dipendenti.id"), nullable=True)
 
+
+# ══════════════════════════════════════════════════════════════════════
+# RELAZIONI OPERATIVE
+# ══════════════════════════════════════════════════════════════════════
 
 class Assegnazione(Base):
     __tablename__ = "assegnazioni"
@@ -119,7 +240,6 @@ class Assegnazione(Base):
         UniqueConstraint("task_id", "dipendente_id", name="uq_assegnazione"),
     )
 
-    # Relazioni
     task = relationship("Task", back_populates="assegnazioni")
     dipendente = relationship("Dipendente", back_populates="assegnazioni")
 
@@ -134,7 +254,7 @@ class Consuntivo(Base):
     ore_dichiarate = Column(Float, nullable=False, default=0)
     compilato = Column(Boolean, nullable=False, default=False)
     data_compilazione = Column(DateTime, nullable=True)
-    modalita = Column(String(10), nullable=True)  # "sede" / "remoto"
+    modalita = Column(String(10), nullable=True)
     motivo_fermo = Column(String(120), nullable=True)
     sottotask_nota = Column(Text, nullable=True)
     nota = Column(Text, nullable=True)
@@ -144,10 +264,13 @@ class Consuntivo(Base):
         UniqueConstraint("task_id", "dipendente_id", "settimana", name="uq_consuntivo"),
     )
 
-    # Relazioni
     task = relationship("Task", back_populates="consuntivi")
     dipendente = relationship("Dipendente", back_populates="consuntivi")
 
+
+# ══════════════════════════════════════════════════════════════════════
+# SUPPORTO
+# ══════════════════════════════════════════════════════════════════════
 
 class Segnalazione(Base):
     __tablename__ = "segnalazioni"
