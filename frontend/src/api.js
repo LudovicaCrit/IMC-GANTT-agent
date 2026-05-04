@@ -15,6 +15,11 @@ export async function fetchProgetti() {
   return res.json();
 }
 
+export async function fetchBilanciamento() {
+  const res = await fetch(`${API_BASE}/risorse/suggerisci-bilanciamento`);
+  return res.json();
+}
+
 export async function fetchTasks(progettoId = null, profilo = null) {
   const params = new URLSearchParams();
   if (progettoId) params.set('progetto_id', progettoId);
