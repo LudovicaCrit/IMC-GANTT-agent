@@ -16,3 +16,17 @@ ex_pages/
 Thumbs.db
 HANDOFF.md
 NOTE_AFFINAMENTO.md
+
+# Database locale (ricreato da seed)
+*.db
+*.db-journal
+
+# Cookies dei test (contengono JWT validi)
+cookies_*.txt
+
+# Backup db (PII dipendenti)
+*.bak_*
+*.backup
+
+# Appunti personali sviluppo
+frontend/tasks.md
