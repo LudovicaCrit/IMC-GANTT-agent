@@ -1152,7 +1152,7 @@ class ApplicaRequest(BaseModel):
     cambia_stato_progetto: str = ""  # es. "In esecuzione"
 
 
-@app.post("/api/task/anteprima-impatto")
+@app.post("/api/tasks/anteprima-impatto")
 def anteprima_impatto(req: AnteprimaRequest, _: Utente = Depends(require_manager)):
     """
     Calcola l'impatto delle modifiche proposte SENZA applicarle.
@@ -1221,7 +1221,7 @@ def anteprima_impatto(req: AnteprimaRequest, _: Utente = Depends(require_manager
     }
 
 
-@app.post("/api/task/applica")
+@app.post("/api/tasks/applica")
 def applica_modifiche(req: ApplicaRequest, _: Utente = Depends(require_manager)):
     """
     Applica le modifiche ai dati reali.

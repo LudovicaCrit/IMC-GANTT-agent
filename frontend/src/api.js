@@ -216,11 +216,11 @@ export async function fetchSegnalazioni() {
 }
 
 export async function anteprimaImpatto(data) {
-  return apiFetch(`${API_BASE}/task/anteprima-impatto`, { method: 'POST', body: data });
+  return apiFetch(`${API_BASE}/tasks/anteprima-impatto`, { method: 'POST', body: data });
 }
 
 export async function applicaModifiche(data) {
-  return apiFetch(`${API_BASE}/task/applica`, { method: 'POST', body: data });
+  return apiFetch(`${API_BASE}/tasks/applica`, { method: 'POST', body: data });
 }
 
 // ═════════════════════════════════════════════════════════════════════════
