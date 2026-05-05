@@ -109,7 +109,7 @@ function MainLayout() {
                   aria-label="Online"
                 />
                 <p className="text-xs font-medium truncate" style={{ color: '#e2e8f0' }} title={user?.email}>
-                  {user?.email}
+                  {user?.nome || user?.email}
                 </p>
               </div>
               <p className="text-[10px] uppercase tracking-wider text-gray-500 mt-1 ml-3.5">
@@ -133,7 +133,7 @@ function MainLayout() {
           // Versione compatta quando collapsed: solo bottone logout con icona
           <button
             onClick={logout}
-            title={`Logout (${user?.email})`}
+            title={`Logout (${user?.nome || user?.email})`}
             className="mx-2 mb-3 p-2 rounded-lg text-gray-400 hover:text-gray-200 hover:bg-white/[0.03] transition-colors flex items-center justify-center"
           >
             <span className="text-base">↪</span>

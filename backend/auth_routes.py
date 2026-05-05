@@ -66,6 +66,7 @@ class UserResponse(BaseModel):
     email: str
     ruolo_app: str
     dipendente_id: str | None
+    nome: str | None  # ← nome dipendente collegato (Helena Ullah, ecc.)
 
 
 # ══════════════════════════════════════════════════════════════
@@ -79,6 +80,22 @@ def get_db():
         yield db
     finally:
         db.close()
+
+
+def _user_to_response(user: Utente) -> UserResponse:
+    """
+    Trasforma un'istanza Utente in UserResponse, includendo il nome
+    del dipendente collegato (se presente). Centralizza la logica
+    di esposizione utente, riutilizzata da /login e /me.
+    """
+    nome = user.dipendente.nome if user.dipendente else None
+    return UserResponse(
+        id=user.id,
+        email=user.email,
+        ruolo_app=user.ruolo_app,
+        dipendente_id=user.dipendente_id,
+        nome=nome,
+    )
 
 
 # ══════════════════════════════════════════════════════════════
@@ -140,12 +157,7 @@ def login(
         path="/",
     )
 
-    return UserResponse(
-        id=user.id,
-        email=user.email,
-        ruolo_app=user.ruolo_app,
-        dipendente_id=user.dipendente_id,
-    )
+    return _user_to_response(user)
 
 
 @router.get("/me", response_model=UserResponse)
@@ -154,12 +166,7 @@ def me(current_user: Utente = Depends(get_current_user)):
     Restituisce l'utente corrente. La dependency get_current_user gestisce
     autenticazione, decodifica JWT, ricerca db e errori 401.
     """
-    return UserResponse(
-        id=current_user.id,
-        email=current_user.email,
-        ruolo_app=current_user.ruolo_app,
-        dipendente_id=current_user.dipendente_id,
-    )
+    return _user_to_response(current_user)
 
 
 @router.post("/logout")
