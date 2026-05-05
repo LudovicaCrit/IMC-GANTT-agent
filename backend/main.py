@@ -15,6 +15,9 @@ from routes.progetti import router as progetti_router
 from routes.economia import router as economia_router
 from routes.risorse import router as risorse_router
 from routes.gantt import router as gantt_router
+from routes.segnalazioni import router as segnalazioni_router
+from routes.pianificazione import router as pianificazione_router
+from routes.consuntivi import router as consuntivi_router
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
@@ -64,6 +67,9 @@ app.include_router(progetti_router)
 app.include_router(economia_router)
 app.include_router(risorse_router)
 app.include_router(gantt_router)
+app.include_router(segnalazioni_router)
+app.include_router(pianificazione_router)
+app.include_router(consuntivi_router)
 
 # CORS per permettere al frontend React di chiamare il backend
 app.add_middleware(
@@ -788,168 +794,6 @@ def agent_chat(
     }
 
 
-@app.get("/api/segnalazioni")
-def lista_segnalazioni(_: Utente = Depends(require_manager)):
-    """Restituisce tutte le segnalazioni raccolte."""
-    if PERSISTENT_MODE:
-        return get_segnalazioni()
-    return SEGNALAZIONI_STORE
-
-
-# ══════════════════════════════════════════════════════════════
-# AGGIUNGI QUESTO ENDPOINT in main.py (vicino agli altri endpoint consuntivi)
-# ══════════════════════════════════════════════════════════════
- 
-@app.get("/api/consuntivi/settimana")
-def consuntivi_settimana_corrente(_: Utente = Depends(require_manager)):
-    """Restituisce i consuntivi della settimana corrente per tutti i dipendenti.
-    Vista MANAGER-ONLY (riepilogo aziendale). 
-    Per la vista utente personale vedi /api/consuntivi/me."""
-    from datetime import timedelta, datetime as dt_now
-    lun = dt_now.now() - timedelta(days=dt_now.now().weekday())
-    lun_date = lun.date() if hasattr(lun, 'date') else lun
- 
-    consuntivi = _CONSUNTIVI()
-    if consuntivi.empty:
-        return []
- 
-    # Filtra per settimana corrente
-    ven_date = lun_date + timedelta(days=6)
-    cons_sett = consuntivi[consuntivi["settimana"].apply(
-    lambda x: lun_date <= (x.date() if hasattr(x, 'date') else x) <= ven_date
-)]
- 
-    # Raggruppa per dipendente
-    risultato = []
-    for did in cons_sett["dipendente_id"].unique():
-        try:
-            dip = get_dipendente(did)
-        except:
-            continue
-        cons_dip = cons_sett[cons_sett["dipendente_id"] == did]
-        ore_per_task = []
-        totale = 0
-        for _, c in cons_dip.iterrows():
-            if c["ore_dichiarate"] > 0:
-                # Trova nome task e progetto
-                task_row = _TASKS()[_TASKS()["id"] == c["task_id"]]
-                if not task_row.empty:
-                    t = task_row.iloc[0]
-                    proj = _PROGETTI()[_PROGETTI()["id"] == t["progetto_id"]]
-                    proj_nome = proj.iloc[0]["nome"] if not proj.empty else "?"
-                    ore_per_task.append({
-                        "task_nome": t["nome"],
-                        "progetto": proj_nome,
-                        "ore": float(c["ore_dichiarate"]),
-                    })
-                    totale += float(c["ore_dichiarate"])
- 
-        if ore_per_task:
-            risultato.append({
-                "dipendente_id": did,
-                "nome": dip["nome"],
-                "profilo": dip["profilo"],
-                "ore_contrattuali": int(dip["ore_sett"]),
-                "totale_ore": round(totale, 1),
-                "ore_per_task": ore_per_task,
-                "compilato": True,
-            })
- 
-    # Aggiungi dipendenti che NON hanno compilato
-    for _, d in _DIPENDENTI().iterrows():
-        if d["id"] not in [r["dipendente_id"] for r in risultato]:
-            n_task = len(_TASKS()[
-                (_TASKS()["dipendente_id"] == d["id"]) &
-                (_TASKS()["stato"].isin(["In corso", "Da iniziare"]))
-            ])
-            if n_task > 0:
-                risultato.append({
-                    "dipendente_id": d["id"],
-                    "nome": d["nome"],
-                    "profilo": d["profilo"],
-                    "ore_contrattuali": int(d["ore_sett"]),
-                    "totale_ore": 0,
-                    "ore_per_task": [],
-                    "compilato": False,
-                })
- 
-    return sorted(risultato, key=lambda x: (-x["compilato"], x["nome"]))
-
-
-@app.get("/api/consuntivi/me")
-def consuntivi_settimana_me(current_user: Utente = Depends(get_current_user)):
-    """Restituisce il consuntivo della settimana corrente del SOLO chiamante.
-    Vista PERSONALE per il dipendente loggato (anche manager se vuole vedere se stesso)."""
-    from datetime import timedelta, datetime as dt_now
-    
-    if not current_user.dipendente_id:
-        raise HTTPException(400, "Utente non collegato a un dipendente")
-    
-    lun = dt_now.now() - timedelta(days=dt_now.now().weekday())
-    lun_date = lun.date() if hasattr(lun, 'date') else lun
-    ven_date = lun_date + timedelta(days=6)
-    
-    consuntivi = _CONSUNTIVI()
-    if consuntivi.empty:
-        return _consuntivo_vuoto_per_user(current_user.dipendente_id)
-    
-    # Filtra per dipendente_id del chiamante + settimana corrente
-    cons_user = consuntivi[
-        (consuntivi["dipendente_id"] == current_user.dipendente_id) &
-        (consuntivi["settimana"].apply(
-            lambda x: lun_date <= (x.date() if hasattr(x, 'date') else x) <= ven_date
-        ))
-    ]
-    
-    try:
-        dip = get_dipendente(current_user.dipendente_id)
-    except (IndexError, KeyError):
-        raise HTTPException(404, "Dipendente non trovato")
-    
-    ore_per_task = []
-    totale = 0
-    for _, c in cons_user.iterrows():
-        if c["ore_dichiarate"] > 0:
-            task_row = _TASKS()[_TASKS()["id"] == c["task_id"]]
-            if not task_row.empty:
-                t = task_row.iloc[0]
-                proj = _PROGETTI()[_PROGETTI()["id"] == t["progetto_id"]]
-                proj_nome = proj.iloc[0]["nome"] if not proj.empty else "?"
-                ore_per_task.append({
-                    "task_nome": t["nome"],
-                    "progetto": proj_nome,
-                    "ore": float(c["ore_dichiarate"]),
-                })
-                totale += float(c["ore_dichiarate"])
-    
-    return {
-        "dipendente_id": current_user.dipendente_id,
-        "nome": dip["nome"],
-        "profilo": dip["profilo"],
-        "ore_contrattuali": int(dip["ore_sett"]),
-        "totale_ore": round(totale, 1),
-        "ore_per_task": ore_per_task,
-        "compilato": bool(ore_per_task),
-    }
-
-
-def _consuntivo_vuoto_per_user(dipendente_id: str):
-    """Helper: restituisce un payload 'vuoto' coerente quando non ci sono consuntivi."""
-    try:
-        dip = get_dipendente(dipendente_id)
-    except (IndexError, KeyError):
-        raise HTTPException(404, "Dipendente non trovato")
-    return {
-        "dipendente_id": dipendente_id,
-        "nome": dip["nome"],
-        "profilo": dip["profilo"],
-        "ore_contrattuali": int(dip["ore_sett"]),
-        "totale_ore": 0,
-        "ore_per_task": [],
-        "compilato": False,
-    }
-
-
 # ══════════════════════════════════════════════════════════════════════
 # ENDPOINT: SIMULAZIONI
 # ══════════════════════════════════════════════════════════════════════
@@ -1457,31 +1301,6 @@ class SalvaBozzaRequest(BaseModel):
 BOZZE_STORE = {}
 
 
-@app.post("/api/pianificazione/salva-bozza")
-def salva_bozza(req: SalvaBozzaRequest, _: Utente = Depends(require_manager)):
-    """Salva o aggiorna una bozza di pianificazione."""
-    if PERSISTENT_MODE:
-        salva_bozza_pianificazione(req.progetto_id, req.dati_json)
-    else:
-        BOZZE_STORE[req.progetto_id] = {
-            "progetto_id": req.progetto_id,
-            "dati_json": req.dati_json,
-            "timestamp": get_oggi().strftime("%Y-%m-%d %H:%M"),
-        }
-    return {"salvato": True, "progetto_id": req.progetto_id}
-
-
-@app.get("/api/pianificazione/bozza/{progetto_id}")
-def carica_bozza(progetto_id: str, _: Utente = Depends(require_manager)):
-    """Carica una bozza di pianificazione salvata."""
-    if PERSISTENT_MODE:
-        dati = carica_bozza_pianificazione(progetto_id)
-        return {"progetto_id": progetto_id, "dati_json": dati}
-    if progetto_id in BOZZE_STORE:
-        return BOZZE_STORE[progetto_id]
-    return {"progetto_id": progetto_id, "dati_json": None}
-
-
 # ══════════════════════════════════════════════════════════════════════
 # ENDPOINT: SALVA CONSUNTIVO
 # ══════════════════════════════════════════════════════════════════════
@@ -1496,40 +1315,6 @@ class SalvaConsuntivoRequest(BaseModel):
     tipo_assenza: str = ""
     nota_assenza: str = ""
     spese: list[dict] = []
-
-
-@app.post("/api/consuntivi/salva")
-def salva_consuntivo_endpoint(
-    req: SalvaConsuntivoRequest,
-    current_user: Utente = Depends(get_current_user),
-):
-    """Salva il consuntivo settimanale di un dipendente."""
-    # user può salvare solo i propri consuntivi
-    if current_user.ruolo_app != "manager" and req.dipendente_id != current_user.dipendente_id:
-        raise HTTPException(403, "Puoi salvare solo i tuoi consuntivi")
-    
-    try:
-        dip = get_dipendente(req.dipendente_id)
-    except (IndexError, KeyError):
-        raise HTTPException(404, "Dipendente non trovato")
-
-    if PERSISTENT_MODE:
-        ok = salva_consuntivo(
-            dipendente_id=req.dipendente_id,
-            settimana=datetime.now(),
-            ore_per_task=req.ore_per_task,
-            stati_per_task=req.stati_per_task,
-            giorni_sede=req.giorni_sede,
-            giorni_remoto=req.giorni_remoto,
-            ore_assenza=req.ore_assenza,
-            tipo_assenza=req.tipo_assenza,
-            nota_assenza=req.nota_assenza,
-            spese_lista=req.spese if req.spese else None,
-        )
-        return {"salvato": ok, "dipendente": dip["nome"]}
-    else:
-        # Fallback: non salva ma conferma
-        return {"salvato": True, "dipendente": dip["nome"], "nota": "Dati non persistenti (db non attivo)"}
 
 
 # ══════════════════════════════════════════════════════════════════════
