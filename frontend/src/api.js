@@ -272,7 +272,7 @@ export async function exportGanttPdf(progettoId = null) {
 // ═════════════════════════════════════════════════════════════════════════
 
 export async function interpretaScenario(testo, contesto_extra = '') {
-  return apiFetch(`${API_BASE}/scenario/interpreta`, {
+  return apiFetch(`${API_BASE}/agent/interpreta-scenario`, {
     method: 'POST',
     body: { testo, contesto_extra },
   });

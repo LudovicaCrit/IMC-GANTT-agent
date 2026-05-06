@@ -5,22 +5,21 @@ backend/routes/agent.py — Router per endpoint /api/agent (IA Gemini)
 
 SCOPO
 ─────
-Espone i 5 endpoint REST che mediano il dialogo tra il frontend e
-Gemini 2.5 Flash. Il modulo si occupa SOLO della parte HTTP: validazione,
-auth, orchestrazione delle chiamate a Gemini, parsing della risposta.
+Espone i 6 endpoint REST che mediano il dialogo tra il frontend e
+Gemini 2.5 Flash. Concentra tutta l'interfaccia HTTP-IA in un unico
+file: chiunque cerchi "endpoint che chiamano l'IA" trova qui tutto.
 
 La logica Gemini (init, prompt loader, chiamata bloccante, helper
 `costruisci_contesto`) vive in `backend/agent.py` (modulo di servizio,
-non da confondere con questo router). Questa è una separation of concerns
-classica:
+non da confondere con questo router).
 
-  Frontend
-     ↓ HTTP
-  routes/agent.py    ← endpoint REST con auth, validazione, parsing
-     ↓ chiama
-  agent.py           ← wrapper Gemini con logica di chiamata
-     ↓ HTTPS
-  Gemini API
+Frontend
+   ↓ HTTP
+routes/agent.py    ← endpoint REST con auth, validazione, parsing
+   ↓ chiama
+agent.py           ← wrapper Gemini con logica di chiamata
+   ↓ HTTPS
+Gemini API
 
 ENDPOINT ESPOSTI
 ────────────────
@@ -32,6 +31,7 @@ ENDPOINT ESPOSTI
 │ /api/agent/analisi-gantt                 │ POST     │ require_manager     │
 │ /api/agent/suggerisci-task               │ POST     │ require_manager     │
 │ /api/agent/verifica-pianificazione       │ POST     │ require_manager     │
+│ /api/agent/interpreta-scenario           │ POST     │ require_manager     │
 └──────────────────────────────────────────┴──────────┴─────────────────────┘
 
 DETTAGLIO ENDPOINT
@@ -71,38 +71,55 @@ DETTAGLIO ENDPOINT
      (task orfani, fasi mancanti, stime irrealistiche, sovraccarichi).
    - Usa il prompt `prompts/verifica_pianificazione.md`.
 
+6. POST /api/agent/interpreta-scenario
+   - Manager-only.
+   - Per Tavolo di Lavoro: il manager scrive in linguaggio naturale ciò
+     che vuole simulare ("se Helena va su DORA al 60% per 3 settimane...")
+     e Gemini traduce in modifiche strutturate per /api/scenario/simula.
+   - Usa il contesto IA completo (tutti i dipendenti + progetti attivi)
+     per ragionare bene.
+   - NON esegue la simulazione — restituisce le modifiche proposte che il
+     frontend mostrerà al management per conferma/modifica.
+   - Usa il prompt `prompts/interpreta_scenario.md`.
+   - Spostato qui da /api/scenario/interpreta il 6 maggio 2026 (vedi
+     STORIA in fondo).
+
 PATTERN AUTH USATI
 ──────────────────
 - AUTH-ONLY (status): chiunque sia loggato.
 - Pattern Y (chat): user può chattare solo per sé stesso. Manager può
   chattare per chiunque.
-- require_manager (gli altri 3): le funzioni di pianificazione/analisi
+- require_manager (gli altri 4): le funzioni di pianificazione/analisi
   sono manageriali per scelta.
 
 NOTE TECNICHE
 ─────────────
 Tutti gli endpoint che chiamano Gemini fanno il classico parsing JSON
-con fallback graceful: se Gemini risponde con testo non parsabile,
-il payload include `{"raw_response": ..., "parse_error": True}` invece
-di crashare. Pattern molto buono, va mantenuto.
+con fallback graceful: se Gemini risponde con testo non parsabile, il
+payload include `{"raw_response": ..., "parse_error": True}` invece di
+crashare. Pattern molto buono, da mantenere.
+
+Helper locali `_DIPENDENTI`, `_PROGETTI`, `_TASKS`, `get_oggi`,
+`get_contesto_ia`. Tutti TODO da estrarre in moduli condivisi.
+
+`get_contesto_ia()` è la funzione (con cache TTL 60s) che produce il
+contesto JSON completo del sistema (dipendenti+progetti attivi), usata
+da interpreta-scenario per ragionare bene. È replicata localmente qui
+e in routes/scenario.py — verrà estratta nel modulo `backend/contesto.py`
+nel commit di pulizia finale del refactoring.
 
 📌 TODO Pulizia DTO orfani: rimuovere da main.py le classi
-ChatRequest, AnalisiRequest, SuggerisciTaskRequest, VerificaPianificazioneRequest
-nel commit dedicato post-refactoring.
+ChatRequest, AnalisiRequest, SuggerisciTaskRequest,
+VerificaPianificazioneRequest, InterpretaRequest nel commit dedicato
+post-refactoring.
 
 📌 TODO Lentezza endpoint /agent/* (vedi handoff v13 sezione F.3):
-   Profilare cause della lentezza percepita:
    - Dimensione contesto inviato (analisi-gantt manda TUTTI i dipendenti +
      TUTTI i progetti attivi → JSON grosso)
    - Modello Gemini 2.5 Flash dovrebbe essere veloce ma valutare
    - Network/latency di Gemini API
    - Streaming response invece di blocking?
-
-📌 TODO `get_contesto_ia()` resta in main.py per ora:
-   Questo router NON usa get_contesto_ia(). I 5 endpoint costruiscono
-   ognuno il proprio contesto custom (specializzato per il task).
-   `get_contesto_ia()` è invece usata da /api/scenario/*, quindi sarà
-   estratta in `backend/contesto.py` quando faremo routes/scenario.py.
+   - Cache contesto: oggi TTL 60s, valutare aumento e invalidazione su _reload()
 
 DIPENDENZE
 ──────────
@@ -114,20 +131,15 @@ DIPENDENZE
 - `deps`: `get_current_user`, `require_manager`.
 - `models`: classe `Utente`.
 
-NOTE TECNICHE
-─────────────
-Helper locali `_DIPENDENTI`, `_PROGETTI`, `_TASKS`, `get_oggi`.
-📌 TODO: estrarre in moduli condivisi (debito comune a tutti i router).
-
-Il fallback `SEGNALAZIONI_STORE` + `_next_segn_id` per modalità non-db
-sta ancora in main.py. Quando il refactoring sarà completo e PostgreSQL
-sarà la fonte di verità unica, si potrà rimuovere il fallback.
-
 STORIA
 ──────
 Estratto da main.py il 6 maggio 2026 nell'ambito del refactoring strangler.
-È il sesto router del refactoring. Restano scenario.py e fasi.py per
-chiudere completamente.
+Inizialmente 5 endpoint; il 6 maggio (sera) è stato aggiunto
+`interpreta-scenario` che era originariamente `/api/scenario/interpreta`.
+Decisione architetturale: tutti gli endpoint che chiamano Gemini
+appartengono semanticamente a "agent", indipendentemente dal contesto
+di business (Consuntivazione, Pipeline, Tavolo di Lavoro). Il prefisso
+URL esplicita questa coerenza. Frontend api.js aggiornato in coerenza.
 ═══════════════════════════════════════════════════════════════════════════
 """
 
@@ -161,6 +173,67 @@ def _TASKS(): return data_module.TASKS
 
 def get_oggi():
     return datetime.now()
+
+
+# ── Cache contesto IA (TODO: estrarre in backend/contesto.py) ────────────
+_contesto_cache = {
+    "data": None,
+    "timestamp": None,
+}
+
+def get_contesto_ia():
+    """Restituisce il contesto per l'IA, ricalcolandolo solo se i dati sono cambiati."""
+    # Invalida cache ogni 60 secondi
+    now = datetime.now()
+    if (_contesto_cache["data"] is not None
+        and _contesto_cache["timestamp"]
+        and (now - _contesto_cache["timestamp"]).seconds < 60):
+        return _contesto_cache["data"]
+
+    # Ricostruisci contesto
+    progetti_ctx = []
+    for _, p in _PROGETTI().iterrows():
+        if p["stato"] not in ("In esecuzione", "In bando"):
+            continue
+        tasks_prog = _TASKS()[_TASKS()["progetto_id"] == p["id"]]
+        tasks_list = []
+        for _, t in tasks_prog.iterrows():
+            dip_nome = get_dipendente(t["dipendente_id"])["nome"] if t["dipendente_id"] else "Non assegnato"
+            tasks_list.append({
+                "id": t["id"], "nome": t["nome"],
+                "assegnato_a": dip_nome,
+                "inizio": t["data_inizio"].strftime("%Y-%m-%d") if t["data_inizio"] else "",
+                "fine": t["data_fine"].strftime("%Y-%m-%d") if t["data_fine"] else "",
+                "ore_stimate": int(t["ore_stimate"]),
+                "stato": t["stato"],
+            })
+        progetti_ctx.append({
+            "id": p["id"], "nome": p["nome"],
+            "cliente": p["cliente"], "stato": p["stato"],
+            "scadenza": p["data_fine"].strftime("%Y-%m-%d") if p["data_fine"] else "",
+            "task": tasks_list,
+        })
+
+    dipendenti_ctx = []
+    for _, d in _DIPENDENTI().iterrows():
+        carico = carico_settimanale_dipendente(d["id"], get_oggi())
+        dipendenti_ctx.append({
+            "id": d["id"], "nome": d["nome"],
+            "profilo": d["profilo"],
+            "ore_sett": int(d["ore_sett"]),
+            "saturazione_pct": round(carico / d["ore_sett"] * 100),
+        })
+
+    contesto = {
+        "data_corrente": get_oggi().strftime("%Y-%m-%d"),
+        "progetti": progetti_ctx,
+        "dipendenti": dipendenti_ctx,
+    }
+
+    _contesto_cache["data"] = contesto
+    _contesto_cache["timestamp"] = now
+
+    return contesto
 
 
 # ── DTO ──────────────────────────────────────────────────────────────────
@@ -199,6 +272,12 @@ class VerificaPianificazioneRequest(BaseModel):
     data_inizio: str = ""
     data_fine: str = ""
     task_pianificati: list[dict] = []
+
+
+class InterpretaRequest(BaseModel):
+    """Richiesta di interpretazione linguaggio naturale → modifiche scenario."""
+    testo: str
+    contesto_extra: str = ""
 
 
 # ── Router ───────────────────────────────────────────────────────────────
@@ -584,6 +663,65 @@ def verifica_pianificazione(
             risultato = json_mod.loads(cleaned)
         except json_mod.JSONDecodeError:
             risultato = {"raw_response": risposta_raw, "parse_error": True}
+
+        return risultato
+
+    except Exception as e:
+        raise HTTPException(500, f"Errore agente: {str(e)}")
+
+
+# ═════════════════════════════════════════════════════════════════════════
+# 6. POST /api/agent/interpreta-scenario — IA per Tavolo di Lavoro
+# ═════════════════════════════════════════════════════════════════════════
+
+@router.post("/interpreta-scenario")
+def interpreta_scenario(req: InterpretaRequest, _: Utente = Depends(require_manager)):
+    """Traduce linguaggio naturale del management in modifiche strutturate.
+
+    Il manager scrive in linguaggio naturale ciò che vuole simulare
+    ("se Helena va su DORA al 60% per 3 settimane..."). Gemini traduce
+    in modifiche strutturate per il successivo /api/scenario/simula.
+
+    NON esegue la simulazione — restituisce le modifiche proposte che il
+    frontend mostrerà al management per conferma/modifica.
+    """
+    model = init_gemini(prompt_file="interpreta_scenario.md")
+    if model is None:
+        raise HTTPException(503, "Agente AI non disponibile")
+
+    contesto = get_contesto_ia()
+    contesto_json = json_mod.dumps(contesto, ensure_ascii=False, indent=2)
+
+    prompt = f"Il management dice:\n\n\"{req.testo}\"\n\n"
+    if req.contesto_extra:
+        prompt += f"Contesto aggiuntivo dal management: {req.contesto_extra}\n\n"
+    prompt += f"Stato attuale del sistema:\n\n```json\n{contesto_json}\n```"
+
+    try:
+        chat = model.start_chat(history=[])
+        response = chat.send_message(prompt)
+        risposta_raw = response.text
+
+        # Pulisci e parsa JSON
+        cleaned = risposta_raw.strip()
+        if cleaned.startswith("```json"):
+            cleaned = cleaned[7:]
+        if cleaned.startswith("```"):
+            cleaned = cleaned[3:]
+        if cleaned.endswith("```"):
+            cleaned = cleaned[:-3]
+        cleaned = cleaned.strip()
+
+        try:
+            risultato = json_mod.loads(cleaned)
+        except json_mod.JSONDecodeError:
+            risultato = {
+                "interpretazione": risposta_raw,
+                "modifiche": [],
+                "domande": "",
+                "note_contesto": "",
+                "parse_error": True,
+            }
 
         return risultato
 
