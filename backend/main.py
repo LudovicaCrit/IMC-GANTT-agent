@@ -172,43 +172,6 @@ def _next_segn_id():
 # ══════════════════════════════════════════════════════════════════════
 # MODELLI REQUEST/RESPONSE
 # ══════════════════════════════════════════════════════════════════════
- 
-class AttivitaInternaRequest(BaseModel):
-    dipendente_id: str
-    nome: str
-    categoria: str = "Formazione"
-    ore_settimanali: int = 4
-    ore_stimate: int = 0
-    data_inizio: str
-    data_fine: str
-    note: str = ""
-
-
-class ChatRequest(BaseModel):
-    dipendente_id: str
-    messaggio: str
-    ore_compilate: dict[str, float] = {}
-    stati_compilati: dict[str, str] = {}
-    ore_assenza: float = 0.0
-    tipo_assenza: str = ""
-    nota_assenza: str = ""
-    spese: list[dict] = []
-    chat_history: list[dict] = []  # [{"role": "user"|"assistant", "content": "..."}]
-
-
-class SimulaRitardoRequest(BaseModel):
-    task_id: str
-    giorni_ritardo: int
-
-
-class RitardoItem(BaseModel):
-    task_id: str
-    giorni_ritardo: int
-
-
-class SimulaRitardoMultiploRequest(BaseModel):
-    ritardi: list[RitardoItem]
-
 
 class SimulaRiassegnaRequest(BaseModel):
     task_id: str
@@ -216,70 +179,13 @@ class SimulaRiassegnaRequest(BaseModel):
 
 
 # ══════════════════════════════════════════════════════════════════════
-# ENDPOINT: ANTEPRIMA IMPATTO + APPLICA MODIFICHE
-# ══════════════════════════════════════════════════════════════════════
-
-class AzioneModifica(BaseModel):
-    task_id: str
-    campo: str           # "data_fine", "data_inizio", "dipendente_id", "ore_stimate", "stato"
-    nuovo_valore: str    # tutto come stringa, il backend converte
-
-
-class NuovoTask(BaseModel):
-    nome: str
-    fase: str = ""
-    ore_stimate: int = 0
-    data_inizio: str = ""        # ISO format
-    data_fine: str = ""          # ISO format
-    profilo_richiesto: str = ""
-    dipendente_id: str = ""
-    predecessore: str = ""
-    stato: str = "Da iniziare"
-
-
-class AnteprimaRequest(BaseModel):
-    """Richiesta di anteprima impatto — non modifica nulla."""
-    modifiche: list[AzioneModifica] = []
-    nuovi_task: list[NuovoTask] = []
-    progetto_id: str = ""        # per nuovi task senza progetto esplicito
-
-
-class ApplicaRequest(BaseModel):
-    """Richiesta di applicazione reale — modifica i dati."""
-    modifiche: list[AzioneModifica] = []
-    nuovi_task: list[NuovoTask] = []
-    progetto_id: str = ""
-    cambia_stato_progetto: str = ""  # es. "In esecuzione"
-
-
-# ══════════════════════════════════════════════════════════════════════
 # ENDPOINT: PIPELINE — SALVA BOZZA PIANIFICAZIONE
 # ══════════════════════════════════════════════════════════════════════
-
-class SalvaBozzaRequest(BaseModel):
-    progetto_id: str
-    dati_json: dict  # snapshot completo della tabella task in pianificazione
 
 
 # Store bozze in memoria (in futuro: database)
 BOZZE_STORE = {}
 
-
-# ══════════════════════════════════════════════════════════════════════
-# ENDPOINT: SALVA CONSUNTIVO
-# ══════════════════════════════════════════════════════════════════════
-
-class SalvaConsuntivoRequest(BaseModel):
-    dipendente_id: str
-    ore_per_task: dict[str, float] = {}
-    stati_per_task: dict[str, str] = {}
-    giorni_sede: int = 3
-    giorni_remoto: int = 2
-    ore_assenza: float = 0
-    tipo_assenza: str = ""
-    nota_assenza: str = ""
-    spese: list[dict] = []
- 
 
 # ══════════════════════════════════════════════════════════════════════
 # AVVIO
