@@ -3,12 +3,9 @@ IMC-Group GANTT Agent — Backend API (FastAPI)
 Espone endpoint REST per il frontend React.
 """
 
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import Optional
-from datetime import datetime
-from scenario_engine import simula_scenario, risultato_per_api, _to_date as scenario_to_date
 from auth_routes import router as auth_router
 from routes.dipendenti import router as dipendenti_router
 from routes.progetti import router as progetti_router
@@ -28,38 +25,7 @@ from routes.fasi import router as fasi_router
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
-from deps import get_current_user, require_manager
-from models import (
-    Ruolo, Competenza, DipendentiCompetenze, FaseStandard, Fase, Utente, get_session, Dipendente,
-)
 
-import data as data_module
-from data import (
-    get_dipendente, get_tasks_progetto, get_progetti_dipendente,
-    carico_settimanale_dipendente, ore_consuntivate_progetto,
-    tasso_compilazione_progetto,
-    aggiungi_task, modifica_task, cambia_stato_progetto,
-    calcola_impatto_saturazione, get_progetto,
-)
-
-# Accesso ai DataFrame sempre via modulo (non copie statiche)
-# Così dopo _reload() vediamo i dati aggiornati
-def _DIPENDENTI(): return data_module.DIPENDENTI
-def _PROGETTI(): return data_module.PROGETTI
-def _TASKS(): return data_module.TASKS
-def _CONSUNTIVI(): return data_module.CONSUNTIVI
-
-# Prova a importare le funzioni persistenti (db mode)
-try:
-    from data import get_segnalazioni, aggiungi_segnalazione
-    from data import salva_bozza_pianificazione, carica_bozza_pianificazione
-    from data import salva_consuntivo
-    PERSISTENT_MODE = True
-except ImportError:
-    PERSISTENT_MODE = False
-from agent import (
-    init_gemini, costruisci_contesto, chiedi_agente, is_agent_available,
-)
 
 app = FastAPI(title="IMC-Group GANTT Agent", version="0.1.0")
 
@@ -94,74 +60,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-def get_oggi():
-    return datetime.now()
 
-# ── Cache contesto per IA ──
-_contesto_cache = {
-    "data": None,
-    "timestamp": None,
-}
+# ══════════════════════════════════════════════════════════════════════
+# STORE FALLBACK PER MODALITÀ NON-DB (LEGACY)
+# 📌 TODO: rimuovere quando PostgreSQL sarà fonte di verità unica
+# ══════════════════════════════════════════════════════════════════════
 
-def get_contesto_ia():
-    """Restituisce il contesto per l'IA, ricalcolandolo solo se i dati sono cambiati."""
-    import json as json_mod
-    
-    # Invalida cache ogni 60 secondi (o dopo modifica dati)
-    now = datetime.now()
-    if (_contesto_cache["data"] is not None 
-        and _contesto_cache["timestamp"] 
-        and (now - _contesto_cache["timestamp"]).seconds < 60):
-        return _contesto_cache["data"]
-    
-    # Ricostruisci contesto
-    progetti_ctx = []
-    for _, p in _PROGETTI().iterrows():
-        if p["stato"] not in ("In esecuzione", "In bando"):
-            continue
-        tasks_prog = _TASKS()[_TASKS()["progetto_id"] == p["id"]]
-        tasks_list = []
-        for _, t in tasks_prog.iterrows():
-            dip_nome = get_dipendente(t["dipendente_id"])["nome"] if t["dipendente_id"] else "Non assegnato"
-            tasks_list.append({
-                "id": t["id"], "nome": t["nome"],
-                "assegnato_a": dip_nome,
-                "inizio": t["data_inizio"].strftime("%Y-%m-%d") if t["data_inizio"] else "",
-                "fine": t["data_fine"].strftime("%Y-%m-%d") if t["data_fine"] else "",
-                "ore_stimate": int(t["ore_stimate"]),
-                "stato": t["stato"],
-            })
-        progetti_ctx.append({
-            "id": p["id"], "nome": p["nome"],
-            "cliente": p["cliente"], "stato": p["stato"],
-            "scadenza": p["data_fine"].strftime("%Y-%m-%d") if p["data_fine"] else "",
-            "task": tasks_list,
-        })
-
-    dipendenti_ctx = []
-    for _, d in _DIPENDENTI().iterrows():
-        carico = carico_settimanale_dipendente(d["id"], get_oggi())
-        dipendenti_ctx.append({
-            "id": d["id"], "nome": d["nome"],
-            "profilo": d["profilo"],
-            "ore_sett": int(d["ore_sett"]),
-            "saturazione_pct": round(carico / d["ore_sett"] * 100),
-        })
-
-    contesto = {
-        "data_corrente": get_oggi().strftime("%Y-%m-%d"),
-        "progetti": progetti_ctx,
-        "dipendenti": dipendenti_ctx,
-    }
-    
-    _contesto_cache["data"] = contesto
-    _contesto_cache["timestamp"] = now
-    
-    return contesto
-
-# ── Store segnalazioni in memoria (in futuro: database) ──
 SEGNALAZIONI_STORE = []
+BOZZE_STORE = {}
 _segn_counter = 0
+
 
 def _next_segn_id():
     global _segn_counter
@@ -170,21 +78,16 @@ def _next_segn_id():
 
 
 # ══════════════════════════════════════════════════════════════════════
-# MODELLI REQUEST/RESPONSE
+# CLASSE DA ANALIZZARE INSIEME (vedi handoff v13 sezione F.1)
+# 📌 SimulaRiassegnaRequest — funzionalità incompleta o futura.
+#    Probabilmente per Tavolo di Lavoro: riassegnare un task a un
+#    altro dipendente per simulare l'impatto. Da analizzare prima
+#    di rimuovere o spostare.
 # ══════════════════════════════════════════════════════════════════════
 
 class SimulaRiassegnaRequest(BaseModel):
     task_id: str
     nuovo_dipendente_id: str
-
-
-# ══════════════════════════════════════════════════════════════════════
-# ENDPOINT: PIPELINE — SALVA BOZZA PIANIFICAZIONE
-# ══════════════════════════════════════════════════════════════════════
-
-
-# Store bozze in memoria (in futuro: database)
-BOZZE_STORE = {}
 
 
 # ══════════════════════════════════════════════════════════════════════

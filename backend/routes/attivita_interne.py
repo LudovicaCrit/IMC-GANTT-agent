@@ -99,13 +99,8 @@ from pydantic import BaseModel
 
 from deps import get_current_user
 from models import Utente
-import data as data_module
 from data import get_dipendente, aggiungi_task, modifica_task
-
-
-# ── Helper locali (TODO: estrarre in moduli condivisi) ───────────────────
-def _PROGETTI(): return data_module.PROGETTI
-def _TASKS(): return data_module.TASKS
+from dataframes import _PROGETTI, _TASKS
 
 
 # ── DTO ──────────────────────────────────────────────────────────────────

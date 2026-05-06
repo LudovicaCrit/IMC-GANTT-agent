@@ -81,17 +81,9 @@ from fastapi import APIRouter, Depends
 
 from deps import require_manager
 from models import Utente
-import data as data_module
 from data import carico_settimanale_dipendente
-
-
-# ── Helper locali (TODO: estrarre in moduli condivisi) ───────────────────
-def _DIPENDENTI(): return data_module.DIPENDENTI
-def _PROGETTI(): return data_module.PROGETTI
-def _TASKS(): return data_module.TASKS
-
-def get_oggi():
-    return datetime.now()
+from dataframes import _DIPENDENTI, _PROGETTI, _TASKS
+from utils import get_oggi
 
 
 # ── Router ───────────────────────────────────────────────────────────────

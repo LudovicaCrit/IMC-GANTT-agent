@@ -72,14 +72,8 @@ from fastapi import APIRouter, Depends
 
 from deps import require_manager
 from models import Utente
-import data as data_module
 from data import get_dipendente
-
-
-# ── Helper locali (TODO: estrarre in moduli condivisi) ───────────────────
-def _PROGETTI(): return data_module.PROGETTI
-def _TASKS(): return data_module.TASKS
-def _CONSUNTIVI(): return data_module.CONSUNTIVI
+from dataframes import _PROGETTI, _TASKS, _CONSUNTIVI
 
 
 # ── Router ───────────────────────────────────────────────────────────────

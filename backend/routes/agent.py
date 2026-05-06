@@ -144,19 +144,19 @@ URL esplicita questa coerenza. Frontend api.js aggiornato in coerenza.
 """
 
 import json as json_mod
-from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from deps import get_current_user, require_manager
 from models import Utente
-import data as data_module
 from data import (
     get_dipendente, carico_settimanale_dipendente, get_progetti_dipendente,
 )
 from agent import (
     init_gemini, costruisci_contesto, chiedi_agente, is_agent_available,
 )
+from dataframes import _DIPENDENTI, _PROGETTI, _TASKS
+from contesto import get_contesto_ia
 
 # Persistenza opzionale per segnalazioni (chat)
 try:
@@ -166,74 +166,11 @@ except ImportError:
     PERSISTENT_MODE = False
 
 
-# ── Helper locali (TODO: estrarre in moduli condivisi) ───────────────────
-def _DIPENDENTI(): return data_module.DIPENDENTI
-def _PROGETTI(): return data_module.PROGETTI
-def _TASKS(): return data_module.TASKS
-
-def get_oggi():
-    return datetime.now()
-
-
 # ── Cache contesto IA (TODO: estrarre in backend/contesto.py) ────────────
 _contesto_cache = {
     "data": None,
     "timestamp": None,
 }
-
-def get_contesto_ia():
-    """Restituisce il contesto per l'IA, ricalcolandolo solo se i dati sono cambiati."""
-    # Invalida cache ogni 60 secondi
-    now = datetime.now()
-    if (_contesto_cache["data"] is not None
-        and _contesto_cache["timestamp"]
-        and (now - _contesto_cache["timestamp"]).seconds < 60):
-        return _contesto_cache["data"]
-
-    # Ricostruisci contesto
-    progetti_ctx = []
-    for _, p in _PROGETTI().iterrows():
-        if p["stato"] not in ("In esecuzione", "In bando"):
-            continue
-        tasks_prog = _TASKS()[_TASKS()["progetto_id"] == p["id"]]
-        tasks_list = []
-        for _, t in tasks_prog.iterrows():
-            dip_nome = get_dipendente(t["dipendente_id"])["nome"] if t["dipendente_id"] else "Non assegnato"
-            tasks_list.append({
-                "id": t["id"], "nome": t["nome"],
-                "assegnato_a": dip_nome,
-                "inizio": t["data_inizio"].strftime("%Y-%m-%d") if t["data_inizio"] else "",
-                "fine": t["data_fine"].strftime("%Y-%m-%d") if t["data_fine"] else "",
-                "ore_stimate": int(t["ore_stimate"]),
-                "stato": t["stato"],
-            })
-        progetti_ctx.append({
-            "id": p["id"], "nome": p["nome"],
-            "cliente": p["cliente"], "stato": p["stato"],
-            "scadenza": p["data_fine"].strftime("%Y-%m-%d") if p["data_fine"] else "",
-            "task": tasks_list,
-        })
-
-    dipendenti_ctx = []
-    for _, d in _DIPENDENTI().iterrows():
-        carico = carico_settimanale_dipendente(d["id"], get_oggi())
-        dipendenti_ctx.append({
-            "id": d["id"], "nome": d["nome"],
-            "profilo": d["profilo"],
-            "ore_sett": int(d["ore_sett"]),
-            "saturazione_pct": round(carico / d["ore_sett"] * 100),
-        })
-
-    contesto = {
-        "data_corrente": get_oggi().strftime("%Y-%m-%d"),
-        "progetti": progetti_ctx,
-        "dipendenti": dipendenti_ctx,
-    }
-
-    _contesto_cache["data"] = contesto
-    _contesto_cache["timestamp"] = now
-
-    return contesto
 
 
 # ── DTO ──────────────────────────────────────────────────────────────────

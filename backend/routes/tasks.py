@@ -105,22 +105,13 @@ from pydantic import BaseModel
 
 from deps import get_current_user, require_manager
 from models import Utente
-import data as data_module
 from data import (
     get_dipendente, get_tasks_progetto,
     aggiungi_task, modifica_task, cambia_stato_progetto,
     calcola_impatto_saturazione,
 )
-
-
-# ── Helper locali (TODO: estrarre in moduli condivisi) ───────────────────
-def _DIPENDENTI(): return data_module.DIPENDENTI
-def _PROGETTI(): return data_module.PROGETTI
-def _TASKS(): return data_module.TASKS
-def _CONSUNTIVI(): return data_module.CONSUNTIVI
-
-def get_oggi():
-    return datetime.now()
+from dataframes import _DIPENDENTI, _PROGETTI, _TASKS, _CONSUNTIVI
+from utils import get_oggi
 
 
 # ── DTO ──────────────────────────────────────────────────────────────────

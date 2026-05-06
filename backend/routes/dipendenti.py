@@ -72,7 +72,6 @@ a Roberto un codice modulare per R2 (settembre 2026).
 ═══════════════════════════════════════════════════════════════════════════
 """
 
-from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException
 
 from deps import get_current_user, require_manager
@@ -81,15 +80,8 @@ import data as data_module
 from data import (
     get_dipendente, get_progetti_dipendente, carico_settimanale_dipendente,
 )
-
-
-# ── Helper locali (TODO: estrarre in moduli condivisi) ───────────────────
-def _DIPENDENTI(): return data_module.DIPENDENTI
-def _PROGETTI(): return data_module.PROGETTI
-def _TASKS(): return data_module.TASKS
-
-def get_oggi():
-    return datetime.now()
+from dataframes import _DIPENDENTI, _PROGETTI, _TASKS
+from utils import get_oggi
 
 
 # ── Router ───────────────────────────────────────────────────────────────

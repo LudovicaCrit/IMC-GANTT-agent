@@ -62,13 +62,8 @@ from fastapi import APIRouter, Depends
 
 from deps import require_manager
 from models import Utente
-import data as data_module
 from data import ore_consuntivate_progetto, tasso_compilazione_progetto
-
-
-# ── Helper locali (TODO: estrarre in moduli condivisi) ───────────────────
-def _PROGETTI(): return data_module.PROGETTI
-def _TASKS(): return data_module.TASKS
+from dataframes import _PROGETTI, _TASKS
 
 
 # ── Router ───────────────────────────────────────────────────────────────

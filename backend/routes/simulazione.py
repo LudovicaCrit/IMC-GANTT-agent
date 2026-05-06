@@ -84,19 +84,15 @@ Estratto da main.py il 5 maggio 2026 nell'ambito del refactoring strangler.
 ═══════════════════════════════════════════════════════════════════════════
 """
 
-from datetime import datetime, timedelta
+from datetime import timedelta
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from deps import require_manager
 from models import Utente
-import data as data_module
 from data import get_dipendente, carico_settimanale_dipendente
-
-
-# ── Helper locali (TODO: estrarre in moduli condivisi) ───────────────────
-def _PROGETTI(): return data_module.PROGETTI
-def _TASKS(): return data_module.TASKS
+from dataframes import _PROGETTI, _TASKS
+from utils import get_oggi
 
 
 # ── DTO ──────────────────────────────────────────────────────────────────

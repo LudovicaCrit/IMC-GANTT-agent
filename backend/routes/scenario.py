@@ -107,24 +107,15 @@ Il prefisso URL esplicita la separazione architetturale:
 ═══════════════════════════════════════════════════════════════════════════
 """
 
-from datetime import datetime
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
 from deps import require_manager
 from models import Utente
-import data as data_module
 from data import get_dipendente, get_progetto, modifica_task
 from scenario_engine import simula_scenario, _to_date
-
-
-# ── Helper locali (TODO: estrarre in moduli condivisi) ───────────────────
-def _DIPENDENTI(): return data_module.DIPENDENTI
-def _PROGETTI(): return data_module.PROGETTI
-def _TASKS(): return data_module.TASKS
-
-def get_oggi():
-    return datetime.now()
+from dataframes import _DIPENDENTI, _PROGETTI, _TASKS
+from utils import get_oggi
 
 
 # ── DTO ──────────────────────────────────────────────────────────────────
