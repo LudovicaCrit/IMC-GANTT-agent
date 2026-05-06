@@ -24,6 +24,7 @@ from routes.attivita_interne import router as attivita_interne_router
 from routes.configurazione import router as configurazione_router
 from routes.agent import router as agent_router
 from routes.scenario import router as scenario_router
+from routes.fasi import router as fasi_router
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
@@ -82,6 +83,7 @@ app.include_router(attivita_interne_router)
 app.include_router(configurazione_router)
 app.include_router(agent_router)
 app.include_router(scenario_router)
+app.include_router(fasi_router)
 
 # CORS per permettere al frontend React di chiamare il backend
 app.add_middleware(
@@ -211,63 +213,6 @@ class SimulaRitardoMultiploRequest(BaseModel):
 class SimulaRiassegnaRequest(BaseModel):
     task_id: str
     nuovo_dipendente_id: str
-
-
-
-@app.post("/api/fasi")
-def crea_fase(req: dict, _: Utente = Depends(require_manager)):
-    session = get_session()
-    fase = Fase(
-        progetto_id=req["progetto_id"],
-        nome=req["nome"],
-        ordine=req.get("ordine", 1),
-        data_inizio=req.get("data_inizio"),
-        data_fine=req.get("data_fine"),
-        ore_vendute=req.get("ore_vendute", 0),
-        stato="Da iniziare",
-    )
-    session.add(fase)
-    session.commit()
-    result = {"id": fase.id, "nome": fase.nome}
-    session.close()
-    return result
-
-
-# ── FASI DI PROGETTO ───────────────────────────────────────────────────
-
-@app.get("/api/fasi/{progetto_id}")
-def lista_fasi_progetto(progetto_id: str, _: Utente = Depends(require_manager)):
-    """Lista fasi di un progetto con totali ore."""
-    session = get_session()
-    fasi = session.query(Fase).filter(Fase.progetto_id == progetto_id).order_by(Fase.ordine).all()
-    result = []
-    for f in fasi:
-        # Calcola ore consumate dai consuntivi dei task in questa fase
-        tasks_fase = session.query(Task).filter(Task.fase_id == f.id).all()
-        task_ids = [t.id for t in tasks_fase]
-        ore_consumate = 0
-        if task_ids:
-            from sqlalchemy import func
-            ore_consumate = session.query(func.coalesce(func.sum(Consuntivo.ore_dichiarate), 0)).filter(
-                Consuntivo.task_id.in_(task_ids)
-            ).scalar()
-
-        result.append({
-            "id": f.id,
-            "nome": f.nome,
-            "ordine": f.ordine,
-            "data_inizio": f.data_inizio.isoformat() if f.data_inizio else None,
-            "data_fine": f.data_fine.isoformat() if f.data_fine else None,
-            "ore_vendute": f.ore_vendute,
-            "ore_pianificate": f.ore_pianificate,
-            "ore_consumate": float(ore_consumate),
-            "ore_rimanenti": (f.ore_vendute or 0) - float(ore_consumate),
-            "stato": f.stato,
-            "n_task": len(tasks_fase),
-            "note": f.note or "",
-        })
-    session.close()
-    return result
 
 
 # ══════════════════════════════════════════════════════════════════════
