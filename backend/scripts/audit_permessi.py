@@ -32,9 +32,9 @@ ROUTES_DIR = BACKEND_DIR / "routes"
 
 # ── Pattern di parsing ──────────────────────────────────────────────────
 # Endpoint da @app.<metodo>("/path") (main.py)
-APP_ENDPOINT_RE = re.compile(r'@app\.(get|post|put|patch|delete)\("([^"]+)"\)')
+APP_ENDPOINT_RE = re.compile(r'@app\.(get|post|put|patch|delete)\("([^"]+)"')
 # Endpoint da @router.<metodo>("/sub_path") (router files)
-ROUTER_ENDPOINT_RE = re.compile(r'@router\.(get|post|put|patch|delete)\("([^"]*)"\)')
+ROUTER_ENDPOINT_RE = re.compile(r'@router\.(get|post|put|patch|delete)\("([^"]*)"')
 # prefix del router: APIRouter(prefix="/api/xxx", ...)
 ROUTER_PREFIX_RE = re.compile(r'APIRouter\([^)]*prefix\s*=\s*"([^"]+)"')
 
