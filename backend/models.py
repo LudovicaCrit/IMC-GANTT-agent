@@ -145,7 +145,12 @@ class Progetto(Base):
     nome = Column(String(150), nullable=False)
     cliente = Column(String(150), nullable=True)
     stato = Column(String(30), nullable=False, default="In esecuzione")
-    tipo = Column(String(20), nullable=False, default="progetto")
+    # tipologia: distingue progetti commerciali da bandi (decisione Francesco 4 mag 2026).
+    # Per i bandi, il modello prevede 3 fasi standard fisse (Monitoraggio, Proposal, PM)
+    # di cui solo PM ha ore vendute. Le ore "a sentimento" (Monitoraggio/Proposal/prevendita)
+    # si consuntivano come "Attività commerciale" sotto Attività Interne.
+    # Era "tipo" con default "progetto" inutilizzato; rinominato per chiarezza.
+    tipologia = Column(String(20), nullable=False, default="ordinario")  # "ordinario" | "bando"
     priorita = Column(String(10), nullable=False, default="media")
     ritardabilita = Column(String(10), nullable=True, default="media")
     data_inizio = Column(Date, nullable=True)
@@ -156,7 +161,10 @@ class Progetto(Base):
     descrizione = Column(Text, nullable=True)
     fase_corrente = Column(String(80), nullable=True)
     sede = Column(String(40), nullable=True)
-    responsabile_id = Column(String(10), ForeignKey("dipendenti.id"), nullable=True)
+    # pm_id: il Project Manager del progetto. FK a Dipendente, nullable.
+    # Era "responsabile_id"; rinominato per coerenza con linguaggio Vincenzo/Francesco
+    # e prep R2 (ABAC: solo il PM potrà modificare il proprio progetto).
+    pm_id = Column(String(10), ForeignKey("dipendenti.id"), nullable=True)
     scadenza_bando = Column(Date, nullable=True)
     motivo_sospensione = Column(Text, nullable=True)
     lezioni_apprese = Column(Text, nullable=True)

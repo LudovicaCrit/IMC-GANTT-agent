@@ -3,11 +3,18 @@ Dati fittizi realistici per il prototipo IMC-Group GANTT Agent.
 Clienti reali, progetti GRC/compliance credibili, 15 dipendenti.
 
 STATI PROGETTO:
-- "In bando"         → si lavora per vincerlo
-- "Vinto - Da pianificare" → bando vinto, serve pianificazione
 - "In esecuzione"    → attivo, persone ci lavorano
+- "Vinto - Da pianificare" → bando vinto, serve pianificazione
 - "Sospeso"          → messo in pausa
 - "Completato"       → chiuso
+
+TIPOLOGIE PROGETTO (decisione Francesco 4 mag 2026):
+- "ordinario"  → progetto commerciale standard
+- "bando"      → bando con 3 fasi standard fisse (Monitoraggio + Proposal + PM)
+
+NB: lo stato "In bando" è stato rimosso il 6 mag 2026.
+Bando è una TIPOLOGIA, non uno stato. I bandi non ancora vinti hanno
+stato "In esecuzione" + tipologia "bando".
 """
 
 import pandas as pd
@@ -52,6 +59,7 @@ PROGETTI = pd.DataFrame([
         "nome": "Adeguamento DORA",
         "cliente": "Sparkasse",
         "stato": "In esecuzione",
+        "tipologia": "ordinario",
         "data_inizio": datetime(2025, 9, 1),
         "data_fine": datetime(2026, 6, 30),
         "budget_ore": 2200,
@@ -64,6 +72,7 @@ PROGETTI = pd.DataFrame([
         "nome": "Framework Compliance 262",
         "cliente": "Reale Mutua",
         "stato": "In esecuzione",
+        "tipologia": "ordinario",
         "data_inizio": datetime(2025, 11, 1),
         "data_fine": datetime(2026, 10, 31),
         "budget_ore": 2800,
@@ -76,6 +85,7 @@ PROGETTI = pd.DataFrame([
         "nome": "Digitalizzazione Corpo Normativo",
         "cliente": "Duferco Energia",
         "stato": "In esecuzione",
+        "tipologia": "ordinario",
         "data_inizio": datetime(2026, 1, 15),
         "data_fine": datetime(2026, 9, 30),
         "budget_ore": 1600,
@@ -88,6 +98,7 @@ PROGETTI = pd.DataFrame([
         "nome": "Risk Assessment Operativo",
         "cliente": "BNP Paribas",
         "stato": "In esecuzione",
+        "tipologia": "ordinario",
         "data_inizio": datetime(2025, 10, 1),
         "data_fine": datetime(2026, 5, 31),
         "budget_ore": 1400,
@@ -100,6 +111,7 @@ PROGETTI = pd.DataFrame([
         "nome": "ProcessBook Aziendale",
         "cliente": "Boggi Milano",
         "stato": "In esecuzione",
+        "tipologia": "ordinario",
         "data_inizio": datetime(2025, 12, 1),
         "data_fine": datetime(2026, 7, 31),
         "budget_ore": 1200,
@@ -114,6 +126,7 @@ PROGETTI = pd.DataFrame([
         "nome": "Piattaforma Antiriciclaggio",
         "cliente": "Banca Popolare di Bari",
         "stato": "Sospeso",
+        "tipologia": "ordinario",
         "data_inizio": datetime(2025, 7, 1),
         "data_fine": datetime(2026, 3, 31),
         "budget_ore": 1800,
@@ -128,6 +141,7 @@ PROGETTI = pd.DataFrame([
         "nome": "Framework ESG Reporting",
         "cliente": "A2A",
         "stato": "Vinto - Da pianificare",
+        "tipologia": "ordinario",
         "data_inizio": datetime(2026, 5, 1),
         "data_fine": datetime(2026, 11, 30),
         "budget_ore": 1000,
@@ -141,7 +155,8 @@ PROGETTI = pd.DataFrame([
         "id": "P008",
         "nome": "Business Continuity Framework",
         "cliente": "ITAS Assicurazioni",
-        "stato": "In bando",
+        "stato": "In esecuzione",
+        "tipologia": "bando",
         "data_inizio": datetime(2026, 7, 1),
         "data_fine": datetime(2027, 3, 31),
         "budget_ore": 1800,
@@ -153,7 +168,8 @@ PROGETTI = pd.DataFrame([
         "id": "P009",
         "nome": "GRC Platform Integration",
         "cliente": "Banco Desio",
-        "stato": "In bando",
+        "stato": "In esecuzione",
+        "tipologia": "bando",
         "data_inizio": datetime(2026, 6, 1),
         "data_fine": datetime(2027, 1, 31),
         "budget_ore": 1500,
@@ -168,6 +184,7 @@ PROGETTI = pd.DataFrame([
         "nome": "Attività Interne",
         "cliente": "IMC-Group",
         "stato": "In esecuzione",
+        "tipologia": "ordinario",
         "data_inizio": datetime(2025, 1, 1),
         "data_fine": datetime(2026, 12, 31),
         "budget_ore": 8000,

@@ -138,6 +138,7 @@ def seed():
             nome=row["nome"],
             cliente=row["cliente"],
             stato=row["stato"],
+            tipologia=row.get("tipologia", "ordinario"),
             data_inizio=row["data_inizio"].date() if hasattr(row["data_inizio"], "date") else row["data_inizio"],
             data_fine=row["data_fine"].date() if hasattr(row["data_fine"], "date") else row["data_fine"],
             budget_ore=int(row["budget_ore"]),
