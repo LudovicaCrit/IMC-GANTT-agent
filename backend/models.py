@@ -12,6 +12,8 @@ Cambiare solo DATABASE_URL per switchare.
 
 import os
 from datetime import datetime, date
+from dotenv import load_dotenv
+load_dotenv()
 from sqlalchemy import (
     create_engine, Column, Integer, String, Float, Boolean, Text, Date,
     DateTime, ForeignKey, UniqueConstraint, JSON, SmallInteger,
