@@ -1,4 +1,40 @@
 """
+═══════════════════════════════════════════════════════════════════════
+data_legacy.py — Dati grezzi per il seed iniziale del database.
+═══════════════════════════════════════════════════════════════════════
+
+NOTA STORICA E SUL NOME (6 mag 2026):
+Il nome "_legacy" è fuorviante per il ruolo attuale del file.
+In origine era la "modalità memoria di fallback": data.py controllava se
+il db era popolato e in caso negativo ricadeva qui per usare DataFrame
+in memoria.
+
+Da quando il sistema gira su PostgreSQL + Alembic + seed.py (6 mag 2026),
+il fallback memoria non viene più attivato a runtime. Il vero ruolo di
+questo file è ora:
+
+    1. Contenere i DataFrame DIPENDENTI, PROGETTI, TASKS, CONSUNTIVI con
+       i dati fittizi iniziali (clienti, dipendenti, progetti credibili,
+       1282 consuntivi distribuiti su settimane).
+    2. Esporre questi DataFrame a seed.py che li legge per popolare il db.
+
+Le 16 funzioni qui dentro (aggiungi_task, modifica_task, ecc.) sono
+ancora chiamabili in modalità memoria, ma in pratica non vengono mai
+invocate, perché data.py importa sempre data_db_impl quando il db è
+popolato.
+
+📌 TODO Blocco 6 (hardening):
+    - Rinominare il file a 'seed_data.py' per riflettere il vero ruolo
+    - Rimuovere le 16 funzioni di scrittura in memoria (legacy non più
+      rilevanti)
+    - Conservare SOLO i DataFrame iniziali
+
+Per ora il file resta com'è: rinominarlo richiede di toccare data.py
+e i 14 router che importano da data, lavoro che si fa con calma in
+fase di hardening, non in mezzo allo sviluppo dei blocchi.
+
+═══════════════════════════════════════════════════════════════════════
+
 Dati fittizi realistici per il prototipo IMC-Group GANTT Agent.
 Clienti reali, progetti GRC/compliance credibili, 15 dipendenti.
 
