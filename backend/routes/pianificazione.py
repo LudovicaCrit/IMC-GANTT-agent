@@ -1,117 +1,75 @@
 """
 ═══════════════════════════════════════════════════════════════════════════
-backend/routes/pianificazione.py — Router per endpoint /api/pianificazione
+backend/routes/pianificazione.py — DEPRECATO (Step 2.0, 13 mag 2026)
 ═══════════════════════════════════════════════════════════════════════════
 
-SCOPO
-─────
-Espone gli endpoint per il salvataggio e caricamento di "bozze di
-pianificazione": stato intermedio della tabella task durante la creazione
-di un nuovo progetto in Pipeline. Permette di chiudere il browser e
-riprendere il lavoro più tardi senza perdere quanto fatto.
+STATO: deprecato. Gli endpoint qui sotto rispondono 410 Gone con un
+messaggio esplicativo che rimanda ai nuovi endpoint progetto.
 
-ENDPOINT ESPOSTI
-────────────────
-┌──────────────────────────────────────────┬──────────┬─────────────────────┐
-│ Path                                     │ Metodo   │ Auth                │
-├──────────────────────────────────────────┼──────────┼─────────────────────┤
-│ /api/pianificazione/salva-bozza          │ POST     │ require_manager     │
-│ /api/pianificazione/bozza/{progetto_id}  │ GET      │ require_manager     │
-└──────────────────────────────────────────┴──────────┴─────────────────────┘
+CONTESTO
+────────
+Fino al 12 maggio 2026, questo router esponeva:
+- POST /api/pianificazione/salva-bozza  → salvava blob JSON in BOZZE_STORE (dict in memoria)
+- GET  /api/pianificazione/bozza/{id}   → leggeva da BOZZE_STORE
 
-DETTAGLIO ENDPOINT
-──────────────────
-1. POST /api/pianificazione/salva-bozza
-   - Manager-only.
-   - Body: {progetto_id: str, dati_json: dict}
-     `dati_json` contiene lo snapshot completo della tabella task
-     (struttura libera: dipende dalla pagina Pipeline frontend).
-   - Persiste in db (tabella `pianificazioni_bozza`) o in memoria.
+Le bozze erano snapshot opachi delle variabili di stato React di Pipeline.jsx
+e AnalisiInterventi.jsx (planFasi, planTasks, nextFaseId, nextTaskId). Lo
+store era in memoria → bozze perse a ogni restart del server.
 
-2. GET /api/pianificazione/bozza/{progetto_id}
-   - Manager-only.
-   - Restituisce {progetto_id, dati_json} se esiste una bozza, altrimenti
-     {progetto_id, dati_json: None}.
+Con Step 2.0 del Blocco 2 esteso (handoff v15) il modello cambia:
+- Una bozza è un Progetto con `stato="Bozza"` (gestito da routes/progetti.py)
+- Le bozze di pianificazione "salva il foglio di lavoro a metà" non esistono
+  più: il nuovo Cantiere salva direttamente sui modelli (Progetto + Fase +
+  Task), niente più blob JSON intermedio.
 
-PATTERN AUTH USATI
-──────────────────
-- `require_manager`: la pianificazione è funzione manageriale.
-  📌 TODO R2 (ABAC): quando saranno introdotti i pm_id su progetto, questi
-  endpoint potrebbero diventare PM-only sul progetto specifico
-  (`require_pm_or_manager(progetto_id)`).
+PERIODO DI TRANSIZIONE (13 mag → ~17 mag)
+──────────────────────────────────────────
+Pipeline.jsx e AnalisiInterventi.jsx sono ancora vive fino a Step 2.7
+(creazione pagina Cantiere.jsx). In questo intervallo le due pagine
+funzionano in tutto tranne il pulsante "Salva bozza", che è disabilitato
+nel frontend con un tooltip esplicativo.
 
-DIPENDENZE
-──────────
-- `data` (modulo): `salva_bozza_pianificazione`, `carica_bozza_pianificazione`
-  (in PERSISTENT_MODE).
-- `deps`: `require_manager`.
-- `models`: classe `Utente` per type hint.
+Quando Pipeline.jsx e AnalisiInterventi.jsx verranno cancellate (Step 2.7),
+questo file potrà essere rimosso del tutto insieme al suo register_router
+in main.py.
 
-NOTE TECNICHE
-─────────────
-Persistence dual-mode: db prima, memoria come fallback. Lo store
-BOZZE_STORE vive ancora in main.py per retrocompatibilità.
+ENDPOINT
+────────
+- POST /api/pianificazione/salva-bozza → 410 Gone
+- GET  /api/pianificazione/bozza/{id}  → 410 Gone
 
-📌 TODO Pipeline ridisegnata (Blocco 4 roadmap):
-   Quando Pipeline sarà ridisegnata per il modello bando/ordinario
-   (3 fasi standard per bando), valutare se la struttura `dati_json`
-   resta libera o diventa schema-tipato (Pydantic model dedicato).
+Perché 410 e non 404: 410 ("Gone") significa "questa risorsa esisteva ma
+è stata rimossa intenzionalmente". 404 sarebbe ambiguo (potrebbe sembrare
+un bug). Vedi RFC 9110 §15.5.11.
 
 STORIA
 ──────
-Estratto da main.py il 5 maggio 2026 nell'ambito del refactoring strangler.
+- 5 mag 2026: estratto da main.py (refactoring strangler).
+- 13 mag 2026: deprecazione (Step 2.0). Da rimuovere a Step 2.7.
 ═══════════════════════════════════════════════════════════════════════════
 """
 
-from datetime import datetime
-from fastapi import APIRouter, Depends
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, HTTPException
 
 from deps import require_manager
 from models import Utente
 
-# Import condizionale: db disponibile?
-try:
-    from data import salva_bozza_pianificazione, carica_bozza_pianificazione
-    PERSISTENT_MODE = True
-except ImportError:
-    PERSISTENT_MODE = False
+
+router = APIRouter(prefix="/api/pianificazione", tags=["pianificazione (deprecato)"])
 
 
-# ── DTO ──────────────────────────────────────────────────────────────────
-class SalvaBozzaRequest(BaseModel):
-    progetto_id: str
-    dati_json: dict  # snapshot della tabella task in pianificazione
+_DEPRECATION_MSG = (
+    "Endpoint deprecato dal 13 maggio 2026 (Step 2.0 della roadmap). "
+    "Le bozze di progetto sono ora gestite da /api/progetti con stato='Bozza'. "
+    "Vedi handoff v15 §3.3."
+)
 
 
-# ── Router ───────────────────────────────────────────────────────────────
-router = APIRouter(prefix="/api/pianificazione", tags=["pianificazione"])
+@router.post("/salva-bozza", status_code=410)
+def salva_bozza_deprecato(_: Utente = Depends(require_manager)):
+    raise HTTPException(status_code=410, detail=_DEPRECATION_MSG)
 
 
-@router.post("/salva-bozza")
-def salva_bozza(req: SalvaBozzaRequest, _: Utente = Depends(require_manager)):
-    """Salva o aggiorna una bozza di pianificazione."""
-    if PERSISTENT_MODE:
-        salva_bozza_pianificazione(req.progetto_id, req.dati_json)
-    else:
-        # Fallback memoria via main.py
-        from main import BOZZE_STORE
-        BOZZE_STORE[req.progetto_id] = {
-            "progetto_id": req.progetto_id,
-            "dati_json": req.dati_json,
-            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"),
-        }
-    return {"salvato": True, "progetto_id": req.progetto_id}
-
-
-@router.get("/bozza/{progetto_id}")
-def carica_bozza(progetto_id: str, _: Utente = Depends(require_manager)):
-    """Carica una bozza di pianificazione salvata."""
-    if PERSISTENT_MODE:
-        dati = carica_bozza_pianificazione(progetto_id)
-        return {"progetto_id": progetto_id, "dati_json": dati}
-    # Fallback memoria
-    from main import BOZZE_STORE
-    if progetto_id in BOZZE_STORE:
-        return BOZZE_STORE[progetto_id]
-    return {"progetto_id": progetto_id, "dati_json": None}
+@router.get("/bozza/{progetto_id}", status_code=410)
+def carica_bozza_deprecato(progetto_id: str, _: Utente = Depends(require_manager)):
+    raise HTTPException(status_code=410, detail=_DEPRECATION_MSG)
