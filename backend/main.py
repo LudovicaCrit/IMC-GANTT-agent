@@ -67,7 +67,6 @@ app.add_middleware(
 # ══════════════════════════════════════════════════════════════════════
 
 SEGNALAZIONI_STORE = []
-BOZZE_STORE = {}
 _segn_counter = 0
 
 

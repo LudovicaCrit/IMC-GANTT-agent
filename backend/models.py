@@ -146,6 +146,11 @@ class Progetto(Base):
     id = Column(String(10), primary_key=True)
     nome = Column(String(150), nullable=False)
     cliente = Column(String(150), nullable=True)
+    # stato: "Bozza" | "In esecuzione" | "Sospeso" | "Completato" | "Annullato"
+    # Vedi handoff v15 §3.3. Una bozza è un progetto a tutti gli effetti,
+    # distinto solo dallo stato (Step 2.0 della roadmap, 13 mag 2026).
+    # Il CHECK constraint sui valori ammessi arriverà con D3 (stati Fase
+    # tipizzati, commit gemello).
     stato = Column(String(30), nullable=False, default="In esecuzione")
     # tipologia: distingue progetti commerciali da bandi (decisione Francesco 4 mag 2026).
     # Per i bandi, il modello prevede 3 fasi standard fisse (Monitoraggio, Proposal, PM)
@@ -294,18 +299,6 @@ class Segnalazione(Base):
     fonte = Column(String(20), nullable=False, default="chatbot")
     stato = Column(String(20), nullable=False, default="aperta")
     destinatario = Column(String(60), nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-
-
-class PianificazioneBozza(Base):
-    __tablename__ = "pianificazioni_bozza"
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    progetto_id = Column(String(10), ForeignKey("progetti.id", ondelete="CASCADE"), nullable=False)
-    dati_json = Column(JSON, nullable=False)
-    creato_da = Column(String(10), ForeignKey("dipendenti.id"), nullable=True)
-    nota = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

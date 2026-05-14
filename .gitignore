@@ -30,3 +30,4 @@ cookies_*.txt
 
 # Appunti personali sviluppo
 frontend/tasks.md
+*.sql

@@ -13,7 +13,6 @@ Interfaccia pubblica (stessa firma in entrambi i modi):
   get_dipendente, get_progetto, get_tasks_progetto, ...
   aggiungi_task, modifica_task, cambia_stato_progetto, calcola_impatto_saturazione
   get_segnalazioni, aggiungi_segnalazione
-  salva_bozza_pianificazione, carica_bozza_pianificazione
 """
 
 import os

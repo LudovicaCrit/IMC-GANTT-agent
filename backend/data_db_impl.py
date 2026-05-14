@@ -7,7 +7,7 @@ import pandas as pd
 from datetime import datetime, timedelta, date
 from models import (
     get_session, Dipendente, Progetto, Task, Assegnazione,
-    Consuntivo, Segnalazione, PianificazioneBozza,
+    Consuntivo, Segnalazione,
 )
 
 # ══════════════════════════════════════════════════════════════════════
@@ -365,34 +365,6 @@ def aggiungi_segnalazione(tipo, priorita, dipendente_id, dettaglio):
     session.commit()
     session.close()
     return new_id
-
-
-# ══════════════════════════════════════════════════════════════════════
-# BOZZE PIANIFICAZIONE PERSISTENTI
-# ══════════════════════════════════════════════════════════════════════
-
-def salva_bozza_pianificazione(progetto_id, dati_json):
-    session = get_session()
-    existing = session.query(PianificazioneBozza).filter(
-        PianificazioneBozza.progetto_id == progetto_id
-    ).first()
-    if existing:
-        existing.dati_json = dati_json
-        existing.updated_at = datetime.utcnow()
-    else:
-        session.add(PianificazioneBozza(progetto_id=progetto_id, dati_json=dati_json))
-    session.commit()
-    session.close()
-
-
-def carica_bozza_pianificazione(progetto_id):
-    session = get_session()
-    bozza = session.query(PianificazioneBozza).filter(
-        PianificazioneBozza.progetto_id == progetto_id
-    ).first()
-    result = bozza.dati_json if bozza else None
-    session.close()
-    return result
 
 
 # ══════════════════════════════════════════════════════════════════════
