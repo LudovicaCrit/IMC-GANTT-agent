@@ -100,11 +100,44 @@ Dopo questo router, il refactoring degli endpoint è chiuso. Resta:
 ═══════════════════════════════════════════════════════════════════════════
 """
 
-from fastapi import APIRouter, Depends
+from datetime import date as date_type
+from typing import Optional
+
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
 from sqlalchemy import func
 
 from deps import require_manager
-from models import get_session, Utente, Fase, Task, Consuntivo
+from models import get_session, Utente, Fase, Task, Consuntivo, STATI_FASE
+
+
+# ── DTO ──────────────────────────────────────────────────────────────────
+class FaseRequest(BaseModel):
+    """Body request per POST /api/fasi.
+
+    Sostituisce il dict free-form precedente (vedi handoff v14.3, D5).
+    Lo `stato` non è nel DTO: viene settato server-side a "Da iniziare".
+    """
+    progetto_id: str = Field(..., min_length=1, max_length=10)
+    nome: str = Field(..., min_length=1, max_length=100)
+    ordine: int = Field(default=1, ge=1)
+    data_inizio: Optional[date_type] = None
+    data_fine: Optional[date_type] = None
+    ore_vendute: float = Field(default=0, ge=0)
+    ore_pianificate: Optional[float] = Field(default=None, ge=0)
+    note: Optional[str] = None
+
+
+class FaseUpdate(BaseModel):
+    """Body request per PATCH /api/fasi/{fase_id}. Tutti i campi opzionali."""
+    nome: Optional[str] = Field(default=None, min_length=1, max_length=100)
+    ordine: Optional[int] = Field(default=None, ge=1)
+    data_inizio: Optional[date_type] = None
+    data_fine: Optional[date_type] = None
+    ore_vendute: Optional[float] = Field(default=None, ge=0)
+    ore_pianificate: Optional[float] = Field(default=None, ge=0)
+    stato: Optional[str] = Field(default=None, max_length=20)
+    note: Optional[str] = None
 
 
 # ── Router ───────────────────────────────────────────────────────────────
@@ -112,22 +145,26 @@ router = APIRouter(prefix="/api/fasi", tags=["fasi"])
 
 
 @router.post("")
-def crea_fase(req: dict, _: Utente = Depends(require_manager)):
+def crea_fase(req: FaseRequest, _: Utente = Depends(require_manager)):
     """Crea una nuova fase di progetto.
 
-    Body: dict free-form con progetto_id, nome, ordine, data_inizio, data_fine, ore_vendute.
-    Stato iniziale: "Da iniziare".
+    Body validato da FaseRequest (Pydantic). Stato iniziale: "Da iniziare"
+    (settato server-side, non dal client).
 
-    📌 TODO: introdurre Pydantic DTO FaseRequest per validazione body.
+    Vedi handoff v14.3 D5 per il contesto del refactoring da dict free-form
+    a DTO Pydantic.
     """
+    
     session = get_session()
     fase = Fase(
-        progetto_id=req["progetto_id"],
-        nome=req["nome"],
-        ordine=req.get("ordine", 1),
-        data_inizio=req.get("data_inizio"),
-        data_fine=req.get("data_fine"),
-        ore_vendute=req.get("ore_vendute", 0),
+        progetto_id=req.progetto_id,
+        nome=req.nome,
+        ordine=req.ordine,
+        data_inizio=req.data_inizio,
+        data_fine=req.data_fine,
+        ore_vendute=req.ore_vendute,
+        ore_pianificate=req.ore_pianificate,
+        note=req.note,
         stato="Da iniziare",
     )
     session.add(fase)
@@ -135,6 +172,75 @@ def crea_fase(req: dict, _: Utente = Depends(require_manager)):
     result = {"id": fase.id, "nome": fase.nome}
     session.close()
     return result
+
+
+@router.patch("/{fase_id}")
+def aggiorna_fase(fase_id: int, req: FaseUpdate, _: Utente = Depends(require_manager)):
+    """Aggiorna campi di una fase (nome, date, ore, stato, ecc.).
+
+    Step 2.1 D2 (13 mag 2026): aggiunto come endpoint complementare al
+    DELETE. Utile anche per cambiare stato fase (Da iniziare → In corso →
+    Completata) prima dell'introduzione formale di stato_derivato (D3).
+    """
+    session = get_session()
+    try:
+        fase = session.query(Fase).filter(Fase.id == fase_id).first()
+        if not fase:
+            raise HTTPException(status_code=404, detail=f"Fase {fase_id} non trovata")
+
+        # Validazione stato contro STATI_FASE (allineato al CHECK constraint DB)
+        if req.stato is not None and req.stato not in STATI_FASE:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Stato fase '{req.stato}' non ammesso. Valori: {STATI_FASE}"
+            )
+
+        for field, value in req.model_dump(exclude_unset=True).items():
+            setattr(fase, field, value)
+
+        session.commit()
+        return {"id": fase_id, "aggiornato": True}
+    finally:
+        session.close()
+
+
+@router.delete("/{fase_id}", status_code=204)
+def elimina_fase(fase_id: int, _: Utente = Depends(require_manager)):
+    """Elimina una fase. SOLO se non ha task agganciati.
+
+    Step 2.1 D2 (handoff v15 §2.1): comportamento di cancellazione fase.
+    R1: blocca con HTTP 409 se la fase ha task figli. L'utente deve prima
+    spostare i task in un'altra fase (via PATCH /api/tasks/{id}) o eliminarli.
+
+    Coerente col vincolo DB `ondelete="RESTRICT"` su `Task.fase_id` (D1):
+    il DB rifiuterebbe comunque la cancellazione, qui restituiamo un
+    messaggio applicativo prima che il vincolo scatti.
+
+    Niente cascade automatica: troppo distruttiva per R1. R2 potrà valutare
+    un parametro `?force=true` con riassegnazione esplicita.
+    """
+    session = get_session()
+    try:
+        fase = session.query(Fase).filter(Fase.id == fase_id).first()
+        if not fase:
+            raise HTTPException(status_code=404, detail=f"Fase {fase_id} non trovata")
+
+        n_task = session.query(Task).filter(Task.fase_id == fase_id).count()
+        if n_task > 0:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Impossibile eliminare la fase '{fase.nome}': ha {n_task} task agganciati. "
+                    "Sposta i task in un'altra fase (PATCH /api/tasks/{id} con fase=...) "
+                    "o eliminali prima."
+                )
+            )
+
+        session.delete(fase)
+        session.commit()
+        return None  # 204 No Content
+    finally:
+        session.close()
 
 
 @router.get("/{progetto_id}")
