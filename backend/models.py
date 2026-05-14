@@ -212,9 +212,13 @@ class Task(Base):
 
     id = Column(String(10), primary_key=True)
     progetto_id = Column(String(10), ForeignKey("progetti.id", ondelete="CASCADE"), nullable=False)
-    fase_id = Column(Integer, ForeignKey("fasi.id", ondelete="SET NULL"), nullable=True)
+    # fase_id: FK NOT NULL alla tabella `fasi`. Step 2.1 D1 (13 mag 2026):
+    # eliminata la doppia rappresentazione (prima esistevano sia fase_id che
+    # fase stringa "legacy"). Ora il nome della fase si legge tramite
+    # `task.fase_rel.nome` o, nel DataFrame loader, tramite la chiave "fase"
+    # (derivata, esposta per retrocompatibilità con i router e il frontend).
+    fase_id = Column(Integer, ForeignKey("fasi.id", ondelete="RESTRICT"), nullable=False)
     nome = Column(String(200), nullable=False)
-    fase = Column(String(60), nullable=True)  # legacy stringa
     ore_stimate = Column(Integer, nullable=True)        # "Iniziale"
     ore_consumate = Column(Float, nullable=True, default=0)
     ore_rimanenti = Column(Float, nullable=True)

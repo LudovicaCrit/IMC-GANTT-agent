@@ -283,18 +283,23 @@ def applica_modifiche(req: ApplicaRequest, _: Utente = Depends(require_manager))
     # 2) Crea nuovi task
     nuovi_ids = []
     for nt in req.nuovi_task:
-        new_id = aggiungi_task(
-            progetto_id=req.progetto_id,
-            nome=nt.nome,
-            fase=nt.fase,
-            ore_stimate=nt.ore_stimate,
-            data_inizio=datetime.fromisoformat(nt.data_inizio) if nt.data_inizio else get_oggi(),
-            data_fine=datetime.fromisoformat(nt.data_fine) if nt.data_fine else get_oggi(),
-            stato=nt.stato,
-            profilo_richiesto=nt.profilo_richiesto,
-            dipendente_id=nt.dipendente_id,
-            predecessore=nt.predecessore,
-        )
+        try:
+            new_id = aggiungi_task(
+                progetto_id=req.progetto_id,
+                nome=nt.nome,
+                fase=nt.fase,
+                ore_stimate=nt.ore_stimate,
+                data_inizio=datetime.fromisoformat(nt.data_inizio) if nt.data_inizio else get_oggi(),
+                data_fine=datetime.fromisoformat(nt.data_fine) if nt.data_fine else get_oggi(),
+                stato=nt.stato,
+                profilo_richiesto=nt.profilo_richiesto,
+                dipendente_id=nt.dipendente_id,
+                predecessore=nt.predecessore,
+            )
+        except ValueError as e:
+            # Step 2.1 D1: aggiungi_task lancia ValueError se la stringa fase
+            # non corrisponde a nessuna Fase del progetto.
+            raise HTTPException(status_code=422, detail=str(e))
         nuovi_ids.append(new_id)
         risultati.append({
             "task_id": new_id,

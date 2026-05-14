@@ -140,17 +140,23 @@ def crea_attivita_interna(
 
     time.sleep(0.3)  # workaround race condition contatore in legacy memory mode
 
-    new_id = aggiungi_task(
-        progetto_id="P010",
-        nome=req.nome,
-        fase=req.categoria,
-        ore_stimate=req.ore_stimate if req.ore_stimate > 0 else req.ore_settimanali * 20,
-        data_inizio=datetime.fromisoformat(req.data_inizio),
-        data_fine=datetime.fromisoformat(req.data_fine),
-        stato="In corso",
-        profilo_richiesto=dip.get("profilo", ""),
-        dipendente_id=req.dipendente_id,
-    )
+    try:
+        new_id = aggiungi_task(
+            progetto_id="P010",
+            nome=req.nome,
+            fase=req.categoria,
+            ore_stimate=req.ore_stimate if req.ore_stimate > 0 else req.ore_settimanali * 20,
+            data_inizio=datetime.fromisoformat(req.data_inizio),
+            data_fine=datetime.fromisoformat(req.data_fine),
+            stato="In corso",
+            profilo_richiesto=dip.get("profilo", ""),
+            dipendente_id=req.dipendente_id,
+        )
+    except ValueError as e:
+        # Step 2.1 D1: se la categoria non corrisponde a una Fase di P010,
+        # aggiungi_task fa fail-fast. Le categorie valide sono le Fase reali
+        # di P010 (Gestione, Vendita, Amministrazione, Sviluppo al 13 mag 2026).
+        raise HTTPException(status_code=422, detail=str(e))
 
     return {
         "ok": True,

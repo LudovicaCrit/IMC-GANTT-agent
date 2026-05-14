@@ -44,14 +44,21 @@ def _load_progetti():
 
 def _load_tasks():
     session = get_session()
-    rows = session.query(Task).all()
+    # joinedload per leggere fase_rel.nome senza N+1 query
+    from sqlalchemy.orm import joinedload
+    rows = session.query(Task).options(joinedload(Task.fase_rel)).all()
     data = [{"id": r.id, "progetto_id": r.progetto_id, "nome": r.nome,
-             "fase": r.fase or "", "ore_stimate": r.ore_stimate or 0,
+             # Step 2.1 D1: la chiave "fase" è ora DERIVATA dalla relazione.
+             # Mantenuta nel DataFrame per retrocompatibilità con router e frontend
+             # che leggono task['fase']. La fonte di verità è fase_id.
+             "fase_id": r.fase_id,
+             "fase": r.fase_rel.nome if r.fase_rel else "",
+             "ore_stimate": r.ore_stimate or 0,
              "data_inizio": _to_dt(r.data_inizio), "data_fine": _to_dt(r.data_fine),
              "stato": r.stato, "profilo_richiesto": r.profilo_richiesto or "",
              "dipendente_id": r.dipendente_id or "", "predecessore": r.predecessore or ""} for r in rows]
     session.close()
-    df = pd.DataFrame(data) if data else pd.DataFrame(columns=["id","progetto_id","nome","fase","ore_stimate","data_inizio","data_fine","stato","profilo_richiesto","dipendente_id","predecessore"])
+    df = pd.DataFrame(data) if data else pd.DataFrame(columns=["id","progetto_id","nome","fase_id","fase","ore_stimate","data_inizio","data_fine","stato","profilo_richiesto","dipendente_id","predecessore"])
     return df.fillna({"predecessore": ""})
 
 
@@ -187,10 +194,32 @@ def _next_progetto_id():
 def aggiungi_task(progetto_id, nome, fase, ore_stimate, data_inizio, data_fine,
                   stato="Da iniziare", profilo_richiesto="", dipendente_id="",
                   predecessore=""):
+    """Crea un task. Step 2.1 D1: il parametro `fase` (stringa) viene risolto
+    a `fase_id` cercando la `Fase` del progetto col nome corrispondente.
+
+    Errori:
+      ValueError se la stringa `fase` non matcha nessuna Fase del progetto.
+      Il chiamante (router) deve catturarla e convertirla in HTTP 4xx.
+    """
+    from models import Fase  # import locale per evitare cicli
+
     new_id = _next_task_id()
     session = get_session()
+
+    # Step 2.1 D1: risolvi fase stringa → fase_id (NOT NULL)
+    fase_row = session.query(Fase).filter(
+        Fase.progetto_id == progetto_id,
+        Fase.nome == fase
+    ).first()
+    if not fase_row:
+        session.close()
+        raise ValueError(
+            f"Fase '{fase}' non trovata nel progetto '{progetto_id}'. "
+            f"Le fasi vanno create prima dei task."
+        )
+
     task = Task(
-        id=new_id, progetto_id=progetto_id, nome=nome, fase=fase,
+        id=new_id, progetto_id=progetto_id, nome=nome, fase_id=fase_row.id,
         ore_stimate=ore_stimate,
         data_inizio=data_inizio.date() if isinstance(data_inizio, datetime) else data_inizio,
         data_fine=data_fine.date() if isinstance(data_fine, datetime) else data_fine,
