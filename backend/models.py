@@ -29,6 +29,32 @@ Base = declarative_base()
 
 
 # ══════════════════════════════════════════════════════════════════════
+# ENUM APPLICATIVI — fonte di verità per gli stati ammessi
+# ══════════════════════════════════════════════════════════════════════
+# Step 2.1 D3 (13 mag 2026): CHECK constraint a livello DB allineato a queste
+# costanti. Vedi migration c3d4e5f6a7b8 e handoff v15 §3.3.
+#
+# Modificare questi tuple richiede UNA migration Alembic che aggiorni il CHECK.
+
+STATI_FASE = ("Da iniziare", "In corso", "Completata", "Sospesa", "Annullata")
+
+# Handoff v15 §3.3: i 5 stati canonici. §3.5 punto 5 chiarisce: "Bozza = tutto
+# ciò che non ha approvazione" (assorbe ciò che prima era "Vinto - Da
+# pianificare" nel vecchio modello bandi, deprecato).
+STATI_PROGETTO = (
+    "Bozza",
+    "In esecuzione",
+    "Sospeso",
+    "Completato",
+    "Annullato",
+)
+# Sottoinsieme "attivi": progetti visibili in GANTT e Cantiere "Progetti attivi"
+# (handoff §3.3). Bozza vive solo in Cantiere "In cantiere", Completato/Annullato
+# in Archivio.
+STATI_PROGETTO_ATTIVI = ("In esecuzione", "Sospeso")
+
+
+# ══════════════════════════════════════════════════════════════════════
 # CONFIGURAZIONE — Entità gestite dalla pagina admin
 # ══════════════════════════════════════════════════════════════════════
 
@@ -183,6 +209,31 @@ class Progetto(Base):
                         order_by="Fase.ordine")
     task = relationship("Task", back_populates="progetto", cascade="all, delete-orphan")
 
+    @property
+    def stato_derivato(self) -> str:
+        """Stato calcolato dalla composizione delle fasi.
+
+        Step 2.1 D3 (handoff v15 §3.3). Regole:
+          - "Bozza": nessuna fase
+          - "Completato": tutte le fasi in "Completata"
+          - "In esecuzione": almeno una fase "In corso"
+          - "Sospeso": ci sono fasi ma nessuna in corso e non sono tutte completate
+
+        Questa property NON sostituisce `Progetto.stato` (scrivibile dal manager).
+        Le due possono divergere: il manager può forzare uno stato (es. "Annullato")
+        anche se le fasi non lo riflettono. Quando divergono, è informazione utile
+        per la dashboard ("progetto sospeso dal manager, ma il piano avrebbe fasi
+        attive").
+        """
+        if not self.fasi:
+            return "Bozza"
+        stati = {f.stato for f in self.fasi}
+        if stati == {"Completata"}:
+            return "Completato"
+        if "In corso" in stati:
+            return "In esecuzione"
+        return "Sospeso"
+
 
 class Fase(Base):
     """Fase di un progetto. Le ore nascono qui, i deliverable le dettagliano."""
@@ -194,6 +245,18 @@ class Fase(Base):
     ordine = Column(SmallInteger, nullable=False, default=1)
     data_inizio = Column(Date, nullable=True)
     data_fine = Column(Date, nullable=True)
+    # ═════════════════════════════════════════════════════════════════════
+    # MODELLO ORE FASE — Step 2.1 D4 (handoff v15 §2.1)
+    # ═════════════════════════════════════════════════════════════════════
+    # ore_vendute: ore vendute al cliente per questa fase (dalla proposta
+    #   commerciale / contratto). È il budget commerciale FISSO della fase.
+    # ore_pianificate: somma delle ore_pianificate dei task figli. Riflette
+    #   come il PM ha distribuito le ore vendute sui task. Tipicamente
+    #   ore_pianificate <= ore_vendute (se >, sforamento di piano).
+    # ore_consumate (NON in colonna): si calcola aggregando Consuntivo dei
+    #   task della fase. Vedi routes/fasi.lista_fasi_progetto.
+    # ore_rimanenti (NON in colonna): ore_vendute - ore_consumate, derivata.
+    # stato: vedi STATI_FASE in cima al modulo. CHECK a livello DB.
     ore_vendute = Column(Float, nullable=True)
     ore_pianificate = Column(Float, nullable=True)
     stato = Column(String(20), nullable=False, default="Da iniziare")
@@ -219,7 +282,25 @@ class Task(Base):
     # (derivata, esposta per retrocompatibilità con i router e il frontend).
     fase_id = Column(Integer, ForeignKey("fasi.id", ondelete="RESTRICT"), nullable=False)
     nome = Column(String(200), nullable=False)
-    ore_stimate = Column(Integer, nullable=True)        # "Iniziale"
+    # ═════════════════════════════════════════════════════════════════════
+    # MODELLO ORE TASK — Step 2.1 D4 (handoff v15 §2.1)
+    # ═════════════════════════════════════════════════════════════════════
+    # ore_stimate: stima INIZIALE del PM al momento della creazione del task.
+    #   - In ore intere.
+    #   - Convenzione R1: NON si modifica dopo l'avvio del progetto
+    #     (è il "budget storico" del task, usato per confronti ex-post).
+    #     Se servono adeguamenti, il PM crea un nuovo task o usa note.
+    # ore_pianificate: ore allocate nel piano corrente (può differire da
+    #   ore_stimate se il PM ha rivisto la pianificazione mantenendo lo
+    #   storico).
+    # ore_consumate: somma dei consuntivi (Consuntivo.ore_dichiarate) dei
+    #   dipendenti assegnati al task. NON va aggiornata a mano: è derivata
+    #   ma denormalizzata per performance (un trigger o un job può
+    #   ricalcolarla; al 13 mag 2026 viene aggiornata applicativamente in
+    #   data_db_impl.modifica_consuntivo). 📌 TODO Blocco 3: rendere
+    #   l'aggiornamento sistematico e testato.
+    # ore_rimanenti: ore_pianificate - ore_consumate. Denormalizzata come sopra.
+    ore_stimate = Column(Integer, nullable=True)
     ore_consumate = Column(Float, nullable=True, default=0)
     ore_rimanenti = Column(Float, nullable=True)
     ore_pianificate = Column(Float, nullable=True)

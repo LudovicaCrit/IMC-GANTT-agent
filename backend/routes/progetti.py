@@ -81,7 +81,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from deps import require_manager
-from models import get_session, Utente, Progetto
+from models import get_session, Utente, Progetto, STATI_PROGETTO, STATI_PROGETTO_ATTIVI
 from data import ore_consuntivate_progetto, tasso_compilazione_progetto
 from data_db_impl import _next_progetto_id, _reload
 from dataframes import _PROGETTI, _TASKS
@@ -89,11 +89,10 @@ from dataframes import _PROGETTI, _TASKS
 
 # ── DTO ──────────────────────────────────────────────────────────────────
 
-# Stati ammessi per Progetto. Vedi handoff v15 §3.3.
-# Quando D3 introdurrà il CHECK constraint a livello DB (commit gemello con
-# enum stati Fase), questa tupla resterà la fonte di verità applicativa.
-STATI_PROGETTO_AMMESSI = ("Bozza", "In esecuzione", "Sospeso", "Completato", "Annullato")
-STATI_ATTIVI = ("In esecuzione", "Sospeso")
+# Stati ammessi: importati da models.STATI_PROGETTO (fonte di verità unica,
+# allineata al CHECK constraint del DB tramite migration D3).
+STATI_PROGETTO_AMMESSI = STATI_PROGETTO
+STATI_ATTIVI = STATI_PROGETTO_ATTIVI
 
 
 class ProgettoCreate(BaseModel):
