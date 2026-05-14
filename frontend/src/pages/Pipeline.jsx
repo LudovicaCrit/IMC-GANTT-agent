@@ -42,16 +42,12 @@ function PianificazioneProgetto({ progetto, dipendenti, isBando = false }) {
   }, [])
 
   // Carica bozza al mount
+  // ⚠️ DEPRECATO Step 2.0 (13 mag 2026): caricaBozza non funziona più, le bozze
+  // sono ora progetti con stato='Bozza'. Pipeline.jsx verrà eliminata a Step 2.7.
+  // Lasciamo l'useEffect ma silenzioso: niente bozze caricate, l'utente parte
+  // sempre da pagina vuota in attesa di Cantiere.
   useEffect(() => {
-    caricaBozza(progetto.id).then(res => {
-      if (res.dati_json) {
-        if (res.dati_json.planFasi) setPlanFasi(res.dati_json.planFasi)
-        if (res.dati_json.planTasks) setPlanTasks(res.dati_json.planTasks)
-        if (res.dati_json.nextFaseId) setNextFaseId(res.dati_json.nextFaseId)
-        if (res.dati_json.nextTaskId) setNextTaskId(res.dati_json.nextTaskId)
-        if (res.dati_json.planFasi && res.dati_json.planFasi.length > 0) setStep('deliverable')
-      }
-    }).catch(() => {})
+    // no-op: caricaBozza disabilitata fino a Step 2.7
   }, [progetto.id])
 
   // ── Gestione Fasi ──
@@ -144,13 +140,12 @@ function PianificazioneProgetto({ progetto, dipendenti, isBando = false }) {
   }
 
   // ── Salvataggio ──
+  // ⚠️ DEPRECATO Step 2.0 (13 mag 2026): salvaBozza disabilitata.
+  // Da Step 2.7 (Cantiere) le bozze saranno gestite come progetti stato='Bozza'.
 
   async function salva() {
-    try {
-      await salvaBozza(progetto.id, { planFasi, planTasks, nextFaseId, nextTaskId })
-      setSalvataggioMsg('✅ Bozza salvata!')
-      setTimeout(() => setSalvataggioMsg(''), 3000)
-    } catch { setSalvataggioMsg('❌ Errore') }
+    setSalvataggioMsg('⏳ Salva bozza in migrazione — disponibile in Cantiere a breve')
+    setTimeout(() => setSalvataggioMsg(''), 4000)
   }
 
   // ── Conferma e avvia progetto ──
@@ -315,7 +310,7 @@ function PianificazioneProgetto({ progetto, dipendenti, isBando = false }) {
         </div>
         <div className="flex items-center gap-2">
           {salvataggioMsg && <span className="text-xs text-green-400">{salvataggioMsg}</span>}
-          <button onClick={salva} className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded-lg text-xs transition-colors">💾 Salva bozza</button>
+          <button onClick={salva} title="Funzionalità in migrazione — disponibile in Cantiere a breve" className="px-3 py-1.5 bg-gray-800 text-gray-500 rounded-lg text-xs cursor-not-allowed">💾 Salva bozza (in migrazione)</button>
         </div>
       </div>
 

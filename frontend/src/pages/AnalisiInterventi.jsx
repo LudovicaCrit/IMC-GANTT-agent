@@ -353,16 +353,12 @@ function EditorGanttUnificato({ progetti, dipendenti, allTasks, segnalazioni, on
   const progetto = progettiAttivi.find(p => p.id === progettoSelezionato)
 
   // ── Carica task ──
+  // ⚠️ DEPRECATO Step 2.0 (13 mag 2026): caricaBozza disabilitata, le bozze
+  // sono ora progetti con stato='Bozza'. AnalisiInterventi verrà eliminata a Step 2.7.
+  // Fino ad allora, carichiamo sempre i task reali (skip della bozza).
   useEffect(() => {
     if (!progettoSelezionato) { setPlanTasks([]); return }
-    caricaBozza(progettoSelezionato).then(res => {
-      if (res.dati_json && res.dati_json.planTasks) {
-        setPlanTasks(res.dati_json.planTasks)
-        if (res.dati_json.nextId) setNextId(res.dati_json.nextId)
-        setSalvataggioMsg('📂 Bozza caricata')
-        setTimeout(() => setSalvataggioMsg(''), 3000)
-      } else { caricaTaskReali() }
-    }).catch(() => caricaTaskReali())
+    caricaTaskReali()
     setSimulazioneResult(null); setConfermato(false); setIaRisultato(null); setIaModifiche([])
   }, [progettoSelezionato])
 
@@ -409,10 +405,10 @@ function EditorGanttUnificato({ progetti, dipendenti, allTasks, segnalazioni, on
   }
 
   // ── Salva bozza ──
+  // ⚠️ DEPRECATO Step 2.0 (13 mag 2026): disabilitata fino a Step 2.7 (Cantiere).
   async function salva() {
-    if (!progettoSelezionato) return
-    try { await salvaBozza(progettoSelezionato, { planTasks, nextId }); setSalvataggioMsg('✅ Bozza salvata!'); setTimeout(() => setSalvataggioMsg(''), 3000) }
-    catch { setSalvataggioMsg('❌ Errore') }
+    setSalvataggioMsg('⏳ Salva bozza in migrazione — disponibile in Cantiere a breve')
+    setTimeout(() => setSalvataggioMsg(''), 4000)
   }
 
   // ── IA: interpreta e applica alla tabella ──
@@ -579,7 +575,7 @@ function EditorGanttUnificato({ progetti, dipendenti, allTasks, segnalazioni, on
           </div>
           <div className="flex items-center gap-3">
             {salvataggioMsg && <span className="text-xs text-green-400">{salvataggioMsg}</span>}
-            <button onClick={salva} className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded-lg text-xs transition-colors">💾 Salva bozza</button>
+            <button onClick={salva} title="Funzionalità in migrazione — disponibile in Cantiere a breve" className="px-3 py-1.5 bg-gray-800 text-gray-500 rounded-lg text-xs cursor-not-allowed">💾 Salva bozza (in migrazione)</button>
           </div>
         </div>
         <div className="grid grid-cols-4 gap-4 text-sm">
