@@ -248,7 +248,12 @@ def gantt_strutturato(
 
         # ── 2. Tutti i consuntivi in una query ────────────────────────
         # Aggrego per task_id per non fare N+1 nel loop sotto.
-        task_ids_all = [t.id for p in progetti for f in p.fasi for t in f.task]
+        # Filtriamo i task "Eliminato" (soft delete): non devono comparire
+        # nel drill-down né contribuire ai conteggi (Step 2.4-bis fix).
+        task_ids_all = [
+            t.id for p in progetti for f in p.fasi for t in f.task
+            if t.stato != "Eliminato"
+        ]
         ore_per_task = {}
         if task_ids_all:
             righe = session.query(
@@ -274,7 +279,11 @@ def gantt_strutturato(
             for f in sorted(p.fasi, key=lambda x: x.ordine or 0):
                 tasks_serial = []
                 ore_consumate_fase = 0.0
+                # Filtra task "Eliminato" (soft delete, Step 2.4-bis fix):
+                # non devono comparire nel drill-down, ma rimangono in DB.
                 for t in f.task:
+                    if t.stato == "Eliminato":
+                        continue
                     ore_cons_t = ore_per_task.get(t.id, 0.0)
                     ore_consumate_fase += ore_cons_t
                     tasks_serial.append({
