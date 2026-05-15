@@ -152,7 +152,7 @@ from models import Utente
 from data import (
     get_dipendente, carico_settimanale_dipendente, get_progetti_dipendente,
 )
-from agent import (
+from gemini_client import (
     init_gemini, costruisci_contesto, chiedi_agente, is_agent_available,
 )
 from dataframes import _DIPENDENTI, _PROGETTI, _TASKS
