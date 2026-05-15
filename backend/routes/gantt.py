@@ -22,6 +22,7 @@ ENDPOINT ESPOSTI
 │ Path                             │ Metodo   │ Auth                         │
 ├──────────────────────────────────┼──────────┼──────────────────────────────┤
 │ /api/gantt                       │ GET      │ require_manager              │
+│ /api/gantt/strutturato           │ GET      │ require_manager              │
 │ /api/gantt/export-pdf            │ GET      │ require_manager              │
 │ /api/gantt/export-png            │ GET      │ require_manager              │
 │ /api/gantt/export-excel          │ GET      │ require_manager              │
@@ -104,9 +105,14 @@ durante il refactoring stesso).
 from datetime import datetime
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Response
+from sqlalchemy.orm import joinedload
+from sqlalchemy import func
 
 from deps import require_manager
-from models import Utente
+from models import (
+    Utente, Progetto, Fase, Task, Consuntivo, get_session,
+    STATI_PROGETTO_ATTIVI,
+)
 from data import get_dipendente
 from dataframes import _PROGETTI, _TASKS, _CONSUNTIVI
 
@@ -171,6 +177,158 @@ def dati_gantt(
                 result[-1]["predecessor_name"] = pred_row.iloc[0]["nome"]
 
     return result
+
+
+# ═════════════════════════════════════════════════════════════════════════
+# 1.b GET /api/gantt/strutturato — gerarchia Progetto → Fase → Task
+# ═════════════════════════════════════════════════════════════════════════
+
+@router.get("/strutturato")
+def gantt_strutturato(
+    stato: Optional[str] = None,
+    progetto_id: Optional[str] = None,
+    _: Utente = Depends(require_manager),
+):
+    """Restituisce la gerarchia Progetto → Fase → Task per il drill-down GANTT.
+
+    Step 2.2 del Blocco 2 esteso (handoff v15 §2.2 punto 1, §2.3).
+
+    Filtri query params:
+    - `stato`: filtra i progetti per stato. Default: "attivi"
+      (In esecuzione + Sospeso, allineato a handoff §3.3).
+      Valori: "attivi" | "all" | "bozza" | "in esecuzione" | ...
+    - `progetto_id`: drill su un singolo progetto (utile per `/cantiere/{id}`).
+
+    Struttura risposta:
+    [
+      {
+        "id": "P001", "nome": "...", "cliente": "...", "stato": "...",
+        "data_inizio": "...", "data_fine": "...",
+        "ore_vendute_totali": 240, "ore_consumate_totali": 130,
+        "fasi": [
+          {
+            "id": 1, "nome": "Analisi", "ordine": 1, "stato": "In corso",
+            "data_inizio": "...", "data_fine": "...",
+            "ore_vendute": 80, "ore_consumate": 50,
+            "tasks": [
+              {
+                "id": "T001", "nome": "...", "stato": "...",
+                "ore_stimate": 40, "ore_consumate": 25,
+                "data_inizio": "...", "data_fine": "...",
+                "dipendente_id": "...", "dipendente_nome": "...",
+                "predecessore": ""
+              }, ...
+            ]
+          }, ...
+        ]
+      }, ...
+    ]
+
+    Design:
+    - L'endpoint è "stupido": restituisce dati raw. Il frontend calcola
+      progress %, colori, default aperture (handoff §2.3 "fasi In corso
+      aperte" è scelta UI, non backend).
+    - Performance: joinedload per evitare N+1 query su fasi e task.
+    - Aggregazioni ore: una query sum() sui consuntivi per evitare
+      iterazioni Python.
+    """
+    session = get_session()
+    try:
+        # ── 1. Query progetti con filtro stato ────────────────────────
+        q = session.query(Progetto).options(
+            joinedload(Progetto.fasi).joinedload(Fase.task)
+        )
+        if progetto_id:
+            q = q.filter(Progetto.id == progetto_id)
+        elif stato is None or stato.lower() == "attivi":
+            q = q.filter(Progetto.stato.in_(STATI_PROGETTO_ATTIVI))
+        elif stato.lower() != "all":
+            q = q.filter(func.lower(Progetto.stato) == stato.lower())
+        progetti = q.order_by(Progetto.id).all()
+
+        # ── 2. Tutti i consuntivi in una query ────────────────────────
+        # Aggrego per task_id per non fare N+1 nel loop sotto.
+        task_ids_all = [t.id for p in progetti for f in p.fasi for t in f.task]
+        ore_per_task = {}
+        if task_ids_all:
+            righe = session.query(
+                Consuntivo.task_id,
+                func.coalesce(func.sum(Consuntivo.ore_dichiarate), 0)
+            ).filter(Consuntivo.task_id.in_(task_ids_all)).group_by(Consuntivo.task_id).all()
+            ore_per_task = {tid: float(ore) for tid, ore in righe}
+
+        # ── 3. Cache nomi dipendenti per evitare lookup ripetuti ──────
+        from models import Dipendente
+        dip_rows = session.query(Dipendente).all()
+        nomi_dip = {d.id: d.nome for d in dip_rows}
+
+        # ── 4. Costruzione struttura nidificata ──────────────────────
+        result = []
+        for p in progetti:
+            # Filtra fasi: nessun filtro qui, mostriamo tutte le fasi del progetto.
+            # Il frontend decide quali aprire/chiudere per default.
+            fasi_serial = []
+            ore_vendute_proj = 0.0
+            ore_consumate_proj = 0.0
+
+            for f in sorted(p.fasi, key=lambda x: x.ordine or 0):
+                tasks_serial = []
+                ore_consumate_fase = 0.0
+                for t in f.task:
+                    ore_cons_t = ore_per_task.get(t.id, 0.0)
+                    ore_consumate_fase += ore_cons_t
+                    tasks_serial.append({
+                        "id": t.id,
+                        "nome": t.nome,
+                        "stato": t.stato,
+                        "ore_stimate": int(t.ore_stimate) if t.ore_stimate else 0,
+                        "ore_consumate": round(ore_cons_t, 1),
+                        "data_inizio": t.data_inizio.isoformat() if t.data_inizio else None,
+                        "data_fine": t.data_fine.isoformat() if t.data_fine else None,
+                        "dipendente_id": t.dipendente_id or "",
+                        "dipendente_nome": nomi_dip.get(t.dipendente_id, ""),
+                        "profilo_richiesto": t.profilo_richiesto or "",
+                        "predecessore": t.predecessore or "",
+                    })
+
+                ore_vendute_fase = float(f.ore_vendute or 0)
+                ore_vendute_proj += ore_vendute_fase
+                ore_consumate_proj += ore_consumate_fase
+
+                fasi_serial.append({
+                    "id": f.id,
+                    "nome": f.nome,
+                    "ordine": f.ordine,
+                    "stato": f.stato,
+                    "data_inizio": f.data_inizio.isoformat() if f.data_inizio else None,
+                    "data_fine": f.data_fine.isoformat() if f.data_fine else None,
+                    "ore_vendute": ore_vendute_fase,
+                    "ore_pianificate": float(f.ore_pianificate or 0),
+                    "ore_consumate": round(ore_consumate_fase, 1),
+                    "n_task": len(tasks_serial),
+                    "tasks": tasks_serial,
+                })
+
+            result.append({
+                "id": p.id,
+                "nome": p.nome,
+                "cliente": p.cliente,
+                "stato": p.stato,
+                "stato_derivato": p.stato_derivato,  # property calcolata
+                "tipologia": p.tipologia or "ordinario",
+                "data_inizio": p.data_inizio.isoformat() if p.data_inizio else None,
+                "data_fine": p.data_fine.isoformat() if p.data_fine else None,
+                "budget_ore": int(p.budget_ore) if p.budget_ore else 0,
+                "pm_id": p.pm_id,
+                "ore_vendute_totali": ore_vendute_proj,
+                "ore_consumate_totali": round(ore_consumate_proj, 1),
+                "n_fasi": len(fasi_serial),
+                "fasi": fasi_serial,
+            })
+
+        return result
+    finally:
+        session.close()
 
 
 # ═════════════════════════════════════════════════════════════════════════
