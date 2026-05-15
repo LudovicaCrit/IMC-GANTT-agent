@@ -191,6 +191,153 @@ def lista_tasks(
     return result
 
 
+# ═════════════════════════════════════════════════════════════════════════
+# CRUD task singolo (Step 2.4 Cantiere — handoff v15 §2.4)
+# ═════════════════════════════════════════════════════════════════════════
+# Endpoint POST/PATCH dedicati al Cantiere: il PM aggiunge un task a una fase
+# esistente o modifica un task esistente. Questo è diverso dal pattern del
+# Tavolo di Lavoro (`/applica`) che applica MODIFICHE BATCH simulate.
+#
+# Risoluzione fase: il body accetta sia `fase_id` (FK diretto, preferito)
+# sia `fase` come stringa (nome fase risolta server-side, retrocompatibile
+# con l'IA `/agent/suggerisci-task` che produce stringhe). Step 2.1 D1.
+
+class NuovoTaskSingolo(BaseModel):
+    """Body per POST /api/tasks (Cantiere)."""
+    progetto_id: str
+    nome: str
+    fase_id: Optional[int] = None        # se passato, ha priorità su `fase`
+    fase: Optional[str] = None           # nome fase (risolto a fase_id)
+    ore_stimate: int = 0
+    data_inizio: Optional[str] = None    # ISO
+    data_fine: Optional[str] = None      # ISO
+    profilo_richiesto: str = ""
+    dipendente_id: str = ""
+    predecessore: str = ""
+    stato: str = "Da iniziare"
+
+
+class ModificaTaskSingolo(BaseModel):
+    """Body per PATCH /api/tasks/{task_id}. Tutti i campi opzionali."""
+    nome: Optional[str] = None
+    fase_id: Optional[int] = None
+    ore_stimate: Optional[int] = None
+    data_inizio: Optional[str] = None
+    data_fine: Optional[str] = None
+    profilo_richiesto: Optional[str] = None
+    dipendente_id: Optional[str] = None
+    predecessore: Optional[str] = None
+    stato: Optional[str] = None
+
+
+@router.post("", status_code=201)
+def crea_task_singolo(req: NuovoTaskSingolo, _: Utente = Depends(require_manager)):
+    """Crea un task singolo in una fase esistente del progetto.
+
+    Risoluzione fase:
+    - Se `fase_id` è fornito, viene usato direttamente.
+    - Altrimenti `fase` (stringa) viene risolta cercando nella tabella
+      `fasi` per (progetto_id, nome). Pattern di D1.
+    - Se nessuno dei due è fornito o la stringa non matcha, HTTP 422.
+    """
+    from models import get_session, Fase
+
+    # Risoluzione fase_id
+    fase_id = req.fase_id
+    if fase_id is None and req.fase:
+        session = get_session()
+        try:
+            fase_row = session.query(Fase).filter(
+                Fase.progetto_id == req.progetto_id,
+                Fase.nome == req.fase
+            ).first()
+            if fase_row:
+                fase_id = fase_row.id
+        finally:
+            session.close()
+
+    if fase_id is None:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Devi specificare 'fase_id' oppure una 'fase' che corrisponda a una "
+                   f"fase esistente del progetto {req.progetto_id}."
+        )
+
+    # Risolvi nome fase (per `aggiungi_task` che lo richiede come stringa)
+    from models import get_session as _gs
+    session = _gs()
+    try:
+        fase_row = session.query(Fase).filter(Fase.id == fase_id).first()
+        if not fase_row or fase_row.progetto_id != req.progetto_id:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Fase id {fase_id} non esiste o non appartiene a {req.progetto_id}."
+            )
+        nome_fase = fase_row.nome
+    finally:
+        session.close()
+
+    # Parse date
+    di = datetime.fromisoformat(req.data_inizio) if req.data_inizio else get_oggi()
+    df = datetime.fromisoformat(req.data_fine) if req.data_fine else get_oggi()
+
+    # Normalizza FK: stringa vuota → None (Postgres rifiuta '' come FK valido)
+    dip_id = req.dipendente_id or None
+    pred = req.predecessore or None
+
+    try:
+        new_id = aggiungi_task(
+            progetto_id=req.progetto_id,
+            nome=req.nome,
+            fase=nome_fase,
+            ore_stimate=req.ore_stimate,
+            data_inizio=di,
+            data_fine=df,
+            stato=req.stato,
+            profilo_richiesto=req.profilo_richiesto,
+            dipendente_id=dip_id,
+            predecessore=pred,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+    return {"id": new_id, "nome": req.nome, "fase_id": fase_id}
+
+
+@router.patch("/{task_id}")
+def modifica_task_singolo(
+    task_id: str,
+    req: ModificaTaskSingolo,
+    _: Utente = Depends(require_manager),
+):
+    """Modifica campi di un task esistente.
+
+    Tutti i campi sono opzionali (semantica PATCH). Date come stringhe ISO
+    vengono convertite a `date`. Cambio fase: passare `fase_id` numerico.
+    """
+    kwargs = {}
+    payload = req.model_dump(exclude_unset=True)
+
+    # Campi FK: stringa vuota → None (Postgres rifiuta '' come FK valido)
+    CAMPI_FK = ("dipendente_id", "predecessore")
+
+    for k, v in payload.items():
+        if k in ("data_inizio", "data_fine") and v is not None:
+            kwargs[k] = datetime.fromisoformat(v).date()
+        elif k in CAMPI_FK and v == "":
+            kwargs[k] = None
+        else:
+            kwargs[k] = v
+
+    if not kwargs:
+        raise HTTPException(status_code=400, detail="Nessun campo da modificare.")
+
+    ok = modifica_task(task_id, **kwargs)
+    if not ok:
+        raise HTTPException(status_code=404, detail=f"Task '{task_id}' non trovato")
+    return {"id": task_id, "aggiornato": True}
+
+
 @router.post("/anteprima-impatto")
 def anteprima_impatto(req: AnteprimaRequest, _: Utente = Depends(require_manager)):
     """Calcola l'impatto delle modifiche proposte SENZA applicarle.
