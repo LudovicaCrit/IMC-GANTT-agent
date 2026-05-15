@@ -11,6 +11,7 @@ import AttivitaInterne from './pages/AttivitaInterne'
 import Configurazione from './pages/Configurazione'
 import Login from './pages/Login'
 import Forbidden from './pages/Forbidden'
+import NotFound from './pages/NotFound'
 import RequireAuth from './components/RequireAuth'
 import RequireManager from './components/RequireManager'
 import { useAuth } from './contexts/AuthContext'
@@ -173,7 +174,7 @@ function MainLayout() {
           } />
 
           {/* Fallback per URL ignoti */}
-          <Route path="*" element={<Forbidden />} />
+          <Route path="*" element={<NotFound />} />
         </Routes>
       </main>
     </div>
