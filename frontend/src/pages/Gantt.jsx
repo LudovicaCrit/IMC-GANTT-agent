@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react'
-import { fetchGantt, fetchProgetti, fetchDipendenti, fetchCaricoRisorse, exportGanttPdf } from '../api'
+import { useNavigate } from 'react-router-dom'
+import { fetchGantt, fetchGanttStrutturato, fetchProgetti, fetchDipendenti, fetchCaricoRisorse, exportGanttPdf } from '../api'
 
 // ── Colori stati ────────────────────────────────────────────────────
 const STATUS_COLORS = {
@@ -427,7 +428,206 @@ export function StatusLegend() {
 }
 
 // ── Pagina GANTT ────────────────────────────────────────────────────
+// ═════════════════════════════════════════════════════════════════════════
+// VISTA ELENCO — drill-down gerarchico Progetto → Fase → Task
+//
+// Step 2.3 del Blocco 2 esteso (handoff v15 §2.3).
+// Consumiamo /api/gantt/strutturato e mostriamo la gerarchia come accordion.
+// Default apertura: fasi "In corso" aperte, le altre chiuse (handoff §2.3).
+// Sola lettura (no edit qui — gli edit vivono in /cantiere/{id}).
+// ═════════════════════════════════════════════════════════════════════════
+
+function StatoBadge({ stato }) {
+  // Map stato → colore Tailwind. Coerente con la legenda della Timeline.
+  const colori = {
+    // Stati Fase
+    'Da iniziare': 'bg-gray-700 text-gray-300',
+    'In corso': 'bg-blue-700 text-blue-100',
+    'Completata': 'bg-green-700 text-green-100',
+    'Sospesa': 'bg-yellow-700 text-yellow-100',
+    'Annullata': 'bg-red-900 text-red-200',
+    // Stati Task
+    'Completato': 'bg-green-700 text-green-100',
+    'In corso (task)': 'bg-blue-700 text-blue-100',  // se mai usato
+    'Da fare': 'bg-gray-700 text-gray-300',
+    'Bloccato': 'bg-red-700 text-red-100',
+    'Eliminato': 'bg-red-950 text-red-300',
+    // Stati Progetto
+    'Bozza': 'bg-amber-800 text-amber-100',
+    'In esecuzione': 'bg-blue-700 text-blue-100',
+    'Sospeso': 'bg-yellow-700 text-yellow-100',
+    'Annullato': 'bg-red-900 text-red-200',
+  }
+  const cls = colori[stato] || 'bg-gray-700 text-gray-300'
+  return <span className={`text-xs px-2 py-0.5 rounded ${cls}`}>{stato}</span>
+}
+
+function TaskRow({ task }) {
+  // Riga task: nome, dipendente, ore, date, stato.
+  const sforamento = task.ore_stimate > 0 && task.ore_consumate > task.ore_stimate
+  return (
+    <div className="grid grid-cols-12 gap-2 px-4 py-2 text-sm hover:bg-gray-800/40 border-t border-gray-800/40">
+      <div className="col-span-4 truncate">{task.nome}</div>
+      <div className="col-span-2 text-gray-400 truncate">{task.dipendente_nome || '—'}</div>
+      <div className="col-span-1 text-right">
+        <span className={sforamento ? 'text-red-400 font-medium' : 'text-gray-300'}>
+          {task.ore_consumate}h
+        </span>
+        <span className="text-gray-600"> / {task.ore_stimate}h</span>
+      </div>
+      <div className="col-span-3 text-xs text-gray-500">
+        {task.data_inizio || '?'} → {task.data_fine || '?'}
+      </div>
+      <div className="col-span-2 text-right"><StatoBadge stato={task.stato} /></div>
+    </div>
+  )
+}
+
+function FaseAccordion({ fase, defaultAperta }) {
+  const [aperta, setAperta] = useState(defaultAperta)
+  const sforamento = fase.ore_vendute > 0 && fase.ore_consumate > fase.ore_vendute
+
+  return (
+    <div className="border-t border-gray-800">
+      <button
+        onClick={() => setAperta(!aperta)}
+        className="w-full grid grid-cols-12 gap-2 px-4 py-2 text-sm text-left hover:bg-gray-800/60 items-center"
+      >
+        <div className="col-span-4 flex items-center gap-2">
+          <span className="text-gray-500 text-xs w-4">{aperta ? '▼' : '▶'}</span>
+          <span className="font-medium">{fase.nome}</span>
+          <span className="text-xs text-gray-600">({fase.n_task} {fase.n_task === 1 ? 'task' : 'task'})</span>
+        </div>
+        <div className="col-span-2 text-xs text-gray-500">Ordine {fase.ordine}</div>
+        <div className="col-span-1 text-right text-xs">
+          <span className={sforamento ? 'text-red-400 font-medium' : 'text-gray-300'}>
+            {fase.ore_consumate}h
+          </span>
+          <span className="text-gray-600"> / {fase.ore_vendute}h</span>
+        </div>
+        <div className="col-span-3 text-xs text-gray-500">
+          {fase.data_inizio || '?'} → {fase.data_fine || '?'}
+        </div>
+        <div className="col-span-2 text-right"><StatoBadge stato={fase.stato} /></div>
+      </button>
+
+      {aperta && (
+        <div className="bg-gray-900/40">
+          {fase.tasks.length === 0 ? (
+            <div className="px-4 py-3 text-xs text-gray-500 italic border-t border-gray-800/40">
+              Nessun task in questa fase.
+            </div>
+          ) : (
+            fase.tasks.map(t => <TaskRow key={t.id} task={t} />)
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function ProgettoCard({ progetto, navigate }) {
+  const sforamento = progetto.ore_vendute_totali > 0 && progetto.ore_consumate_totali > progetto.ore_vendute_totali
+
+  return (
+    <div className="bg-gray-900 rounded-xl border border-gray-800 mb-4 overflow-hidden">
+      {/* Header progetto */}
+      <div className="bg-gray-800/50 px-4 py-3 flex items-center justify-between flex-wrap gap-2">
+        <div className="flex items-center gap-3 min-w-0">
+          <button
+            onClick={() => navigate(`/cantiere/${progetto.id}`)}
+            className="text-lg font-semibold text-blue-300 hover:text-blue-200 hover:underline truncate"
+            title="Apri scheda progetto"
+          >
+            {progetto.nome}
+          </button>
+          <span className="text-xs text-gray-500 font-mono">{progetto.id}</span>
+          <StatoBadge stato={progetto.stato} />
+          {progetto.stato !== progetto.stato_derivato && (
+            <span className="text-xs text-gray-500 italic" title={`Stato derivato dalle fasi: ${progetto.stato_derivato}`}>
+              (derivato: {progetto.stato_derivato})
+            </span>
+          )}
+        </div>
+        <div className="text-xs text-gray-400">
+          <span>Cliente: <span className="text-gray-200">{progetto.cliente || '—'}</span></span>
+          <span className="mx-3">|</span>
+          <span>Ore: <span className={sforamento ? 'text-red-400 font-medium' : 'text-gray-200'}>
+            {progetto.ore_consumate_totali}h
+          </span>
+          <span className="text-gray-600"> / {progetto.ore_vendute_totali}h</span></span>
+          <span className="mx-3">|</span>
+          <span>{progetto.n_fasi} {progetto.n_fasi === 1 ? 'fase' : 'fasi'}</span>
+        </div>
+      </div>
+
+      {/* Header colonne tabella */}
+      <div className="grid grid-cols-12 gap-2 px-4 py-2 text-xs text-gray-500 uppercase tracking-wide border-t border-gray-800">
+        <div className="col-span-4">Fase / Task</div>
+        <div className="col-span-2">Resp. / Ordine</div>
+        <div className="col-span-1 text-right">Ore</div>
+        <div className="col-span-3">Periodo</div>
+        <div className="col-span-2 text-right">Stato</div>
+      </div>
+
+      {/* Fasi */}
+      {progetto.fasi.length === 0 ? (
+        <div className="px-4 py-4 text-sm text-gray-500 italic border-t border-gray-800">
+          Nessuna fase definita. Vai alla scheda progetto per crearne.
+        </div>
+      ) : (
+        progetto.fasi.map(f => (
+          <FaseAccordion
+            key={f.id}
+            fase={f}
+            // Default apertura: fasi "In corso" aperte (handoff §2.3)
+            defaultAperta={f.stato === 'In corso'}
+          />
+        ))
+      )}
+    </div>
+  )
+}
+
+function VistaElenco({ filtroStato, navigate }) {
+  const [data, setData] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [errore, setErrore] = useState(null)
+
+  useEffect(() => {
+    setLoading(true)
+    setErrore(null)
+    fetchGanttStrutturato({ stato: filtroStato })
+      .then(d => setData(d))
+      .catch(e => setErrore(e.message || 'Errore di caricamento'))
+      .finally(() => setLoading(false))
+  }, [filtroStato])
+
+  if (loading) return <p className="text-gray-400 py-8">Caricamento drill-down...</p>
+  if (errore) return <p className="text-red-400 py-8">Errore: {errore}</p>
+  if (data.length === 0) return <p className="text-gray-500 py-8 italic">Nessun progetto da mostrare con il filtro corrente.</p>
+
+  return (
+    <div>
+      {data.map(p => <ProgettoCard key={p.id} progetto={p} navigate={navigate} />)}
+    </div>
+  )
+}
+
+
+// ═════════════════════════════════════════════════════════════════════════
+// PAGINA GANTT — toggle Timeline / Elenco
+// ═════════════════════════════════════════════════════════════════════════
+
+
 export default function GanttPage() {
+  const navigate = useNavigate()
+
+  // Step 2.3: nuovi state per vista e filtro stato progetti
+  const [vista, setVista] = useState('elenco')  // 'elenco' (drill-down) | 'timeline' (GANTT classico)
+  const [filtroStato, setFiltroStato] = useState('attivi')  // attivi | all | bozza | in esecuzione | sospeso
+
+  // State legacy (per la vista timeline)
   const [ganttData, setGanttData] = useState([])
   const [progetti, setProgetti] = useState([])
   const [dipendenti, setDipendenti] = useState([])
@@ -443,11 +643,12 @@ export default function GanttPage() {
   }, [])
 
   useEffect(() => {
+    if (vista !== 'timeline') return  // la vista elenco si autogestisce
     fetchGantt(filtroProgetto || null).then(data => {
       setGanttData(filtroProfilo ? data.filter(t => t.profile === filtroProfilo) : data)
-      setSelectedTask(null) // chiudi pannello quando cambia filtro
+      setSelectedTask(null)
     })
-  }, [filtroProgetto, filtroProfilo])
+  }, [filtroProgetto, filtroProfilo, vista])
 
   if (loading) return <p className="text-gray-400">Caricamento...</p>
 
@@ -456,97 +657,147 @@ export default function GanttPage() {
 
   return (
     <div>
-      <h1 className="text-3xl font-bold mb-6">📅 GANTT Interattivo</h1>
+      <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
+        <h1 className="text-3xl font-bold">📅 GANTT</h1>
 
-      <div className="flex gap-4 mb-4 flex-wrap items-center">
-        <select value={filtroProgetto} onChange={e => setFiltroProgetto(e.target.value)}
-          className="bg-gray-800 border border-gray-600 rounded-lg px-4 py-2 text-sm">
-          <option value="">Tutti i progetti</option>
-          {progettiAttivi.map(p => <option key={p.id} value={p.id}>{p.nome}</option>)}
-        </select>
-        <select value={filtroProfilo} onChange={e => setFiltroProfilo(e.target.value)}
-          className="bg-gray-800 border border-gray-600 rounded-lg px-4 py-2 text-sm">
-          <option value="">Tutti i profili</option>
-          {profili.map(p => <option key={p} value={p}>{p}</option>)}
-        </select>
-        <StatusLegend />
-        <div className="ml-auto flex gap-2">
-          <button onClick={() => exportGanttPdf(filtroProgetto || null)}
-            className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm transition-colors">
-            📥 PDF
+        {/* Toggle vista — Step 2.3 handoff v15 */}
+        <div className="inline-flex bg-gray-800 rounded-lg p-1 border border-gray-700">
+          <button
+            onClick={() => setVista('elenco')}
+            className={`px-4 py-1.5 text-sm rounded-md transition-colors ${
+              vista === 'elenco' ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-gray-200'
+            }`}
+          >
+            📋 Elenco
           </button>
-          <button onClick={() => {
-            const params = filtroProgetto ? `?progetto_id=${filtroProgetto}` : '';
-            fetch(`/api/gantt/export-png${params}`)
-              .then(res => res.blob())
-              .then(blob => {
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = `gantt_${filtroProgetto || 'tutti'}_${new Date().toISOString().slice(0,10)}.png`;
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
-                URL.revokeObjectURL(url);
-              })
-              .catch(() => alert('Errore nella generazione PNG'))
-          }}
-            className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm transition-colors">
-            🖼️ PNG
-          </button>
-          <button onClick={() => {
-            const params = filtroProgetto ? `?progetto_id=${filtroProgetto}` : '';
-            fetch(`/api/gantt/export-excel${params}`)
-              .then(res => res.blob())
-              .then(blob => {
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = `gantt_${filtroProgetto || 'tutti'}_${new Date().toISOString().slice(0,10)}.xlsx`;
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
-                URL.revokeObjectURL(url);
-              })
-              .catch(() => alert('Errore nella generazione Excel'))
-          }}
-            className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm transition-colors">
-            📊 Excel
+          <button
+            onClick={() => setVista('timeline')}
+            className={`px-4 py-1.5 text-sm rounded-md transition-colors ${
+              vista === 'timeline' ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-gray-200'
+            }`}
+          >
+            📊 Timeline
           </button>
         </div>
       </div>
 
-      <GanttChart
-        tasks={ganttData}
-        onTaskClick={setSelectedTask}
-      />
-
-      {/* Pannello dettaglio al click */}
-      {selectedTask && (
-        <TaskDetailPanel
-          task={selectedTask}
-          allTasks={ganttData}
-          progetti={progetti}
-          dipendenti={dipendenti}
-          onClose={() => setSelectedTask(null)}
-          onElimina={async (taskId) => {
-            try {
-              const res = await fetch(`/api/tasks/${taskId}/elimina`, { method: 'PATCH' })
-              if (!res.ok) throw new Error('Errore')
-              setSelectedTask(null)
-              // Ricarica GANTT
-              const newData = await fetchGantt(filtroProgetto || null)
-              setGanttData(filtroProfilo ? newData.filter(t => t.profile === filtroProfilo) : newData)
-            } catch (err) {
-              alert('Errore nell\'eliminazione: ' + err.message)
-            }
-          }}
-        />
+      {/* ═══════════════════════════════════════════════════════════════ */}
+      {/* VISTA ELENCO — drill-down gerarchico Progetto → Fase → Task     */}
+      {/* ═══════════════════════════════════════════════════════════════ */}
+      {vista === 'elenco' && (
+        <>
+          <div className="flex gap-4 mb-4 flex-wrap items-center">
+            <label className="text-sm text-gray-400">Stato:</label>
+            <select
+              value={filtroStato}
+              onChange={e => setFiltroStato(e.target.value)}
+              className="bg-gray-800 border border-gray-600 rounded-lg px-3 py-1.5 text-sm"
+            >
+              <option value="attivi">Attivi (In esecuzione + Sospeso)</option>
+              <option value="in esecuzione">Solo In esecuzione</option>
+              <option value="sospeso">Solo Sospeso</option>
+            </select>
+            <span className="text-xs text-gray-500 italic ml-2">
+              Bozze e progetti chiusi non sono mostrati qui.
+            </span>
+          </div>
+          <VistaElenco filtroStato={filtroStato} navigate={navigate} />
+        </>
       )}
 
-      {/* Hint se nessun task selezionato */}
-      {!selectedTask && ganttData.length > 0 && (
-        <p className="text-xs text-gray-600 mt-3 text-center">Clicca su un task nel GANTT per vedere i dettagli</p>
+      {/* ═══════════════════════════════════════════════════════════════ */}
+      {/* VISTA TIMELINE — GANTT classico (invariato)                     */}
+      {/* ═══════════════════════════════════════════════════════════════ */}
+      {vista === 'timeline' && (
+        <>
+          <div className="flex gap-4 mb-4 flex-wrap items-center">
+            <select value={filtroProgetto} onChange={e => setFiltroProgetto(e.target.value)}
+              className="bg-gray-800 border border-gray-600 rounded-lg px-4 py-2 text-sm">
+              <option value="">Tutti i progetti</option>
+              {progettiAttivi.map(p => <option key={p.id} value={p.id}>{p.nome}</option>)}
+            </select>
+            <select value={filtroProfilo} onChange={e => setFiltroProfilo(e.target.value)}
+              className="bg-gray-800 border border-gray-600 rounded-lg px-4 py-2 text-sm">
+              <option value="">Tutti i profili</option>
+              {profili.map(p => <option key={p} value={p}>{p}</option>)}
+            </select>
+            <StatusLegend />
+            <div className="ml-auto flex gap-2">
+              <button onClick={() => exportGanttPdf(filtroProgetto || null)}
+                className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm transition-colors">
+                📥 PDF
+              </button>
+              <button onClick={() => {
+                const params = filtroProgetto ? `?progetto_id=${filtroProgetto}` : '';
+                fetch(`/api/gantt/export-png${params}`)
+                  .then(res => res.blob())
+                  .then(blob => {
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `gantt_${filtroProgetto || 'tutti'}_${new Date().toISOString().slice(0,10)}.png`;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    URL.revokeObjectURL(url);
+                  })
+                  .catch(() => alert('Errore nella generazione PNG'))
+              }}
+                className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm transition-colors">
+                🖼️ PNG
+              </button>
+              <button onClick={() => {
+                const params = filtroProgetto ? `?progetto_id=${filtroProgetto}` : '';
+                fetch(`/api/gantt/export-excel${params}`)
+                  .then(res => res.blob())
+                  .then(blob => {
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `gantt_${filtroProgetto || 'tutti'}_${new Date().toISOString().slice(0,10)}.xlsx`;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    URL.revokeObjectURL(url);
+                  })
+                  .catch(() => alert('Errore nella generazione Excel'))
+              }}
+                className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm transition-colors">
+                📊 Excel
+              </button>
+            </div>
+          </div>
+
+          <GanttChart
+            tasks={ganttData}
+            onTaskClick={setSelectedTask}
+          />
+
+          {selectedTask && (
+            <TaskDetailPanel
+              task={selectedTask}
+              allTasks={ganttData}
+              progetti={progetti}
+              dipendenti={dipendenti}
+              onClose={() => setSelectedTask(null)}
+              onElimina={async (taskId) => {
+                try {
+                  const res = await fetch(`/api/tasks/${taskId}/elimina`, { method: 'PATCH' })
+                  if (!res.ok) throw new Error('Errore')
+                  setSelectedTask(null)
+                  const newData = await fetchGantt(filtroProgetto || null)
+                  setGanttData(filtroProfilo ? newData.filter(t => t.profile === filtroProfilo) : newData)
+                } catch (err) {
+                  alert('Errore nell\'eliminazione: ' + err.message)
+                }
+              }}
+            />
+          )}
+
+          {!selectedTask && ganttData.length > 0 && (
+            <p className="text-xs text-gray-600 mt-3 text-center">Clicca su un task nel GANTT per vedere i dettagli</p>
+          )}
+        </>
       )}
     </div>
   )

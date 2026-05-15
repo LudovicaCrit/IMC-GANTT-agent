@@ -180,6 +180,17 @@ export async function fetchGantt(progettoId = null) {
   return apiFetch(`${API_BASE}/gantt${params}`);
 }
 
+export async function fetchGanttStrutturato({ stato = null, progettoId = null } = {}) {
+  // Endpoint gerarchico Progetto → Fase → Task per drill-down (Step 2.2).
+  // stato: "attivi" (default backend), "all", "bozza", "in esecuzione", "sospeso", ecc.
+  // progettoId: drill su un singolo progetto.
+  const params = new URLSearchParams();
+  if (stato) params.set('stato', stato);
+  if (progettoId) params.set('progetto_id', progettoId);
+  const qs = params.toString();
+  return apiFetch(`${API_BASE}/gantt/strutturato${qs ? `?${qs}` : ''}`);
+}
+
 export async function fetchCaricoRisorse(settimane = 12) {
   return apiFetch(`${API_BASE}/risorse/carico?settimane=${settimane}`);
 }
