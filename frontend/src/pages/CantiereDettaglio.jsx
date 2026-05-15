@@ -30,6 +30,7 @@ import { useParams, useNavigate, Link } from 'react-router-dom'
 import {
   fetchGanttStrutturato,
   fetchDipendenti,
+  fetchSaturazionePeriodo,
   updateProgetto,
   deleteProgetto,
   createFase,
@@ -95,6 +96,34 @@ function FormInput({ label, value, onChange, type = 'text', required = false, pl
         placeholder={placeholder}
         className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm focus:border-blue-500 outline-none"
       />
+    </div>
+  )
+}
+
+/** Input date con limiti min/max e tooltip esplicativo (Step 2.4-bis §14.2). */
+function FormInputDate({ label, value, onChange, required = false, minDate = null, maxDate = null, hint = '' }) {
+  const fuoriRange = value && ((minDate && value < minDate) || (maxDate && value > maxDate))
+  return (
+    <div>
+      <label className="text-xs text-gray-500 uppercase tracking-wide block mb-1">
+        {label}{required && <span className="text-red-400 ml-1">*</span>}
+      </label>
+      <input
+        type="date"
+        value={value ?? ''}
+        onChange={e => onChange(e.target.value)}
+        min={minDate || undefined}
+        max={maxDate || undefined}
+        className={`w-full border rounded px-3 py-2 text-sm focus:outline-none ${
+          fuoriRange
+            ? 'bg-red-950 border-red-700 focus:border-red-500'
+            : 'bg-gray-800 border-gray-700 focus:border-blue-500'
+        }`}
+      />
+      {hint && <div className="text-xs text-gray-500 mt-1">{hint}</div>}
+      {fuoriRange && (
+        <div className="text-xs text-red-400 mt-1">⚠ Data fuori dal range consentito</div>
+      )}
     </div>
   )
 }
@@ -411,8 +440,18 @@ function SezioneFasiTask({ progetto, dipendenti, onAggiornaFase, onEliminaFase, 
             onToggle={() => toggleFase(fase.id)}
             onAggiorna={onAggiornaFase}
             onElimina={() => onEliminaFase(fase)}
-            onAggiungiTask={() => setModaleNuovoTask({ faseId: fase.id, faseNome: fase.nome })}
-            onEditTask={(task) => setModaleEditTask({ ...task, fase_id: fase.id })}
+            onAggiungiTask={() => setModaleNuovoTask({
+              faseId: fase.id,
+              faseNome: fase.nome,
+              faseDataInizio: fase.data_inizio,
+              faseDataFine: fase.data_fine,
+            })}
+            onEditTask={(task) => setModaleEditTask({
+              ...task,
+              fase_id: fase.id,
+              _faseDataInizio: fase.data_inizio,
+              _faseDataFine: fase.data_fine,
+            })}
             onEliminaTask={onEliminaTask}
           />
         ))
@@ -435,6 +474,8 @@ function SezioneFasiTask({ progetto, dipendenti, onAggiornaFase, onEliminaFase, 
           progettoId={progetto.id}
           faseId={modaleNuovoTask.faseId}
           faseNome={modaleNuovoTask.faseNome}
+          faseDataInizio={modaleNuovoTask.faseDataInizio}
+          faseDataFine={modaleNuovoTask.faseDataFine}
           dipendenti={dipendenti}
           tutteLeTaskDelProgetto={progetto.fasi.flatMap(f => f.tasks)}
           onClose={() => setModaleNuovoTask(null)}
@@ -450,6 +491,8 @@ function SezioneFasiTask({ progetto, dipendenti, onAggiornaFase, onEliminaFase, 
           task={modaleEditTask}
           progettoId={progetto.id}
           faseId={modaleEditTask.fase_id}
+          faseDataInizio={modaleEditTask._faseDataInizio}
+          faseDataFine={modaleEditTask._faseDataFine}
           dipendenti={dipendenti}
           tutteLeTaskDelProgetto={progetto.fasi.flatMap(f => f.tasks)}
           onClose={() => setModaleEditTask(null)}
@@ -564,6 +607,74 @@ function FaseEditabile({ fase, dipendenti, tutteLeTaskDelProgetto, espansa, onTo
 
 // ─── Modali ─────────────────────────────────────────────────────────────
 
+// ─── Pannello saturazione dipendente (Step 2.4-bis §14.4) ───────────────
+
+/**
+ * Mostra la saturazione del dipendente selezionato nel periodo del task.
+ * Si aggiorna automaticamente quando cambia dipendente, data_inizio, data_fine.
+ * Colori secondo soglie:
+ *   verde   <80%   ok
+ *   giallo  80-100 quasi pieno
+ *   arancio 100-125 sovraccarico tollerabile (soft cap)
+ *   rosso   >125   sovraccarico critico
+ */
+function PannelloSaturazione({ dipendenteId, dataInizio, dataFine, escludiTaskId }) {
+  const [stato, setStato] = useState({ loading: false, dati: null, errore: null })
+
+  useEffect(() => {
+    if (!dipendenteId || !dataInizio || !dataFine) {
+      setStato({ loading: false, dati: null, errore: null })
+      return
+    }
+    if (dataFine < dataInizio) {
+      setStato({ loading: false, dati: null, errore: null })
+      return
+    }
+    let annullato = false
+    setStato(s => ({ ...s, loading: true, errore: null }))
+    fetchSaturazionePeriodo({ dipendenteId, dataInizio, dataFine, escludiTaskId })
+      .then(d => { if (!annullato) setStato({ loading: false, dati: d, errore: null }) })
+      .catch(e => { if (!annullato) setStato({ loading: false, dati: null, errore: e.message }) })
+    return () => { annullato = true }
+  }, [dipendenteId, dataInizio, dataFine, escludiTaskId])
+
+  if (!dipendenteId) return null
+  if (stato.loading) {
+    return <div className="mt-2 text-xs text-gray-500 italic">Calcolo saturazione…</div>
+  }
+  if (stato.errore) {
+    return <div className="mt-2 text-xs text-red-400">Errore saturazione: {stato.errore}</div>
+  }
+  if (!stato.dati) return null
+
+  const d = stato.dati
+  const sat = d.saturazione_media_pct
+
+  let livello, cls
+  if (sat < 80) { livello = 'ok'; cls = 'bg-green-900/30 border-green-700 text-green-200' }
+  else if (sat < 100) { livello = 'attenzione'; cls = 'bg-yellow-900/30 border-yellow-700 text-yellow-200' }
+  else if (sat <= 125) { livello = 'sovraccarico'; cls = 'bg-orange-900/40 border-orange-700 text-orange-200' }
+  else { livello = 'critico'; cls = 'bg-red-900/40 border-red-700 text-red-200' }
+
+  const icona = livello === 'ok' ? '✓' : livello === 'attenzione' ? '⚠' : '⛔'
+
+  return (
+    <div className={`mt-2 border rounded-md px-3 py-2 text-xs ${cls}`}>
+      <div className="flex items-center justify-between mb-1">
+        <span className="font-semibold">{icona} {d.nome} · {d.ore_sett}h/sett</span>
+        <span className="font-mono">
+          media {sat}%  ·  picco {d.saturazione_max_pct}%
+        </span>
+      </div>
+      <div className="opacity-80">
+        Saturazione media nelle {d.settimane_coperte} settimane del task
+        {sat > 125 && <strong> — oltre il soft cap (125%)</strong>}
+      </div>
+    </div>
+  )
+}
+
+
 function ModaleNuovaFase({ progettoId, ordineSuggerito, onClose, onSalva }) {
   const [form, setForm] = useState({
     nome: '', ordine: ordineSuggerito,
@@ -614,7 +725,7 @@ function ModaleNuovaFase({ progettoId, ordineSuggerito, onClose, onSalva }) {
   )
 }
 
-function ModaleTask({ mode, task, progettoId, faseId, faseNome, dipendenti, tutteLeTaskDelProgetto, onClose, onSalva }) {
+function ModaleTask({ mode, task, progettoId, faseId, faseNome, faseDataInizio, faseDataFine, dipendenti, tutteLeTaskDelProgetto, onClose, onSalva }) {
   const [form, setForm] = useState(() => mode === 'modifica' ? {
     nome: task.nome || '',
     ore_stimate: task.ore_stimate || 0,
@@ -679,10 +790,29 @@ function ModaleTask({ mode, task, progettoId, faseId, faseNome, dipendenti, tutt
           <FormSelect label="Stato" value={form.stato} onChange={v => setForm({...form, stato: v})} options={STATI_TASK} />
         </div>
         <div className="grid grid-cols-2 gap-3">
-          <FormInput label="Data inizio" type="date" value={form.data_inizio} onChange={v => setForm({...form, data_inizio: v})} />
-          <FormInput label="Data fine" type="date" value={form.data_fine} onChange={v => setForm({...form, data_fine: v})} />
+          <FormInputDate
+            label="Data inizio"
+            value={form.data_inizio}
+            onChange={v => setForm({...form, data_inizio: v})}
+            minDate={faseDataInizio}
+            maxDate={faseDataFine}
+            hint={faseDataInizio ? `Fase: ${faseDataInizio} → ${faseDataFine || '?'}` : ''}
+          />
+          <FormInputDate
+            label="Data fine"
+            value={form.data_fine}
+            onChange={v => setForm({...form, data_fine: v})}
+            minDate={form.data_inizio || faseDataInizio}
+            maxDate={faseDataFine}
+          />
         </div>
         <FormSelect label="Responsabile" value={form.dipendente_id} onChange={v => setForm({...form, dipendente_id: v})} options={dipOptions} />
+        <PannelloSaturazione
+          dipendenteId={form.dipendente_id}
+          dataInizio={form.data_inizio}
+          dataFine={form.data_fine}
+          escludiTaskId={mode === 'modifica' ? task?.id : null}
+        />
         <FormInput label="Profilo richiesto" value={form.profilo_richiesto} onChange={v => setForm({...form, profilo_richiesto: v})} placeholder="es. Tecnico Senior" />
         <FormSelect label="Predecessore (task)" value={form.predecessore} onChange={v => setForm({...form, predecessore: v})} options={predOptions} />
         {errore && <p className="text-sm text-red-400">{errore}</p>}

@@ -230,6 +230,22 @@ export async function deleteTask(taskId) {
   return apiFetch(`${API_BASE}/tasks/${taskId}/elimina`, { method: 'PATCH' });
 }
 
+// ═════════════════════════════════════════════════════════════════════════
+//  RISORSE — saturazione (Step 2.4-bis §14.4)
+// ═════════════════════════════════════════════════════════════════════════
+
+export async function fetchSaturazionePeriodo({ dipendenteId, dataInizio, dataFine, escludiTaskId = null }) {
+  // Saturazione di un dipendente in un periodo. Usato dal modale Task del Cantiere
+  // per mostrare al PM se la persona è sovraccarica prima di confermare.
+  const params = new URLSearchParams({
+    dipendente_id: dipendenteId,
+    data_inizio: dataInizio,
+    data_fine: dataFine,
+  });
+  if (escludiTaskId) params.set('escludi_task_id', escludiTaskId);
+  return apiFetch(`${API_BASE}/risorse/saturazione-periodo?${params.toString()}`);
+}
+
 export async function fetchCaricoRisorse(settimane = 12) {
   return apiFetch(`${API_BASE}/risorse/carico?settimane=${settimane}`);
 }
