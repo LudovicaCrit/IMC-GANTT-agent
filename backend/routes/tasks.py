@@ -263,7 +263,7 @@ def crea_task_singolo(req: NuovoTaskSingolo, _: Utente = Depends(require_manager
                    f"fase esistente del progetto {req.progetto_id}."
         )
 
-    # Risolvi nome fase (per `aggiungi_task` che lo richiede come stringa)
+    # Risolvi nome fase + date (per validazione date task vs fase)
     from models import get_session as _gs
     session = _gs()
     try:
@@ -274,12 +274,33 @@ def crea_task_singolo(req: NuovoTaskSingolo, _: Utente = Depends(require_manager
                 detail=f"Fase id {fase_id} non esiste o non appartiene a {req.progetto_id}."
             )
         nome_fase = fase_row.nome
+        fase_data_inizio = fase_row.data_inizio
+        fase_data_fine = fase_row.data_fine
     finally:
         session.close()
 
     # Parse date
     di = datetime.fromisoformat(req.data_inizio) if req.data_inizio else get_oggi()
     df = datetime.fromisoformat(req.data_fine) if req.data_fine else get_oggi()
+
+    # Validazione coerenza date (Step 2.4-bis §14.2)
+    if df < di:
+        raise HTTPException(
+            status_code=422,
+            detail="data_fine non può precedere data_inizio."
+        )
+    if fase_data_inizio and di.date() < fase_data_inizio:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Il task inizia ({di.date()}) prima della fase '{nome_fase}' "
+                   f"({fase_data_inizio}). Estendi prima le date della fase."
+        )
+    if fase_data_fine and df.date() > fase_data_fine:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Il task finisce ({df.date()}) dopo la fase '{nome_fase}' "
+                   f"({fase_data_fine}). Estendi prima le date della fase."
+        )
 
     # Normalizza FK: stringa vuota → None (Postgres rifiuta '' come FK valido)
     dip_id = req.dipendente_id or None
@@ -331,6 +352,41 @@ def modifica_task_singolo(
 
     if not kwargs:
         raise HTTPException(status_code=400, detail="Nessun campo da modificare.")
+
+    # Validazione coerenza date (Step 2.4-bis §14.2)
+    # Se modifico almeno una delle due date, devo verificare la coerenza con la fase
+    if "data_inizio" in kwargs or "data_fine" in kwargs:
+        from models import get_session as _gs, Task, Fase
+        session = _gs()
+        try:
+            task_row = session.query(Task).filter(Task.id == task_id).first()
+            if not task_row:
+                raise HTTPException(status_code=404, detail=f"Task '{task_id}' non trovato")
+            # Date finali dopo la modifica
+            nuova_di = kwargs.get("data_inizio", task_row.data_inizio)
+            nuova_df = kwargs.get("data_fine", task_row.data_fine)
+            if nuova_df < nuova_di:
+                raise HTTPException(
+                    status_code=422,
+                    detail="data_fine non può precedere data_inizio."
+                )
+            # Date della fase
+            fase_row = session.query(Fase).filter(Fase.id == task_row.fase_id).first()
+            if fase_row:
+                if fase_row.data_inizio and nuova_di < fase_row.data_inizio:
+                    raise HTTPException(
+                        status_code=422,
+                        detail=f"Il task inizierebbe ({nuova_di}) prima della fase "
+                               f"'{fase_row.nome}' ({fase_row.data_inizio})."
+                    )
+                if fase_row.data_fine and nuova_df > fase_row.data_fine:
+                    raise HTTPException(
+                        status_code=422,
+                        detail=f"Il task finirebbe ({nuova_df}) dopo la fase "
+                               f"'{fase_row.nome}' ({fase_row.data_fine})."
+                    )
+        finally:
+            session.close()
 
     ok = modifica_task(task_id, **kwargs)
     if not ok:

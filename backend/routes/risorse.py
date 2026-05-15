@@ -119,6 +119,124 @@ def carico_risorse(
     return result
 
 
+@router.get("/saturazione-periodo")
+def saturazione_periodo(
+    dipendente_id: str,
+    data_inizio: str,
+    data_fine: str,
+    escludi_task_id: str = None,
+    _: Utente = Depends(require_manager),
+):
+    """Saturazione di un dipendente in un periodo specifico (Step 2.4-bis §14.4).
+
+    Usato dal modale Task di /cantiere/{id}: quando il PM seleziona un dipendente
+    o cambia date del task, mostra la saturazione media/max/min nelle settimane
+    coperte dal task, così il PM vede subito se la persona è sovraccarica.
+
+    Params:
+        dipendente_id: id dipendente da analizzare
+        data_inizio, data_fine: periodo del task (ISO date)
+        escludi_task_id: id task corrente da escludere dal calcolo (utile in
+            modifica: vogliamo vedere la saturazione SENZA contare il task che
+            stiamo modificando, altrimenti avremmo il doppio conteggio).
+
+    Returns:
+        {
+            "dipendente_id": str,
+            "nome": str,
+            "ore_sett": int,
+            "settimane_coperte": int,
+            "saturazione_media_pct": int,    # media nelle settimane del task
+            "saturazione_max_pct": int,      # picco
+            "saturazione_min_pct": int,      # minimo (utile per capire margine)
+            "ore_assegnate_totali": float,   # somma carichi nelle settimane
+            "settimane_dettaglio": [          # per debug/visualizzazione
+                {"settimana": "2026-05-18", "saturazione_pct": 95, "ore": 38},
+                ...
+            ]
+        }
+    """
+    from datetime import date as _date
+    try:
+        di = datetime.fromisoformat(data_inizio).date()
+        df = datetime.fromisoformat(data_fine).date()
+    except ValueError:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=422, detail="Formato date non valido (atteso ISO yyyy-mm-dd).")
+
+    if df < di:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=422, detail="data_fine precede data_inizio.")
+
+    dip_match = _DIPENDENTI()[_DIPENDENTI()["id"] == dipendente_id]
+    if len(dip_match) == 0:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail=f"Dipendente '{dipendente_id}' non trovato.")
+    d = dip_match.iloc[0]
+    ore_sett_dip = int(d["ore_sett"])
+
+    # Calcolo settimane coperte: dalla settimana del data_inizio alla settimana del data_fine
+    lun_start = di - timedelta(days=di.weekday())  # lunedì della settimana di data_inizio
+    lun_end = df - timedelta(days=df.weekday())    # lunedì della settimana di data_fine
+    n_sett = ((lun_end - lun_start).days // 7) + 1
+
+    settimane_dettaglio = []
+    saturazioni = []
+    ore_totali = 0.0
+
+    for w in range(n_sett):
+        lun_w = lun_start + timedelta(weeks=w)
+        # carico_settimanale_dipendente confronta con pandas Timestamp,
+        # serve datetime non date pura
+        lun_w_dt = datetime.combine(lun_w, datetime.min.time())
+        carico_w = carico_settimanale_dipendente(dipendente_id, lun_w_dt)
+
+        # Escludi il task corrente (se in modifica) dal calcolo
+        if escludi_task_id:
+            tasks_dip = _TASKS()[
+                (_TASKS()["dipendente_id"] == dipendente_id) &
+                (_TASKS()["id"] == escludi_task_id) &
+                (~_TASKS()["stato"].isin(["Completato", "Sospeso", "Eliminato"]))
+            ]
+            for _, t in tasks_dip.iterrows():
+                # Calcola se questo task si sovrappone alla settimana w
+                # NB: confronto con datetime (lun_w_dt), non date pura (lun_w)
+                # perché pandas Timestamp non supporta confronto con date.
+                if t["data_inizio"] <= lun_w_dt + timedelta(days=4) and t["data_fine"] >= lun_w_dt:
+                    weeks_task = max(1, (t["data_fine"] - t["data_inizio"]).days / 7)
+                    ore_task_in_w = t["ore_stimate"] / weeks_task
+                    carico_w = max(0, carico_w - ore_task_in_w)
+
+        sat_pct = round(carico_w / ore_sett_dip * 100) if ore_sett_dip > 0 else 0
+        saturazioni.append(sat_pct)
+        ore_totali += float(carico_w)
+        settimane_dettaglio.append({
+            "settimana": lun_w.strftime("%Y-%m-%d"),
+            "settimana_label": lun_w.strftime("%d/%m"),
+            "saturazione_pct": sat_pct,
+            "ore": round(carico_w, 1),
+        })
+
+    if not saturazioni:
+        sat_media = sat_max = sat_min = 0
+    else:
+        sat_media = round(sum(saturazioni) / len(saturazioni))
+        sat_max = max(saturazioni)
+        sat_min = min(saturazioni)
+
+    return {
+        "dipendente_id": dipendente_id,
+        "nome": d["nome"],
+        "ore_sett": ore_sett_dip,
+        "settimane_coperte": n_sett,
+        "saturazione_media_pct": sat_media,
+        "saturazione_max_pct": sat_max,
+        "saturazione_min_pct": sat_min,
+        "ore_assegnate_totali": round(ore_totali, 1),
+        "settimane_dettaglio": settimane_dettaglio,
+    }
+
+
 @router.get("/suggerisci-bilanciamento")
 def suggerisci_bilanciamento(_: Utente = Depends(require_manager)):
     """Analizza le saturazioni e propone redistribuzioni per bilanciare il carico."""
