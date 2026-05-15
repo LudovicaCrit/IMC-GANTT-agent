@@ -9,6 +9,7 @@ import Pipeline from './pages/Pipeline'
 import Economia from './pages/Economia'
 import AttivitaInterne from './pages/AttivitaInterne'
 import Configurazione from './pages/Configurazione'
+import CantiereDettaglio from './pages/CantiereDettaglio'
 import Login from './pages/Login'
 import Forbidden from './pages/Forbidden'
 import NotFound from './pages/NotFound'
@@ -171,6 +172,9 @@ function MainLayout() {
           } />
           <Route path="/configurazione" element={
             <RequireManager><Configurazione /></RequireManager>
+          } />
+          <Route path="/cantiere/:progettoId" element={
+            <RequireManager><CantiereDettaglio /></RequireManager>
           } />
 
           {/* Fallback per URL ignoti */}

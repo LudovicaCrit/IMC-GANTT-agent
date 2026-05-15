@@ -36,7 +36,7 @@ export class ForbiddenError extends Error {
  *   - skipAuthRedirect: se true, NON reindirizza al login su 401
  *     (riservato al solo getCurrentUser durante il bootstrap di AuthContext)
  */
-async function apiFetch(url, options = {}) {
+export async function apiFetch(url, options = {}) {
   const { body, rawResponse = false, skipAuthRedirect = false, ...rest } = options;
 
   // Costruzione opzioni per fetch
@@ -189,6 +189,45 @@ export async function fetchGanttStrutturato({ stato = null, progettoId = null } 
   if (progettoId) params.set('progetto_id', progettoId);
   const qs = params.toString();
   return apiFetch(`${API_BASE}/gantt/strutturato${qs ? `?${qs}` : ''}`);
+}
+
+// ═════════════════════════════════════════════════════════════════════════
+//  FASI — CRUD (Step 2.4 + D2 cancellazione bloccante se task figli)
+// ═════════════════════════════════════════════════════════════════════════
+
+export async function createFase(data) {
+  // Body: { progetto_id, nome, ordine, data_inizio?, data_fine?, ore_vendute?, ore_pianificate?, note? }
+  return apiFetch(`${API_BASE}/fasi`, { method: 'POST', body: data });
+}
+
+export async function updateFase(faseId, data) {
+  // Body: campi parziali. Stato validato server-side contro STATI_FASE.
+  return apiFetch(`${API_BASE}/fasi/${faseId}`, { method: 'PATCH', body: data });
+}
+
+export async function deleteFase(faseId) {
+  // HTTP 204 success; 409 se la fase ha task agganciati.
+  return apiFetch(`${API_BASE}/fasi/${faseId}`, { method: 'DELETE' });
+}
+
+// ═════════════════════════════════════════════════════════════════════════
+//  TASK — CRUD singolo (Step 2.4 Cantiere)
+// ═════════════════════════════════════════════════════════════════════════
+
+export async function createTask(data) {
+  // Body: { progetto_id, nome, fase_id?, fase?, ore_stimate?, data_inizio?, data_fine?,
+  //         profilo_richiesto?, dipendente_id?, predecessore?, stato? }
+  return apiFetch(`${API_BASE}/tasks`, { method: 'POST', body: data });
+}
+
+export async function updateTask(taskId, data) {
+  // Body: campi parziali. Le date come stringhe ISO.
+  return apiFetch(`${API_BASE}/tasks/${taskId}`, { method: 'PATCH', body: data });
+}
+
+export async function deleteTask(taskId) {
+  // Soft delete: stato → "Eliminato" (endpoint legacy /elimina).
+  return apiFetch(`${API_BASE}/tasks/${taskId}/elimina`, { method: 'PATCH' });
 }
 
 export async function fetchCaricoRisorse(settimane = 12) {
