@@ -200,9 +200,13 @@ export async function createFase(data) {
   return apiFetch(`${API_BASE}/fasi`, { method: 'POST', body: data });
 }
 
-export async function updateFase(faseId, data) {
-  // Body: campi parziali. Stato validato server-side contro STATI_FASE.
-  return apiFetch(`${API_BASE}/fasi/${faseId}`, { method: 'PATCH', body: data });
+export async function updateFase(faseId, dati, cascade = false) {
+  const body = cascade ? { ...dati, cascade: true } : dati
+  return apiFetch(`${API_BASE}/fasi/${faseId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
 }
 
 export async function deleteFase(faseId) {

@@ -506,17 +506,166 @@ function SezioneFasiTask({ progetto, dipendenti, onAggiornaFase, onEliminaFase, 
   )
 }
 
+// ─── Modale conferma cascata stato fase → task (Step 2.4-bis B) ──────────
+
+/**
+ * Quando il PM cambia lo stato di una fase verso Sospesa/Annullata/Completata
+ * o Da iniziare (back), e ci sono task impattati, mostra anteprima e chiede
+ * conferma. Per "Da iniziare" con task aventi ore consumate, l'operazione è
+ * bloccante: solo bottone Annulla.
+ */
+function ModaleConfermaCascata({ fase, statoNuovo, onClose, onConferma }) {
+  const tasksAttivi = fase.tasks.filter(t =>
+    !['Completato', 'Eliminato'].includes(t.stato)
+  )
+
+  // Caso speciale "Da iniziare": verifica ore consumate
+  let bloccante = false
+  let taskConConsumate = []
+  if (statoNuovo === 'Da iniziare') {
+    taskConConsumate = fase.tasks.filter(t => (t.ore_consumate || 0) > 0)
+    if (taskConConsumate.length > 0) bloccante = true
+  }
+
+  // Calcola i task che verrebbero toccati dalla cascata (lato client, è solo anteprima)
+  const regolaCascata = {
+    'Sospesa': { from: ['In corso'], to: 'Sospeso' },
+    'Annullata': { from: ['Da iniziare', 'In corso', 'Sospeso'], to: 'Annullato' },
+    'Completata': { from: ['Da iniziare', 'In corso', 'Sospeso'], to: 'Completato' },
+    'Da iniziare': { from: ['In corso'], to: 'Da iniziare' },
+  }[statoNuovo]
+
+  const taskImpattati = regolaCascata
+    ? fase.tasks.filter(t => regolaCascata.from.includes(t.stato))
+    : []
+
+  // Messaggio dinamico per stato
+  const titolo = bloccante
+    ? `⛔ Operazione non consentita`
+    : `Confermi cambio stato fase a "${statoNuovo}"?`
+
+  return (
+    <ModaleWrapper titolo={titolo} onClose={onClose} salvando={false}>
+      {bloccante ? (
+        <div className="space-y-3">
+          <p className="text-sm text-red-300">
+            Non posso riportare la fase <strong>"{fase.nome}"</strong> a "Da iniziare":
+            ha <strong>{taskConConsumate.length}</strong> task con ore consumate.
+            Una fase con lavoro già consuntivato non può fingere di non essere mai iniziata.
+          </p>
+          <p className="text-xs text-gray-400">
+            Task con ore consumate:
+          </p>
+          <ul className="text-xs bg-gray-800/60 rounded p-2 max-h-40 overflow-y-auto">
+            {taskConConsumate.map(t => (
+              <li key={t.id} className="py-0.5">
+                <span className="font-mono text-gray-400">{t.id}</span>{' '}
+                {t.nome}{' '}
+                <span className="text-red-300">({t.ore_consumate}h consumate)</span>
+              </li>
+            ))}
+          </ul>
+          <p className="text-xs text-gray-500 italic">
+            Per procedere, azzera prima la consuntivazione di questi task.
+          </p>
+          <div className="flex justify-end pt-2">
+            <button onClick={onClose}
+              className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded text-sm">Chiudi</button>
+          </div>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          <p className="text-sm text-gray-300">
+            Stai cambiando lo stato della fase <strong>"{fase.nome}"</strong> a <strong>{statoNuovo}</strong>.
+          </p>
+          {taskImpattati.length > 0 ? (
+            <>
+              <p className="text-sm text-gray-300">
+                Ci sono <strong>{taskImpattati.length}</strong> task in stato attivo. Cosa fare con loro?
+              </p>
+              <ul className="text-xs bg-gray-800/60 rounded p-2 max-h-40 overflow-y-auto">
+                {taskImpattati.map(t => (
+                  <li key={t.id} className="py-0.5">
+                    <span className="font-mono text-gray-400">{t.id}</span>{' '}
+                    {t.nome}{' '}
+                    <StatoBadge stato={t.stato} />
+                    {' → '}
+                    <span className="text-blue-300">{regolaCascata.to}</span>
+                  </li>
+                ))}
+              </ul>
+              <div className="flex gap-2 pt-2 justify-end flex-wrap">
+                <button onClick={onClose}
+                  className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded text-sm">Annulla</button>
+                <button onClick={() => onConferma(false)}
+                  className="px-4 py-2 bg-yellow-700 hover:bg-yellow-600 rounded text-sm">
+                  Solo la fase
+                </button>
+                <button onClick={() => onConferma(true)}
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded text-sm font-semibold">
+                  Anche i task ({taskImpattati.length})
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <p className="text-sm text-gray-400 italic">
+                Nessun task attivo da aggiornare.
+              </p>
+              <div className="flex gap-2 pt-2 justify-end">
+                <button onClick={onClose}
+                  className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded text-sm">Annulla</button>
+                <button onClick={() => onConferma(false)}
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded text-sm font-semibold">
+                  Conferma
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+    </ModaleWrapper>
+  )
+}
+
 function FaseEditabile({ fase, dipendenti, tutteLeTaskDelProgetto, espansa, onToggle, onAggiorna, onElimina, onAggiungiTask, onEditTask, onEliminaTask }) {
   const [editingStato, setEditingStato] = useState(false)
   const [statoLocal, setStatoLocal] = useState(fase.stato)
+  const [modaleCascata, setModaleCascata] = useState(null) // statoNuovo da confermare
   const sforamento = fase.ore_vendute > 0 && fase.ore_consumate > fase.ore_vendute
 
+  // Stati che richiedono modale di conferma con cascata (handoff v16 §14.1)
+  const STATI_CON_CASCATA = ['Sospesa', 'Annullata', 'Completata', 'Da iniziare']
+
   const salvaStato = async () => {
-    if (statoLocal !== fase.stato) {
-      await onAggiorna(fase.id, { stato: statoLocal })
+    if (statoLocal === fase.stato) {
+      setEditingStato(false)
+      return
     }
+    // Se il cambio è verso uno stato con cascata, apri modale invece di salvare diretto
+    if (STATI_CON_CASCATA.includes(statoLocal) && fase.tasks.length > 0) {
+      setModaleCascata(statoLocal)
+      setEditingStato(false)
+      return
+    }
+    // Salvataggio diretto per stati senza cascata
+    await onAggiorna(fase.id, { stato: statoLocal })
     setEditingStato(false)
   }
+
+  const annullaModaleCascata = () => {
+    setModaleCascata(null)
+    setStatoLocal(fase.stato) // resetta select al valore originale
+  }
+
+  const confermaCascata = async (conCascata) => {
+    try {
+      await onAggiorna(fase.id, { stato: modaleCascata }, conCascata)
+    } finally {
+      setModaleCascata(null)
+    }
+  }
+  
 
   return (
     <div className="border-t border-gray-800">
@@ -599,6 +748,15 @@ function FaseEditabile({ fase, dipendenti, tutteLeTaskDelProgetto, espansa, onTo
             + Aggiungi task a questa fase
           </button>
         </div>
+      )}
+
+      {modaleCascata && (
+        <ModaleConfermaCascata
+          fase={fase}
+          statoNuovo={modaleCascata}
+          onClose={annullaModaleCascata}
+          onConferma={confermaCascata}
+        />
       )}
     </div>
   )
@@ -1040,11 +1198,20 @@ export default function CantiereDettaglioPage() {
 
   // ── Azioni fasi ────────────────────────────────────────────────────────
 
-  const aggiornaFase = async (faseId, dati) => {
-    try { await updateFase(faseId, dati); await ricarica() }
-    catch (e) { alert('Errore: ' + e.message) }
+  const aggiornaFase = async (faseId, dati, cascade = false) => {
+    try {
+      const res = await updateFase(faseId, dati, cascade)
+      await ricarica()
+      // Toast post-cascata: avvisa l'utente di quanti task sono stati toccati
+      if (cascade && res?.task_aggiornati?.length > 0) {
+        const n = res.task_aggiornati.length
+        alert(`Aggiornati ${n} ${n === 1 ? 'task' : 'task'} a "${res.task_aggiornati[0].nuovo_stato}".`)
+      }
+    } catch (e) {
+      alert('Errore: ' + e.message)
+    }
   }
-
+  
   const eliminaFase = async (fase) => {
     if (!confirm(`Eliminare la fase "${fase.nome}"? Non sarà possibile se ha task agganciati.`)) return
     try { await deleteFase(fase.id); await ricarica() }

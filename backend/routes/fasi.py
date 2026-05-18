@@ -129,7 +129,12 @@ class FaseRequest(BaseModel):
 
 
 class FaseUpdate(BaseModel):
-    """Body request per PATCH /api/fasi/{fase_id}. Tutti i campi opzionali."""
+    """Body request per PATCH /api/fasi/{fase_id}. Tutti i campi opzionali.
+
+    Il campo `cascade` (Step 2.4-bis B, handoff v16 §14.1) attiva la propagazione
+    del cambio di stato ai task figli. Default False per backward compatibility:
+    chi chiamava senza cascade continua a vedere comportamento invariato.
+    """
     nome: Optional[str] = Field(default=None, min_length=1, max_length=100)
     ordine: Optional[int] = Field(default=None, ge=1)
     data_inizio: Optional[date_type] = None
@@ -138,11 +143,40 @@ class FaseUpdate(BaseModel):
     ore_pianificate: Optional[float] = Field(default=None, ge=0)
     stato: Optional[str] = Field(default=None, max_length=20)
     note: Optional[str] = None
+    cascade: bool = Field(
+        default=False,
+        description="Se true e stato cambia a Sospesa/Annullata/Completata/Da iniziare, propaga ai task figli"
+    )
+
+
+# ── Cascata stato fase → task (handoff v16 §14.1) ─────────────────────────
+# Mappa: quando la fase cambia in stato X, i task con uno di questi vecchi stati
+# vanno aggiornati al nuovo stato. Task in stato non-mappato (es. Completato già)
+# restano invariati.
+CASCADE_FASE_TASK = {
+    "Sospesa": {
+        "from_stati": ["In corso"],
+        "to_stato": "Sospeso",
+    },
+    "Annullata": {
+        "from_stati": ["Da iniziare", "In corso", "Sospeso"],
+        "to_stato": "Annullato",
+    },
+    "Completata": {
+        "from_stati": ["Da iniziare", "In corso", "Sospeso"],
+        "to_stato": "Completato",
+    },
+    "Da iniziare": {
+        # Caso speciale: tornare indietro da In corso. Vedi note nel PATCH:
+        # il backend rifiuta se ci sono task con ore_consumate > 0.
+        "from_stati": ["In corso"],
+        "to_stato": "Da iniziare",
+    },
+}
 
 
 # ── Router ───────────────────────────────────────────────────────────────
 router = APIRouter(prefix="/api/fasi", tags=["fasi"])
-
 
 @router.post("")
 def crea_fase(req: FaseRequest, _: Utente = Depends(require_manager)):
@@ -178,9 +212,20 @@ def crea_fase(req: FaseRequest, _: Utente = Depends(require_manager)):
 def aggiorna_fase(fase_id: int, req: FaseUpdate, _: Utente = Depends(require_manager)):
     """Aggiorna campi di una fase (nome, date, ore, stato, ecc.).
 
-    Step 2.1 D2 (13 mag 2026): aggiunto come endpoint complementare al
-    DELETE. Utile anche per cambiare stato fase (Da iniziare → In corso →
-    Completata) prima dell'introduzione formale di stato_derivato (D3).
+    Step 2.1 D2 (13 mag): aggiunto endpoint complementare al DELETE.
+    Step 2.4-bis B (18 mag, handoff v16 §14.1): aggiunto parametro `cascade`.
+
+    Comportamento `cascade`:
+    - Se false (default): cambia solo la fase. Backward compatible.
+    - Se true E stato nuovo è in CASCADE_FASE_TASK: dopo aver aggiornato la
+      fase, propaga il cambio ai task figli secondo la regola mappa.
+      Tutto in transazione: o cambiano fase+task insieme, o niente.
+
+    Caso speciale "Da iniziare":
+    - Se un qualunque task della fase ha ore_consumate > 0, l'operazione è
+      bloccata (HTTP 409): non si può "fingere" che il lavoro non sia iniziato.
+      Il PM deve prima azzerare la consuntivazione (operazione esplicita,
+      out-of-scope di questo endpoint).
     """
     session = get_session()
     try:
@@ -195,11 +240,60 @@ def aggiorna_fase(fase_id: int, req: FaseUpdate, _: Utente = Depends(require_man
                 detail=f"Stato fase '{req.stato}' non ammesso. Valori: {STATI_FASE}"
             )
 
-        for field, value in req.model_dump(exclude_unset=True).items():
+        # Estraggo il payload escludendo cascade (è un flag operativo, non un campo DB)
+        update_data = req.model_dump(exclude_unset=True, exclude={"cascade"})
+
+        # Caso bloccante PRIMA di toccare la fase: ritorno a "Da iniziare" con
+        # task aventi ore consumate. Il check va fatto prima per non lasciare
+        # la fase aggiornata e poi rifiutare la cascata.
+        stato_nuovo = update_data.get("stato")
+        if req.cascade and stato_nuovo == "Da iniziare" and fase.stato == "In corso":
+            task_con_consumate = session.query(Task).filter(
+                Task.fase_id == fase_id,
+                Task.ore_consumate > 0,
+            ).all()
+            if task_con_consumate:
+                nomi = ", ".join(f"{t.id} ({t.nome})" for t in task_con_consumate[:5])
+                if len(task_con_consumate) > 5:
+                    nomi += f" e altri {len(task_con_consumate) - 5}"
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"Impossibile riportare la fase '{fase.nome}' a 'Da iniziare': "
+                        f"{len(task_con_consumate)} task hanno ore consumate ({nomi}). "
+                        "Azzera prima la consuntivazione di questi task."
+                    )
+                )
+
+        # Applica i campi al modello Fase
+        for field, value in update_data.items():
             setattr(fase, field, value)
 
+        # Cascata sui task figli, se richiesta e applicabile
+        task_aggiornati = []
+        if req.cascade and stato_nuovo in CASCADE_FASE_TASK:
+            regola = CASCADE_FASE_TASK[stato_nuovo]
+            task_target = session.query(Task).filter(
+                Task.fase_id == fase_id,
+                Task.stato.in_(regola["from_stati"]),
+            ).all()
+            for t in task_target:
+                vecchio = t.stato
+                t.stato = regola["to_stato"]
+                task_aggiornati.append({
+                    "id": t.id,
+                    "nome": t.nome,
+                    "vecchio_stato": vecchio,
+                    "nuovo_stato": t.stato,
+                })
+
         session.commit()
-        return {"id": fase_id, "aggiornato": True}
+        return {
+            "id": fase_id,
+            "aggiornato": True,
+            "stato": fase.stato,
+            "task_aggiornati": task_aggiornati,
+        }
     finally:
         session.close()
 
