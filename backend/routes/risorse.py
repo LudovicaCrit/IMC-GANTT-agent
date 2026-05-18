@@ -89,25 +89,47 @@ from utils import get_oggi
 # ── Router ───────────────────────────────────────────────────────────────
 router = APIRouter(prefix="/api/risorse", tags=["risorse"])
 
-
 @router.get("/carico")
 def carico_risorse(
     settimane: int = 12,
     _: Utente = Depends(require_manager),
 ):
-    """Heatmap saturazione per tutte le risorse, prossime N settimane (default 12)."""
+    """Heatmap saturazione per tutte le risorse, prossime N settimane (default 12).
+
+    Ritorna saturazione GREZZA, non cappata: i numeri devono dire la verità
+    sempre, le soglie di display (verde/giallo/arancione/rosso, badge "oltre
+    soft cap 125%", hard ceiling 150% in palette) sono responsabilità del
+    frontend. Coerente con /saturazione-periodo.
+
+    Note sul calcolo (vedi anche carico_settimanale_dipendente):
+    - I task hanno date a 00:00 (pandas.Timestamp), quindi normalizziamo
+      "oggi" a mezzanotte prima del confronto, altrimenti perdiamo i task
+      che finiscono nel giorno corrente (bug confine settimana).
+    - Il calcolo distribuisce ore_stimate uniformemente sulle settimane
+      della durata del task. È una semplificazione provvisoria: a Step
+      2.7-pre il PM potrà dichiarare una distribuzione settimanale esplicita
+      delle ore (handoff v17 §2.7-pre).
+    """
     result = []
+    oggi_raw = get_oggi()
+    # Normalizza a mezzanotte per allineare il confronto a pandas.Timestamp
+    # dei task (sempre a 00:00). Vedi handoff v16 §15 Passo 2 e routes/risorse.py
+    # saturazione-periodo riga 191 dove lo stesso fix è già applicato.
+    oggi = datetime.combine(
+        oggi_raw.date() if hasattr(oggi_raw, 'date') else oggi_raw,
+        datetime.min.time()
+    )
     for _, d in _DIPENDENTI().iterrows():
         settimane_data = []
         for w in range(settimane):
-            sett = get_oggi() + timedelta(weeks=w)
+            sett = oggi + timedelta(weeks=w)
             lun = sett - timedelta(days=sett.weekday())
             carico = carico_settimanale_dipendente(d["id"], sett)
             settimane_data.append({
                 "settimana": lun.strftime("%Y-%m-%d"),
                 "settimana_label": lun.strftime("%d/%m"),
                 "ore_assegnate": float(carico),
-                "saturazione_pct": min(125, round(carico / d["ore_sett"] * 100)),
+                "saturazione_pct": round(carico / d["ore_sett"] * 100),
             })
         result.append({
             "dipendente_id": d["id"],

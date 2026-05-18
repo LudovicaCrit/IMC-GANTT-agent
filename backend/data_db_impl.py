@@ -146,6 +146,31 @@ def tasso_compilazione_progetto(pid):
     return cons["compilato"].sum() / len(cons) * 100
 
 def carico_settimanale_dipendente(did, settimana):
+    """Carico di un dipendente in una settimana (in ore).
+
+    ⚠ DEBITO DI DESIGN — distribuzione uniforme (decisione 18 mag, vedi handoff):
+    Il calcolo assume che `ore_stimate` di un task siano distribuite
+    UNIFORMEMENTE su tutte le settimane della sua durata. Questa è una
+    semplificazione provvisoria: in realtà il PM dovrebbe poter dichiarare
+    una distribuzione settimanale esplicita (es. "20h la prima settimana,
+    5h le successive" per un task con setup iniziale concentrato).
+
+    Step 2.7-pre del handoff v17 affronterà:
+      1) Chiarimento semantica ore_stimate / ore_vendute / ore_pianificate /
+         ore_consumate / ore_mancanti (storia: ore_pianificate ha avuto un
+         significato bisecato durante l'evoluzione della specifica)
+      2) Eventuale aggiunta campo Task.distribuzione_ore_per_settimana
+      3) UI nel modale Task per dichiarare la distribuzione (default = uniforme)
+
+    Fino allo Step 2.7-pre i numeri di saturazione mostrati sono onesti
+    rispetto alla logica attuale, ma rappresentano una media uniformata
+    della realtà operativa. NON costruire sopra logiche di redistribuzione
+    automatica IA prima dello Step 2.7-pre.
+
+    Confronto date: i task hanno pandas.Timestamp a 00:00. Chi chiama questa
+    funzione deve passare un datetime normalizzato a mezzanotte, altrimenti
+    si perdono task al confine settimana (es. data_fine == lunedì della settimana).
+    """
     lun = settimana - timedelta(days=settimana.weekday())
     tasks_dip = TASKS[
         (TASKS["dipendente_id"] == did) &
