@@ -39,6 +39,7 @@ import { STATI_FASE, STATI_TASK } from './_costanti'
 import StatoBadge from '../_shared/StatoBadge'
 import { FormInput, FormInputDate, FormSelect } from '../_shared/Form'
 import { fetchSaturazionePeriodo } from '../../api'
+import { giorniLavorativi} from '../../utils/festivita'
 
 // ═════════════════════════════════════════════════════════════════════════
 // Componente principale
@@ -420,6 +421,93 @@ function ModaleConfermaCascata({ fase, statoNuovo, onClose, onConferma }) {
 }
 
 // ═════════════════════════════════════════════════════════════════════════
+// IndicatoreCapacita — verifica ore_stimate vs durata task (handoff v16 §14.3)
+// ═════════════════════════════════════════════════════════════════════════
+
+/**
+ * Mostra sotto al campo "Ore stimate" un messaggio dinamico che valuta
+ * se le ore stimate sono coerenti con la durata del task (esprimendolo
+ * come saturazione % della capacità giornaliera).
+ *
+ * Formula:
+ *   capacita = giorni_lavorativi × ore_giornaliere
+ *   saturazione_pct = ore_stimate / capacita × 100
+ *
+ *   ore_giornaliere = dipendente.ore_sett / 5  (se selezionato)
+ *                   = 8                          (default = 40h/sett)
+ *
+ *   giorni_lavorativi: esclude weekend e festività italiane
+ *
+ * Soglie (3 livelli, semplici per singolo task):
+ *   <100%   verde   "ragionevole"
+ *   100-125% arancio "carico pieno, considera straordinario"
+ *   >125%   rosso   "irrealistico"
+ *
+ * Casi speciali:
+ *   - Date mancanti o incoerenti: niente messaggio
+ *   - Ore 0: niente messaggio
+ *   - 0 giorni lavorativi (solo weekend/festivi): messaggio dedicato
+ *
+ * NON è bloccante: il modale Task gestirà la conferma esplicita
+ * quando saturazione > 125% (vedi handleSalva di ModaleTask).
+ *
+ * Esporta anche helper `calcolaSaturazioneTask` per riuso in altri punti.
+ */
+
+export function calcolaSaturazioneTask({ oreStimate, dataInizio, dataFine, dipendente }) {
+  if (!oreStimate || !dataInizio || !dataFine) return null
+  if (dataFine < dataInizio) return null
+  const gg = giorniLavorativi(dataInizio, dataFine)
+  if (gg === 0) {
+    return { tipo: 'no_giorni_lavorativi', giorni: 0 }
+  }
+  const oreGior = dipendente ? (dipendente.ore_sett / 5) : 8
+  const capacita = gg * oreGior
+  const saturazione = (Number(oreStimate) / capacita) * 100
+  return {
+    tipo: 'normale',
+    giorni: gg,
+    oreGiornaliere: oreGior,
+    capacita,
+    saturazionePct: Math.round(saturazione),
+  }
+}
+
+function IndicatoreCapacita({ oreStimate, dataInizio, dataFine, dipendente }) {
+  const r = calcolaSaturazioneTask({ oreStimate, dataInizio, dataFine, dipendente })
+  if (!r) return null
+
+  if (r.tipo === 'no_giorni_lavorativi') {
+    return (
+      <div className="mt-1 text-xs text-amber-300 italic">
+        ⚠ Periodo senza giorni lavorativi (solo weekend e/o festività)
+      </div>
+    )
+  }
+
+  const { giorni, capacita, saturazionePct, oreGiornaliere } = r
+  let livello, icona, msg
+  if (saturazionePct <= 100) {
+    livello = 'text-green-300'
+    icona = '✓'
+    msg = `${oreStimate}h in ${giorni} ${giorni === 1 ? 'giorno' : 'giorni'} lavorativ${giorni === 1 ? 'o' : 'i'} (capacità ${capacita}h) — saturazione ${saturazionePct}%`
+  } else if (saturazionePct <= 125) {
+    livello = 'text-orange-300'
+    icona = '⚠'
+    msg = `${oreStimate}h in ${giorni} ${giorni === 1 ? 'giorno' : 'giorni'} (capacità ${capacita}h) — saturazione ${saturazionePct}%, oltre il 100% — considera straordinario`
+  } else {
+    livello = 'text-red-400'
+    icona = '⛔'
+    msg = `${oreStimate}h in ${giorni} ${giorni === 1 ? 'giorno' : 'giorni'} (capacità ${capacita}h) — saturazione ${saturazionePct}%, irrealistico (${oreGiornaliere}h/giorno disponibili)`
+  }
+  return (
+    <div className={`mt-1 text-xs ${livello}`}>
+      {icona} {msg}
+    </div>
+  )
+}
+
+// ═════════════════════════════════════════════════════════════════════════
 // PannelloSaturazione — saturazione live del dipendente (Step 2.4-bis A)
 // ═════════════════════════════════════════════════════════════════════════
 
@@ -558,6 +646,27 @@ function ModaleTask({ mode, task, progettoId, faseId, faseNome, faseDataInizio, 
 
   const handleSalva = async () => {
     if (!form.nome.trim()) { setErrore('Il nome è obbligatorio'); return }
+
+    // Verifica capacità: se saturazione > 125%, chiedi conferma esplicita
+    // prima di salvare (handoff v16 §14.3, non bloccante con attrito).
+    const dipendente = dipendenti.find(d => d.id === form.dipendente_id)
+    const stima = calcolaSaturazioneTask({
+      oreStimate: form.ore_stimate,
+      dataInizio: form.data_inizio,
+      dataFine: form.data_fine,
+      dipendente,
+    })
+    if (stima && stima.tipo === 'normale' && stima.saturazionePct > 125) {
+      const oreGiornoRichieste = Math.round(Number(form.ore_stimate) / stima.giorni)
+      const ok = window.confirm(
+        `Attenzione: questo task ha saturazione del ${stima.saturazionePct}% rispetto alla capacità.\n\n` +
+        `${form.ore_stimate}h in ${stima.giorni} ${stima.giorni === 1 ? 'giorno lavorativo' : 'giorni lavorativi'} ` +
+        `richiederebbero ${oreGiornoRichieste}h/giorno, oltre il limite di ${stima.oreGiornaliere}h/giorno disponibili.\n\n` +
+        `Salvo comunque? Verrà segnalato in Consuntivazione per riconciliazione a valle.`
+      )
+      if (!ok) return
+    }
+    
     setSalvando(true); setErrore(null)
     try {
       if (mode === 'nuovo') {
@@ -598,7 +707,15 @@ function ModaleTask({ mode, task, progettoId, faseId, faseNome, faseDataInizio, 
       <div className="space-y-3">
         <FormInput label="Nome task" value={form.nome} onChange={v => setForm({...form, nome: v})} required />
         <div className="grid grid-cols-2 gap-3">
-          <FormInput label="Ore stimate" type="number" value={form.ore_stimate} onChange={v => setForm({...form, ore_stimate: v})} />
+          <div>
+            <FormInput label="Ore stimate" type="number" value={form.ore_stimate} onChange={v => setForm({...form, ore_stimate: v})} />
+            <IndicatoreCapacita
+              oreStimate={form.ore_stimate}
+              dataInizio={form.data_inizio}
+              dataFine={form.data_fine}
+              dipendente={dipendenti.find(d => d.id === form.dipendente_id)}
+            />
+          </div>
           <FormSelect label="Stato" value={form.stato} onChange={v => setForm({...form, stato: v})} options={STATI_TASK} />
         </div>
         <div className="grid grid-cols-2 gap-3">
@@ -606,9 +723,15 @@ function ModaleTask({ mode, task, progettoId, faseId, faseNome, faseDataInizio, 
             label="Data inizio"
             value={form.data_inizio}
             onChange={v => setForm({...form, data_inizio: v})}
-            minDate={faseDataInizio}
+            minDate={mode === 'nuovo'
+              ? (faseDataInizio && faseDataInizio > new Date().toISOString().slice(0,10)
+                 ? faseDataInizio
+                 : new Date().toISOString().slice(0,10))
+              : faseDataInizio}
             maxDate={faseDataFine}
-            hint={faseDataInizio ? `Fase: ${faseDataInizio} → ${faseDataFine || '?'}` : ''}
+            hint={mode === 'nuovo'
+              ? `Fase: ${faseDataInizio || '?'} → ${faseDataFine || '?'} · Non puoi pianificare nel passato`
+              : (faseDataInizio ? `Fase: ${faseDataInizio} → ${faseDataFine || '?'}` : '')}
           />
           <FormInputDate
             label="Data fine"

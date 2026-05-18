@@ -284,10 +284,22 @@ def crea_task_singolo(req: NuovoTaskSingolo, _: Utente = Depends(require_manager
     df = datetime.fromisoformat(req.data_fine) if req.data_fine else get_oggi()
 
     # Validazione coerenza date (Step 2.4-bis §14.2)
+    # Validazione coerenza date (Step 2.4-bis §14.2 + 18 mag §14.6 retroattivo)
     if df < di:
         raise HTTPException(
             status_code=422,
             detail="data_fine non può precedere data_inizio."
+        )
+    # Vincolo "non pianificare nel passato" alla creazione (handoff v17).
+    # In modifica un task esistente può avere data_inizio nel passato
+    # (è iniziato davvero), quindi questo check vale solo in POST.
+    oggi_date = get_oggi().date()
+    if di.date() < oggi_date:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Non puoi creare un task con data_inizio nel passato "
+                   f"({di.date()} < oggi {oggi_date}). Per task già iniziati, "
+                   f"crea con data_inizio = oggi e poi aggiorna successivamente."
         )
     if fase_data_inizio and di.date() < fase_data_inizio:
         raise HTTPException(
