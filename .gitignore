@@ -31,3 +31,6 @@ cookies_*.txt
 # Appunti personali sviluppo
 frontend/tasks.md
 *.sql
+
+# Script di diagnostica una-tantum (per debug locale, non per repo)
+backend/diagnostico_*.py
