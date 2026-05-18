@@ -1,14 +1,35 @@
 import React, { useState, useEffect } from 'react'
 import { fetchDipendenti, fetchCaricoRisorse, fetchTasks, fetchProgetti } from '../api'
 
-/* ── Saturation cell for heatmap ──────────────────────────────────── */
+/* ── Saturation cell for heatmap ──────────────────────────────────────
+ * Soglie coerenti con la policy aziendale (handoff v16 §14.4):
+ *   < 90%    → verde       (sotto-utilizzato o normale con buon margine)
+ *   90–100%  → giallo      (carico standard, settimana piena)
+ *   100–125% → arancio     (oltre cap nominale, dentro soft cap, gestibile)
+ *   125–150% → rosso       (oltre soft cap: avviso, considerare redistribuzione)
+ *   > 150%   → rosso scuro (situazione critica, intervento prioritario)
+ * I numeri sono GREZZI (mai cappati): la verità grezza serve all'occhio
+ * E al futuro motore di redistribuzione (Blocco 5 / IA #1).
+ */
 function SatCell({ value, onClick, isSelected }) {
   let cls = 'text-green-300 bg-green-900/40'
-  if (value > 100) cls = 'text-red-300 bg-red-900/50'
-  else if (value > 75) cls = 'text-yellow-300 bg-yellow-900/40'
-  else if (value > 50) cls = 'text-blue-300 bg-blue-900/30'
+  let title = `${value}% — sotto-utilizzato, margine disponibile`
+  if (value > 150) {
+    cls = 'text-red-100 bg-red-800/80 font-bold'
+    title = `${value}% — ⚠ critico (oltre 150%), intervento prioritario`
+  } else if (value > 125) {
+    cls = 'text-red-300 bg-red-900/60'
+    title = `${value}% — ⚠ oltre soft cap 125%, considera redistribuzione`
+  } else if (value > 100) {
+    cls = 'text-orange-300 bg-orange-900/40'
+    title = `${value}% — sopra cap nominale ma entro soft cap (125%)`
+  } else if (value >= 90) {
+    cls = 'text-yellow-300 bg-yellow-900/40'
+    title = `${value}% — carico standard, settimana piena`
+  }
   return (
     <td onClick={onClick}
+      title={title}
       className={`px-2 py-1.5 text-center text-xs font-medium border border-gray-800 cursor-pointer transition-all hover:brightness-125 ${cls} ${isSelected ? 'ring-2 ring-blue-400' : ''}`}>
       {value}%
     </td>
@@ -106,6 +127,37 @@ export default function Risorse() {
           {profili.map(p => <option key={p} value={p}>{p}</option>)}
         </select>
       </div>
+
+      {/* ═══ Banner sforamenti soft cap (visibile solo se ci sono) ═══ */}
+      {(() => {
+        const sforamenti = caricoFiltrato.flatMap(c =>
+          c.settimane
+            .filter(s => s.saturazione_pct > 125)
+            .map(s => ({ nome: c.nome, settimana: s.settimana_label, pct: s.saturazione_pct }))
+        )
+        if (sforamenti.length === 0) return null
+        const perDip = sforamenti.reduce((acc, s) => {
+          acc[s.nome] = acc[s.nome] || []
+          acc[s.nome].push(s)
+          return acc
+        }, {})
+        const nPersone = Object.keys(perDip).length
+        return (
+          <div className="bg-red-900/30 border border-red-700/50 rounded-lg p-3 mb-4 text-sm">
+            <p className="font-semibold text-red-300 mb-1">
+              ⚠ {nPersone} {nPersone === 1 ? 'persona' : 'persone'} oltre il soft cap 125% in {sforamenti.length} {sforamenti.length === 1 ? 'settimana' : 'settimane'}
+            </p>
+            <p className="text-xs text-red-200/80">
+              {Object.entries(perDip).map(([nome, s]) =>
+                `${nome} (${Math.max(...s.map(x => x.pct))}% picco)`
+              ).join(' · ')}
+            </p>
+            <p className="text-[11px] text-red-200/60 mt-1.5 italic">
+              Soglia di policy aziendale: non blocca le assegnazioni ma segnala situazioni da ribilanciare. Click su una cella per dettaglio.
+            </p>
+          </div>
+        )
+      })()}
 
       {/* ═══ Heatmap saturazione ═══ */}
       <div className="bg-gray-900 rounded-xl border border-gray-800 overflow-x-auto mb-6">
@@ -222,7 +274,12 @@ export default function Risorse() {
           {dipFiltrati.sort((a, b) => b.saturazione_pct - a.saturazione_pct).map(d => {
             const occPct = Math.min(100, d.saturazione_pct)
             const dispPct = Math.max(0, 100 - occPct)
-            const barColor = d.saturazione_pct > 100 ? 'bg-red-500' : d.saturazione_pct > 75 ? 'bg-yellow-500' : 'bg-blue-500'
+            // Soglie coerenti con SatCell della heatmap
+            const barColor =
+              d.saturazione_pct > 150 ? 'bg-red-700' :
+              d.saturazione_pct > 125 ? 'bg-red-500' :
+              d.saturazione_pct > 100 ? 'bg-orange-500' :
+              d.saturazione_pct >= 90 ? 'bg-yellow-500' : 'bg-green-500'
             return (
               <div key={d.id} className="p-3 rounded-lg" style={{ backgroundColor: 'var(--color-surface-800)' }}>
                 <div className="flex justify-between items-center mb-2">
@@ -289,4 +346,3 @@ export default function Risorse() {
       </div>
     </div>
   )
-}

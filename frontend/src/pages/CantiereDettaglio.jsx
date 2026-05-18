@@ -650,13 +650,19 @@ function PannelloSaturazione({ dipendenteId, dataInizio, dataFine, escludiTaskId
   const d = stato.dati
   const sat = d.saturazione_media_pct
 
+  // Soglie allineate alla heatmap SatCell di Risorse.jsx (handoff v16 §14.4)
   let livello, cls
-  if (sat < 80) { livello = 'ok'; cls = 'bg-green-900/30 border-green-700 text-green-200' }
+  if (sat < 90) { livello = 'ok'; cls = 'bg-green-900/30 border-green-700 text-green-200' }
   else if (sat < 100) { livello = 'attenzione'; cls = 'bg-yellow-900/30 border-yellow-700 text-yellow-200' }
   else if (sat <= 125) { livello = 'sovraccarico'; cls = 'bg-orange-900/40 border-orange-700 text-orange-200' }
-  else { livello = 'critico'; cls = 'bg-red-900/40 border-red-700 text-red-200' }
+  else if (sat <= 150) { livello = 'critico'; cls = 'bg-red-900/40 border-red-700 text-red-200' }
+  else { livello = 'critico-grave'; cls = 'bg-red-800/60 border-red-600 text-red-100 font-semibold' }
 
-  const icona = livello === 'ok' ? '✓' : livello === 'attenzione' ? '⚠' : '⛔'
+  const icona = livello === 'ok' ? '✓' : livello === 'attenzione' ? '⚠' : livello === 'sovraccarico' ? '⚠' : '⛔'
+
+  // Anche il picco è informativo: se la media è ok ma il picco è oltre il cap,
+  // segnalalo (potrebbe esserci una sola settimana esplosiva nascosta nella media)
+  const piccoOltreCap = d.saturazione_max_pct > 125 && sat <= 125
 
   return (
     <div className={`mt-2 border rounded-md px-3 py-2 text-xs ${cls}`}>
@@ -667,8 +673,10 @@ function PannelloSaturazione({ dipendenteId, dataInizio, dataFine, escludiTaskId
         </span>
       </div>
       <div className="opacity-80">
-        Saturazione media nelle {d.settimane_coperte} settimane del task
-        {sat > 125 && <strong> — oltre il soft cap (125%)</strong>}
+        Saturazione nelle {d.settimane_coperte} settimane del task
+        {sat > 150 && <strong> — ⚠ critico (oltre 150%)</strong>}
+        {sat > 125 && sat <= 150 && <strong> — oltre il soft cap (125%), considera redistribuzione</strong>}
+        {piccoOltreCap && <span className="italic"> — picco oltre soft cap in almeno una settimana</span>}
       </div>
     </div>
   )
