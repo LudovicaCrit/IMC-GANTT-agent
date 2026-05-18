@@ -44,110 +44,12 @@ import {
 
 // ── Costanti stati ───────────────────────────────────────────────────────
 
-const STATI_FASE = ['Da iniziare', 'In corso', 'Completata', 'Sospesa', 'Annullata']
-const STATI_TASK = ['Da iniziare', 'In corso', 'Completato', 'Bloccato']
-
-const COLORI_STATO = {
-  // Fase
-  'Da iniziare': 'bg-gray-700 text-gray-300',
-  'In corso': 'bg-blue-700 text-blue-100',
-  'Completata': 'bg-green-700 text-green-100',
-  'Sospesa': 'bg-yellow-700 text-yellow-100',
-  'Annullata': 'bg-red-900 text-red-200',
-  // Task
-  'Completato': 'bg-green-700 text-green-100',
-  'Da fare': 'bg-gray-700 text-gray-300',
-  'Bloccato': 'bg-red-700 text-red-100',
-  'Eliminato': 'bg-red-950 text-red-300',
-  // Progetto
-  'Bozza': 'bg-amber-800 text-amber-100',
-  'In esecuzione': 'bg-blue-700 text-blue-100',
-  'Sospeso': 'bg-yellow-700 text-yellow-100',
-  'Annullato': 'bg-red-900 text-red-200',
-}
-
+import { STATI_FASE, STATI_TASK, COLORI_STATO } from '../components/cantiere/_costanti'
 
 // ─── Componenti utility ───────────────────────────────────────────────────
 
-function StatoBadge({ stato }) {
-  const cls = COLORI_STATO[stato] || 'bg-gray-700 text-gray-300'
-  return <span className={`text-xs px-2 py-0.5 rounded ${cls}`}>{stato}</span>
-}
-
-function FormRow({ label, children }) {
-  return (
-    <div>
-      <div className="text-xs text-gray-500 uppercase tracking-wide mb-1">{label}</div>
-      <div className="text-gray-200">{children}</div>
-    </div>
-  )
-}
-
-function FormInput({ label, value, onChange, type = 'text', required = false, placeholder = '' }) {
-  return (
-    <div>
-      <label className="text-xs text-gray-500 uppercase tracking-wide block mb-1">
-        {label}{required && <span className="text-red-400 ml-1">*</span>}
-      </label>
-      <input
-        type={type}
-        value={value ?? ''}
-        onChange={e => onChange(e.target.value)}
-        placeholder={placeholder}
-        className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm focus:border-blue-500 outline-none"
-      />
-    </div>
-  )
-}
-
-/** Input date con limiti min/max e tooltip esplicativo (Step 2.4-bis §14.2). */
-function FormInputDate({ label, value, onChange, required = false, minDate = null, maxDate = null, hint = '' }) {
-  const fuoriRange = value && ((minDate && value < minDate) || (maxDate && value > maxDate))
-  return (
-    <div>
-      <label className="text-xs text-gray-500 uppercase tracking-wide block mb-1">
-        {label}{required && <span className="text-red-400 ml-1">*</span>}
-      </label>
-      <input
-        type="date"
-        value={value ?? ''}
-        onChange={e => onChange(e.target.value)}
-        min={minDate || undefined}
-        max={maxDate || undefined}
-        className={`w-full border rounded px-3 py-2 text-sm focus:outline-none ${
-          fuoriRange
-            ? 'bg-red-950 border-red-700 focus:border-red-500'
-            : 'bg-gray-800 border-gray-700 focus:border-blue-500'
-        }`}
-      />
-      {hint && <div className="text-xs text-gray-500 mt-1">{hint}</div>}
-      {fuoriRange && (
-        <div className="text-xs text-red-400 mt-1">⚠ Data fuori dal range consentito</div>
-      )}
-    </div>
-  )
-}
-
-function FormSelect({ label, value, onChange, options, required = false }) {
-  return (
-    <div>
-      <label className="text-xs text-gray-500 uppercase tracking-wide block mb-1">
-        {label}{required && <span className="text-red-400 ml-1">*</span>}
-      </label>
-      <select
-        value={value ?? ''}
-        onChange={e => onChange(e.target.value)}
-        className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm focus:border-blue-500 outline-none"
-      >
-        {options.map(o => typeof o === 'string'
-          ? <option key={o} value={o}>{o}</option>
-          : <option key={o.value} value={o.value}>{o.label}</option>
-        )}
-      </select>
-    </div>
-  )
-}
-
+import { FormRow, FormInput, FormInputDate, FormSelect } from '../components/_shared/Form'
+import StatoBadge from '../components/_shared/StatoBadge'
 
 // ─── Banner di stato ─────────────────────────────────────────────────────
 
