@@ -41,8 +41,15 @@ STATI_FASE = ("Da iniziare", "In corso", "Completata", "Sospesa", "Annullata")
 # Handoff v15 §3.3: i 5 stati canonici. §3.5 punto 5 chiarisce: "Bozza = tutto
 # ciò che non ha approvazione" (assorbe ciò che prima era "Vinto - Da
 # pianificare" nel vecchio modello bandi, deprecato).
+#
+# Step 2.7-pre (20/05/2026): aggiunto "Da iniziare" — progetto APPROVATO dal
+# cliente con fasi pianificate, ma con data_inizio futura (non ancora partito).
+# La transizione "Da iniziare → In esecuzione" è MANUALE: il PM la conferma
+# quando data_inizio <= oggi (handoff §3.5 "controllo non automazione").
+# Vedi migration alembic d4e5f6a7b8c9.
 STATI_PROGETTO = (
     "Bozza",
+    "Da iniziare",
     "In esecuzione",
     "Sospeso",
     "Completato",
@@ -50,8 +57,22 @@ STATI_PROGETTO = (
 )
 # Sottoinsieme "attivi": progetti visibili in GANTT e Cantiere "Progetti attivi"
 # (handoff §3.3). Bozza vive solo in Cantiere "In cantiere", Completato/Annullato
-# in Archivio.
+# in Archivio. "Da iniziare" è in attesa di partire, gestito con alert Home.
 STATI_PROGETTO_ATTIVI = ("In esecuzione", "Sospeso")
+
+# Step 2.7-pre (20/05/2026): stati Task formalizzati. Prima il modello accettava
+# qualsiasi stringa (no CHECK su task.stato). Sospeso e Annullato erano scritti
+# a runtime dalla cascata Fase→Task (Step 2.4-bis B, commit 61795c5) e ora sono
+# formalmente ammessi anche dal DB.
+# Vedi migration alembic d4e5f6a7b8c9.
+STATI_TASK = (
+    "Da iniziare",
+    "In corso",
+    "Completato",
+    "Bloccato",
+    "Sospeso",
+    "Annullato",
+)
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -172,11 +193,11 @@ class Progetto(Base):
     id = Column(String(10), primary_key=True)
     nome = Column(String(150), nullable=False)
     cliente = Column(String(150), nullable=True)
-    # stato: "Bozza" | "In esecuzione" | "Sospeso" | "Completato" | "Annullato"
-    # Vedi handoff v15 §3.3. Una bozza è un progetto a tutti gli effetti,
-    # distinto solo dallo stato (Step 2.0 della roadmap, 13 mag 2026).
-    # Il CHECK constraint sui valori ammessi arriverà con D3 (stati Fase
-    # tipizzati, commit gemello).
+    # stato: "Bozza" | "Da iniziare" | "In esecuzione" | "Sospeso" | "Completato" | "Annullato"
+    # Vedi handoff v15 §3.3 + Step 2.7-pre (20/05/2026) per "Da iniziare".
+    # Una bozza è un progetto a tutti gli effetti, distinto solo dallo stato
+    # (Step 2.0 della roadmap, 13 mag 2026).
+    # CHECK constraint sui valori ammessi: vedi alembic c3d4e5f6a7b8 + d4e5f6a7b8c9.
     stato = Column(String(30), nullable=False, default="In esecuzione")
     # tipologia: distingue progetti commerciali da bandi (decisione Francesco 4 mag 2026).
     # Per i bandi, il modello prevede 3 fasi standard fisse (Monitoraggio, Proposal, PM)
@@ -306,6 +327,10 @@ class Task(Base):
     ore_pianificate = Column(Float, nullable=True)
     data_inizio = Column(Date, nullable=True)
     data_fine = Column(Date, nullable=True)
+    # stato: vedi STATI_TASK in cima al modulo (Step 2.7-pre, 20/05/2026).
+    # Valori: "Da iniziare" | "In corso" | "Completato" | "Bloccato" | "Sospeso" | "Annullato".
+    # CHECK constraint: vedi alembic d4e5f6a7b8c9. Sospeso/Annullato sono scritti
+    # dalla cascata Fase→Task (Step 2.4-bis B, commit 61795c5).
     stato = Column(String(20), nullable=False, default="Da iniziare")
     motivo_blocco = Column(Text, nullable=True)  # "Perché?" quando Bloccato/In ritardo
     profilo_richiesto = Column(String(60), nullable=True)
