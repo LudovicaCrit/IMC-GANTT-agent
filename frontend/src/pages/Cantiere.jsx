@@ -35,6 +35,7 @@ import React, { useState, useEffect, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { fetchGanttStrutturato } from '../api'
 import StatoBadge from '../components/_shared/StatoBadge'
+import WizardCreazioneProgetto from '../components/cantiere/WizardCreazioneProgetto'
 
 
 export default function CantierePage() {
@@ -42,6 +43,7 @@ export default function CantierePage() {
   const [data, setData] = useState([])
   const [loading, setLoading] = useState(true)
   const [errore, setErrore] = useState(null)
+  const [wizardAperto, setWizardAperto] = useState(false)
 
   useEffect(() => {
     setLoading(true)
@@ -72,13 +74,25 @@ export default function CantierePage() {
           </p>
         </div>
         <button
-          disabled
-          title="Wizard creazione: in arrivo (Step 2.7 parte 2)"
-          className="px-4 py-2 bg-blue-700/40 text-blue-300/60 rounded-lg text-sm font-semibold cursor-not-allowed opacity-60 border border-blue-700/50"
+          onClick={() => setWizardAperto(true)}
+          title="Apri Wizard creazione nuovo progetto"
+          className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-sm font-semibold transition-colors"
         >
           ＋ Nuovo progetto
         </button>
       </div>
+
+      {/* Wizard creazione (modale) */}
+      {wizardAperto && (
+        <WizardCreazioneProgetto
+          onClose={() => setWizardAperto(false)}
+          onCreaProgetto={(dati) => {
+            // TODO Step 2.7 parte 2 domani: chiamata API create_progetto + ricarica
+            console.log('Wizard submit (placeholder):', dati)
+            setWizardAperto(false)
+          }}
+        />
+      )}
 
       {/* Contenuto */}
       {loading ? (

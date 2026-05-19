@@ -79,6 +79,12 @@ export default function GanttChartFasi({ progetti, onTaskClick, onProgettoClick 
     return s
   })
 
+  // ── Stato fisarmonica progetti: Set<progettoId> dei progetti contratti ──
+  // Un progetto "contratto" mostra solo la bandina, nasconde tutte le sue
+  // fasi e task. Indipendente da setEspansione (che è a livello fase).
+  // Default: tutti espansi.
+  const [progettiContratti, setProgettiContratti] = useState(new Set())
+
   // Quando arrivano nuovi progetti (dopo filtro/refetch), apri di nuovo
   // le "In corso" — ma solo se l'utente non ha ancora interagito.
   // Per semplicità in questa prima versione resettiamo a ogni cambio
@@ -112,6 +118,7 @@ export default function GanttChartFasi({ progetti, onTaskClick, onProgettoClick 
     progetti.forEach((prog, pIdx) => {
       const palette = PROJECT_PALETTES[pIdx % PROJECT_PALETTES.length]
       projectColors[prog.id] = palette
+      const isContratto = progettiContratti.has(prog.id)
 
       // Header progetto: bandina-titolo sempre visibile.
       // Anche con un solo progetto è una "ridondanza comoda" (decisione
@@ -125,7 +132,22 @@ export default function GanttChartFasi({ progetti, onTaskClick, onProgettoClick 
         accent: palette.accent,
         labelBg: palette.label,
         height: PROJECT_HEADER_H,
+        isContratto,
       })
+
+      // Se il progetto è contratto (fisarmonica), salta fasi+task.
+      // Le barre dei task contribuiscono comunque all'asse globale.
+      if (isContratto) {
+        ;(prog.fasi || []).forEach(fase => {
+          allBars.push({ start: fase.data_inizio, end: fase.data_fine })
+          ;(fase.tasks || []).forEach(task => {
+            if (task.data_inizio && task.data_fine) {
+              allBars.push({ start: task.data_inizio, end: task.data_fine })
+            }
+          })
+        })
+        return  // salta la generazione di righe fase/task per questo progetto
+      }
 
       ;(prog.fasi || []).forEach(fase => {
         // Riga fase (sempre visibile)
@@ -172,7 +194,7 @@ export default function GanttChartFasi({ progetti, onTaskClick, onProgettoClick 
     })
 
     return { rows, allBars, projectColors }
-  }, [progetti, setEspansione])
+  }, [progetti, setEspansione, progettiContratti])
 
   // ── Timeline (asse) ────────────────────────────────────────────────
   // NOTA (Debito #16 chiuso 19/05): il useMemo cacha l'asse temporale,
@@ -204,6 +226,17 @@ export default function GanttChartFasi({ progetti, onTaskClick, onProgettoClick 
       const next = new Set(prev)
       if (next.has(faseId)) next.delete(faseId)
       else next.add(faseId)
+      return next
+    })
+  }
+
+  // ── Toggle fisarmonica progetto (contrai/espandi tutto il progetto) ──
+  function toggleProgetto(progettoId, e) {
+    if (e) e.stopPropagation()  // evita di triggerare onProgettoClick
+    setProgettiContratti(prev => {
+      const next = new Set(prev)
+      if (next.has(progettoId)) next.delete(progettoId)
+      else next.add(progettoId)
       return next
     })
   }
@@ -266,6 +299,15 @@ export default function GanttChartFasi({ progetti, onTaskClick, onProgettoClick 
                     title={tooltip}
                     onClick={() => onProgettoClick && onProgettoClick(r.progettoId)}
                   >
+                    {/* Freccetta fisarmonica: click NON propaga (vedi stopPropagation in toggleProgetto) */}
+                    <button
+                      onClick={(e) => toggleProgetto(r.progettoId, e)}
+                      className="text-xs hover:opacity-80 flex-shrink-0 px-1"
+                      style={{ color: r.accent }}
+                      title={r.isContratto ? 'Espandi progetto' : 'Contrai progetto'}
+                    >
+                      {r.isContratto ? '▶' : '▼'}
+                    </button>
                     <div style={{ width: 3, height: 12, backgroundColor: r.accent, borderRadius: 2 }} />
                     <span
                       className="text-[10px] font-bold uppercase tracking-wider truncate"
