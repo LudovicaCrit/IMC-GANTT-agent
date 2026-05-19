@@ -268,7 +268,15 @@ function FaseEditabile({ fase, dipendenti, tutteLeTaskDelProgetto, espansa, onTo
                   const sfora = t.ore_stimate > 0 && t.ore_consumate > t.ore_stimate
                   return (
                     <tr key={t.id} className="border-t border-gray-800/40 hover:bg-gray-800/30">
-                      <td className="py-1.5 pr-2">{t.nome}</td>
+                      <td className="py-1.5 pr-2">
+                        <div>{t.nome}</div>
+                        {t.predecessore && (
+                          <div className="text-[10px] text-gray-500 mt-0.5">
+                            ↳ dopo <span className="font-mono">{t.predecessore}</span>
+                            <span className="text-gray-600" title="Tipo dipendenza Finish-to-Start (default, R2 estenderà a SS/FF/SF)"> · FS</span>
+                          </div>
+                        )}
+                      </td>
                       <td className="py-1.5 pr-2 text-xs text-gray-400">{t.dipendente_nome || '—'}</td>
                       <td className="py-1.5 pr-2 text-right text-xs">
                         <span className={sfora ? 'text-red-400 font-medium' : 'text-gray-300'}>{t.ore_consumate}h</span>

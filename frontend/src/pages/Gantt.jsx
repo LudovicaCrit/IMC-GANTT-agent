@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { fetchGantt, fetchGanttStrutturato, fetchProgetti, fetchDipendenti, fetchCaricoRisorse, exportGanttPdf } from '../api'
+import { fetchGanttStrutturato, fetchProgetti, fetchDipendenti, fetchCaricoRisorse, exportGanttPdf } from '../api'
+import GanttChartFasi from '../components/_shared/GanttChartFasi'
 
 // ── Colori stati ────────────────────────────────────────────────────
 const STATUS_COLORS = {
@@ -10,7 +11,12 @@ const STATUS_COLORS = {
   'Sospeso':    { bar: '#d97706', bg: 'bg-amber-900/30', text: 'text-amber-300'  },
 }
 
-const OGGI = new Date()
+// ── Utility data corrente ───────────────────────────────────────────
+// IMPORTANTE: calcoliamo "oggi" on-demand, non come costante al modulo.
+// Una `const OGGI = new Date()` valutata al primo import resterebbe
+// congelata finché la pagina non viene refreshata, e la linea rossa
+// "oggi" diventerebbe disallineata (Debito #16 chiuso 19/05).
+function getOggi() { return new Date() }
 const LABEL_W = 300
 const WEEK_PX_DEFAULT = 48
 const WEEK_PX_MAX = 80
@@ -59,7 +65,8 @@ export function buildTimeline(tasks) {
   }
   if (months.length > 0) months[months.length - 1].width = totalWidth - months[months.length - 1].x
 
-  const oggiX = ((OGGI.getTime() - firstMonday.getTime()) / (totalWeeks * 7 * 86400000)) * totalWidth
+  const oggi = getOggi()
+  const oggiX = ((oggi.getTime() - firstMonday.getTime()) / (totalWeeks * 7 * 86400000)) * totalWidth
   return { firstMonday, totalWeeks, weekPx, totalWidth, weeks, months, oggiX }
 }
 
@@ -242,177 +249,6 @@ export function GanttChart({ tasks, title, changedIds, compact, onTaskClick }) {
   )
 }
 
-// ── Pannello dettaglio task (appare al click) ───────────────────────
-function TaskDetailPanel({ task, allTasks, progetti, dipendenti, onClose, onElimina }) {
-  const [showCarico, setShowCarico] = useState(false)
-
-  if (!task) return null
-
-  // Info progetto
-  const progetto = progetti?.find(p => p.nome === task.project || p.id === task.project_id)
-  const budgetOre = progetto?.budget_ore || 0
-  const pesoPercentuale = budgetOre > 0 ? ((task.estimated_hours || 0) / budgetOre * 100).toFixed(1) : '?'
-
-  // Percentuale completamento task — da dati reali se disponibili
-  const progressPct = task.progress ?? (task.status === 'Completato' ? 100 : task.status === 'In corso' ? 50 : 0)
-  const hoursDone = task.hours_done ?? 0
-  const sc = STATUS_COLORS[task.status] || STATUS_COLORS['Da iniziare']
-
-  // Predecessore e successori
-  const predecessore = task.predecessor_name || null
-  const successori = allTasks?.filter(t => {
-    return t.dependencies === task.id
-  }) || []
-
-  // Task della stessa persona (per mostrare il carico)
-  const taskStessaPersona = allTasks?.filter(t =>
-    t.assignee === task.assignee &&
-    t.id !== task.id &&
-    t.status !== 'Completato' &&
-    t.status !== 'Sospeso'
-  ) || []
-
-  // Calcolo carico approssimativo della persona
-  const calcolaOreSett = (t) => {
-    const inizio = new Date(t.start)
-    const fine = new Date(t.end)
-    const durataGiorni = Math.max(1, (fine - inizio) / 86400000)
-    const durataSett = Math.max(1, durataGiorni / 7)
-    return ((t.estimated_hours || 0) / durataSett).toFixed(1)
-  }
-
-  const oreSettTask = calcolaOreSett(task)
-  const caricoTotale = [task, ...taskStessaPersona].reduce((sum, t) => sum + parseFloat(calcolaOreSett(t)), 0)
-
-  // Durata in giorni lavorativi (approssimativa)
-  const durataGiorni = Math.round((new Date(task.end) - new Date(task.start)) / 86400000)
-  const durataSett = Math.round(durataGiorni / 7)
-
-  return (
-    <div className="bg-gray-900 rounded-xl border border-gray-800 p-5 mt-3 relative">
-      {/* Chiudi */}
-      <button onClick={onClose}
-        className="absolute top-3 right-3 text-gray-500 hover:text-white text-lg transition-colors">✕</button>
-
-      {/* Header */}
-      <div className="mb-4">
-        <h3 className="font-semibold text-lg">{task.name}</h3>
-        <p className="text-sm text-gray-400">{task.project} {progetto?.cliente ? `· ${progetto.cliente}` : ''}</p>
-      </div>
-
-      {/* Info principali — grid compatto */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
-        <div className="bg-gray-800/60 rounded-lg p-3">
-          <p className="text-[10px] text-gray-500 uppercase tracking-wider">Ore</p>
-          <p className="text-lg font-bold">{hoursDone > 0 ? `${hoursDone}` : '0'}<span className="text-sm text-gray-500 font-normal">/{task.estimated_hours || '?'}h</span></p>
-          <p className="text-[10px] text-gray-500">{pesoPercentuale}% del budget progetto</p>
-        </div>
-        <div className="bg-gray-800/60 rounded-lg p-3">
-          <p className="text-[10px] text-gray-500 uppercase tracking-wider">Avanzamento</p>
-          <div className="flex items-center gap-2 mt-1">
-            <span className="w-3 h-3 rounded" style={{ backgroundColor: sc.bar }} />
-            <span className="text-sm font-medium">{task.status}</span>
-          </div>
-          {/* Barra completamento */}
-          <div className="w-full bg-gray-700 rounded-full h-1.5 mt-2">
-            <div className="h-1.5 rounded-full transition-all" style={{ width: `${progressPct}%`, backgroundColor: sc.bar }} />
-          </div>
-          <p className="text-[10px] text-gray-500 mt-1">{progressPct}% completato</p>
-        </div>
-        <div className="bg-gray-800/60 rounded-lg p-3">
-          <p className="text-[10px] text-gray-500 uppercase tracking-wider">Periodo</p>
-          <p className="text-sm font-medium">{new Date(task.start).toLocaleDateString('it-IT', { day: 'numeric', month: 'short' })}</p>
-          <p className="text-[10px] text-gray-500">→ {new Date(task.end).toLocaleDateString('it-IT', { day: 'numeric', month: 'short', year: 'numeric' })}</p>
-          <p className="text-[10px] text-gray-500 mt-1">~{durataSett} settimane ({durataGiorni}gg)</p>
-        </div>
-        <div className="bg-gray-800/60 rounded-lg p-3">
-          <p className="text-[10px] text-gray-500 uppercase tracking-wider">Carico settimanale</p>
-          <p className="text-lg font-bold">~{oreSettTask}h<span className="text-sm text-gray-500 font-normal">/sett</span></p>
-        </div>
-      </div>
-
-      {/* Dipendenze */}
-      {(predecessore || successori.length > 0) && (
-        <div className="flex gap-4 mb-4 text-sm">
-          {predecessore && (
-            <div className="flex items-center gap-2">
-              <span className="text-[10px] text-gray-500 uppercase">Dipende da:</span>
-              <span className="text-gray-300">{predecessore}</span>
-            </div>
-          )}
-          {successori.length > 0 && (
-            <div className="flex items-center gap-2">
-              <span className="text-[10px] text-gray-500 uppercase">Successori:</span>
-              <span className="text-gray-300">{successori.map(s => s.name).join(', ')}</span>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Persona assegnata — riga compatta con espansione */}
-      <div className="bg-gray-800/40 rounded-lg p-3">
-        <button onClick={() => setShowCarico(!showCarico)}
-          className="w-full flex items-center justify-between text-sm">
-          <div className="flex items-center gap-3">
-            <span className="text-gray-300 font-medium">{task.assignee}</span>
-            <span className={`text-xs font-mono ${caricoTotale > 40 ? 'text-red-400' : caricoTotale > 32 ? 'text-yellow-400' : 'text-green-400'}`}>
-              {caricoTotale.toFixed(0)}h/40h
-            </span>
-            <span className="text-xs text-gray-500">{taskStessaPersona.length + 1} task attivi</span>
-          </div>
-          <span className="text-gray-500 text-xs">{showCarico ? '▼ nascondi' : '▶ vedi cosa fa'}</span>
-        </button>
-
-        {showCarico && (
-          <div className="mt-3 space-y-1.5 pt-3 border-t border-gray-700/50">
-            {/* Task corrente */}
-            <div className="flex items-center justify-between text-xs bg-blue-900/20 rounded px-2 py-1.5">
-              <div className="flex items-center gap-2 flex-1 min-w-0">
-                <span className="w-1.5 h-1.5 rounded-full bg-blue-400 flex-shrink-0" />
-                <span className="text-blue-200 font-medium truncate">{task.name}</span>
-                <span className="text-blue-300/50 truncate flex-shrink-0">({task.project})</span>
-              </div>
-              <span className="text-blue-300 font-mono ml-2">~{oreSettTask}h/sett</span>
-            </div>
-            {/* Altri task */}
-            {taskStessaPersona.map(t => {
-              const ore = calcolaOreSett(t)
-              return (
-                <div key={t.id} className="flex items-center justify-between text-xs px-2 py-1.5">
-                  <div className="flex items-center gap-2 flex-1 min-w-0">
-                    <span className="w-1.5 h-1.5 rounded-full bg-gray-500 flex-shrink-0" />
-                    <span className="text-gray-300 truncate">{t.name}</span>
-                    <span className="text-gray-500 truncate flex-shrink-0">({t.project})</span>
-                  </div>
-                  <span className="text-gray-400 font-mono ml-2">~{ore}h/sett</span>
-                </div>
-              )
-            })}
-            {/* Totale */}
-            <div className="flex items-center justify-between text-xs px-2 pt-2 border-t border-gray-700/30">
-              <span className="text-gray-400">Totale stimato</span>
-              <span className={`font-mono font-bold ${caricoTotale > 40 ? 'text-red-400' : 'text-green-400'}`}>
-                ~{caricoTotale.toFixed(0)}h/sett
-              </span>
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* Bottone elimina */}
-      <div className="mt-4 pt-3 border-t border-gray-800 flex justify-end">
-        <button onClick={() => {
-          if (confirm(`Eliminare il task "${task.name}"? L'operazione è reversibile dal database.`)) {
-            onElimina(task.id)
-          }
-        }}
-          className="px-3 py-1.5 text-xs bg-red-900/30 border border-red-800 text-red-400 hover:bg-red-900/50 hover:text-red-300 rounded-lg transition-colors">
-          🗑 Elimina task
-        </button>
-      </div>
-    </div>
-  )
-}
 
 // ── Legenda ─────────────────────────────────────────────────────────
 export function StatusLegend() {
@@ -434,7 +270,7 @@ export function StatusLegend() {
 // Step 2.3 del Blocco 2 esteso (handoff v15 §2.3).
 // Consumiamo /api/gantt/strutturato e mostriamo la gerarchia come accordion.
 // Default apertura: fasi "In corso" aperte, le altre chiuse (handoff §2.3).
-// Sola lettura (no edit qui — gli edit vivono in /cantiere/{id}).
+// Sola lettura (no edit qui — gli edit vivono in /cantiere e l'approfondimento in /elenco/{id}).
 // ═════════════════════════════════════════════════════════════════════════
 
 function StatoBadge({ stato }) {
@@ -462,193 +298,75 @@ function StatoBadge({ stato }) {
   return <span className={`text-xs px-2 py-0.5 rounded ${cls}`}>{stato}</span>
 }
 
-function TaskRow({ task }) {
-  // Riga task: nome, dipendente, ore, date, stato.
-  const sforamento = task.ore_stimate > 0 && task.ore_consumate > task.ore_stimate
-  return (
-    <div className="grid grid-cols-12 gap-2 px-4 py-2 text-sm hover:bg-gray-800/40 border-t border-gray-800/40">
-      <div className="col-span-4 truncate">{task.nome}</div>
-      <div className="col-span-2 text-gray-400 truncate">{task.dipendente_nome || '—'}</div>
-      <div className="col-span-1 text-right">
-        <span className={sforamento ? 'text-red-400 font-medium' : 'text-gray-300'}>
-          {task.ore_consumate}h
-        </span>
-        <span className="text-gray-600"> / {task.ore_stimate}h</span>
-      </div>
-      <div className="col-span-3 text-xs text-gray-500">
-        {task.data_inizio || '?'} → {task.data_fine || '?'}
-      </div>
-      <div className="col-span-2 text-right"><StatoBadge stato={task.stato} /></div>
-    </div>
-  )
-}
+// 19/05/2026 (Step 2.3-bis 4d, C1): TaskRow + FaseAccordion rimossi.
+// L'Elenco GANTT è ora minimal — una riga per progetto. Il drill-down
+// fasi+task vive solo in /elenco/{id} (SezioneFasiTask), che è la
+// fonte unica di approfondimento.
 
-function FaseAccordion({ fase, defaultAperta }) {
-  const [aperta, setAperta] = useState(defaultAperta)
-  const sforamento = fase.ore_vendute > 0 && fase.ore_consumate > fase.ore_vendute
 
-  return (
-    <div className="border-t border-gray-800">
-      <button
-        onClick={() => setAperta(!aperta)}
-        className="w-full grid grid-cols-12 gap-2 px-4 py-2 text-sm text-left hover:bg-gray-800/60 items-center"
-      >
-        <div className="col-span-4 flex items-center gap-2">
-          <span className="text-gray-500 text-xs w-4">{aperta ? '▼' : '▶'}</span>
-          <span className="font-medium">{fase.nome}</span>
-          <span className="text-xs text-gray-600">({fase.n_task} {fase.n_task === 1 ? 'task' : 'task'})</span>
-        </div>
-        <div className="col-span-2 text-xs text-gray-500">Ordine {fase.ordine}</div>
-        <div className="col-span-1 text-right text-xs">
-          <span className={sforamento ? 'text-red-400 font-medium' : 'text-gray-300'}>
-            {fase.ore_consumate}h
-          </span>
-          <span className="text-gray-600"> / {fase.ore_vendute}h</span>
-        </div>
-        <div className="col-span-3 text-xs text-gray-500">
-          {fase.data_inizio || '?'} → {fase.data_fine || '?'}
-        </div>
-        <div className="col-span-2 text-right"><StatoBadge stato={fase.stato} /></div>
-      </button>
+// 19/05/2026 (Step 2.3-bis 4d): ProgettoCard + VistaElenco rimossi.
+// La vista Elenco minimalista è stata eliminata: il GANTT è solo Timeline.
+// La selezione progetto avviene tramite la tendina "Progetto" in alto,
+// il click sulle barre porta a /elenco/{id} per l'approfondimento.
 
-      {aperta && (
-        <div className="bg-gray-900/40">
-          {fase.tasks.length === 0 ? (
-            <div className="px-4 py-3 text-xs text-gray-500 italic border-t border-gray-800/40">
-              Nessun task in questa fase.
-            </div>
-          ) : (
-            fase.tasks.map(t => <TaskRow key={t.id} task={t} />)
-          )}
-        </div>
-      )}
-    </div>
-  )
-}
-
-function ProgettoCard({ progetto, navigate }) {
-  const sforamento = progetto.ore_vendute_totali > 0 && progetto.ore_consumate_totali > progetto.ore_vendute_totali
-
-  return (
-    <div className="bg-gray-900 rounded-xl border border-gray-800 mb-4 overflow-hidden">
-      {/* Header progetto */}
-      <div className="bg-gray-800/50 px-4 py-3 flex items-center justify-between flex-wrap gap-2">
-        <div className="flex items-center gap-3 min-w-0">
-          <button
-            onClick={() => navigate(`/cantiere/${progetto.id}`)}
-            className="text-lg font-semibold text-blue-300 hover:text-blue-200 hover:underline truncate"
-            title="Apri scheda progetto"
-          >
-            {progetto.nome}
-          </button>
-          <span className="text-xs text-gray-500 font-mono">{progetto.id}</span>
-          <StatoBadge stato={progetto.stato} />
-          {progetto.stato !== progetto.stato_derivato && (
-            <span className="text-xs text-gray-500 italic" title={`Stato derivato dalle fasi: ${progetto.stato_derivato}`}>
-              (derivato: {progetto.stato_derivato})
-            </span>
-          )}
-        </div>
-        <div className="text-xs text-gray-400">
-          <span>Cliente: <span className="text-gray-200">{progetto.cliente || '—'}</span></span>
-          <span className="mx-3">|</span>
-          <span>Ore: <span className={sforamento ? 'text-red-400 font-medium' : 'text-gray-200'}>
-            {progetto.ore_consumate_totali}h
-          </span>
-          <span className="text-gray-600"> / {progetto.ore_vendute_totali}h</span></span>
-          <span className="mx-3">|</span>
-          <span>{progetto.n_fasi} {progetto.n_fasi === 1 ? 'fase' : 'fasi'}</span>
-        </div>
-      </div>
-
-      {/* Header colonne tabella */}
-      <div className="grid grid-cols-12 gap-2 px-4 py-2 text-xs text-gray-500 uppercase tracking-wide border-t border-gray-800">
-        <div className="col-span-4">Fase / Task</div>
-        <div className="col-span-2">Resp. / Ordine</div>
-        <div className="col-span-1 text-right">Ore</div>
-        <div className="col-span-3">Periodo</div>
-        <div className="col-span-2 text-right">Stato</div>
-      </div>
-
-      {/* Fasi */}
-      {progetto.fasi.length === 0 ? (
-        <div className="px-4 py-4 text-sm text-gray-500 italic border-t border-gray-800">
-          Nessuna fase definita. Vai alla scheda progetto per crearne.
-        </div>
-      ) : (
-        progetto.fasi.map(f => (
-          <FaseAccordion
-            key={f.id}
-            fase={f}
-            // Default apertura: fasi "In corso" aperte (handoff §2.3)
-            defaultAperta={f.stato === 'In corso'}
-          />
-        ))
-      )}
-    </div>
-  )
-}
-
-function VistaElenco({ filtroStato, navigate }) {
-  const [data, setData] = useState([])
-  const [loading, setLoading] = useState(true)
-  const [errore, setErrore] = useState(null)
-
-  useEffect(() => {
-    setLoading(true)
-    setErrore(null)
-    fetchGanttStrutturato({ stato: filtroStato })
-      .then(d => setData(d))
-      .catch(e => setErrore(e.message || 'Errore di caricamento'))
-      .finally(() => setLoading(false))
-  }, [filtroStato])
-
-  if (loading) return <p className="text-gray-400 py-8">Caricamento drill-down...</p>
-  if (errore) return <p className="text-red-400 py-8">Errore: {errore}</p>
-  if (data.length === 0) return <p className="text-gray-500 py-8 italic">Nessun progetto da mostrare con il filtro corrente.</p>
-
-  return (
-    <div>
-      {data.map(p => <ProgettoCard key={p.id} progetto={p} navigate={navigate} />)}
-    </div>
-  )
-}
 
 
 // ═════════════════════════════════════════════════════════════════════════
 // PAGINA GANTT — toggle Timeline / Elenco
 // ═════════════════════════════════════════════════════════════════════════
 
+// 19/05/2026: toLegacyTask rimosso insieme a TaskDetailPanel.
+// L'approfondimento del task vive ora in /elenco/{progettoId} e consuma
+// direttamente lo schema strutturato (snake_case italiano), senza adapter.
+
 
 export default function GanttPage() {
   const navigate = useNavigate()
 
-  // Step 2.3: nuovi state per vista e filtro stato progetti
-  const [vista, setVista] = useState('elenco')  // 'elenco' (drill-down) | 'timeline' (GANTT classico)
-  const [filtroStato, setFiltroStato] = useState('attivi')  // attivi | all | bozza | in esecuzione | sospeso
+  // Step 2.3-bis 4d (19/05/2026): rimosso state `vista`. GANTT è solo Timeline.
+  const [filtroStato, setFiltroStato] = useState('attivi')  // attivi | in esecuzione | sospeso
 
   // State legacy (per la vista timeline)
-  const [ganttData, setGanttData] = useState([])
+  const [ganttStrutturato, setGanttStrutturato] = useState([])
   const [progetti, setProgetti] = useState([])
   const [dipendenti, setDipendenti] = useState([])
   const [loading, setLoading] = useState(true)
   const [filtroProgetto, setFiltroProgetto] = useState('')
   const [filtroProfilo, setFiltroProfilo] = useState('')
-  const [selectedTask, setSelectedTask] = useState(null)
 
+  // Mount: anagrafica progetti+dipendenti (per filtri dropdown).
+  // La gerarchia ganttStrutturato è gestita dal useEffect successivo.
   useEffect(() => {
-    Promise.all([fetchGantt(), fetchProgetti(), fetchDipendenti()])
-      .then(([g, p, d]) => { setGanttData(g); setProgetti(p); setDipendenti(d) })
+    Promise.all([fetchProgetti(), fetchDipendenti()])
+      .then(([p, d]) => { setProgetti(p); setDipendenti(d) })
       .finally(() => setLoading(false))
   }, [])
 
+  // Carica gerarchia al cambio di filtri (progetto/stato).
+  // filtroProfilo si applica client-side (vedi useMemo sotto).
   useEffect(() => {
-    if (vista !== 'timeline') return  // la vista elenco si autogestisce
-    fetchGantt(filtroProgetto || null).then(data => {
-      setGanttData(filtroProfilo ? data.filter(t => t.profile === filtroProfilo) : data)
-      setSelectedTask(null)
+    const params = { stato: filtroStato }
+    if (filtroProgetto) params.progettoId = filtroProgetto
+    fetchGanttStrutturato(params).then(data => {
+      setGanttStrutturato(data)
     })
-  }, [filtroProgetto, filtroProfilo, vista])
+  }, [filtroProgetto, filtroStato])
+
+  // Filtro profilo applicato client-side sulla gerarchia.
+  // Filtra task dentro le fasi; mantiene fasi anche se diventano vuote
+  // (così l'utente vede subito l'effetto del filtro). Se vuoi nascondere
+  // le fasi vuote, decommenta il .filter sotto. Da rivalutare in 4b-3.
+  const ganttFiltrato = useMemo(() => {
+    if (!filtroProfilo) return ganttStrutturato
+    return ganttStrutturato.map(prog => ({
+      ...prog,
+      fasi: (prog.fasi || []).map(fase => ({
+        ...fase,
+        tasks: (fase.tasks || []).filter(t => t.profilo_richiesto === filtroProfilo),
+      }))
+      // .filter(fase => (fase.tasks || []).length > 0)
+    }))
+  }, [ganttStrutturato, filtroProfilo])
 
   if (loading) return <p className="text-gray-400">Caricamento...</p>
 
@@ -659,33 +377,16 @@ export default function GanttPage() {
     <div>
       <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
         <h1 className="text-3xl font-bold">📅 GANTT</h1>
-
-        {/* Toggle vista — Step 2.3 handoff v15 */}
-        <div className="inline-flex bg-gray-800 rounded-lg p-1 border border-gray-700">
-          <button
-            onClick={() => setVista('elenco')}
-            className={`px-4 py-1.5 text-sm rounded-md transition-colors ${
-              vista === 'elenco' ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-gray-200'
-            }`}
-          >
-            📋 Elenco
-          </button>
-          <button
-            onClick={() => setVista('timeline')}
-            className={`px-4 py-1.5 text-sm rounded-md transition-colors ${
-              vista === 'timeline' ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-gray-200'
-            }`}
-          >
-            📊 Timeline
-          </button>
-        </div>
       </div>
 
       {/* ═══════════════════════════════════════════════════════════════ */}
-      {/* VISTA ELENCO — drill-down gerarchico Progetto → Fase → Task     */}
+      {/* VISTA TIMELINE — GANTT gerarchico fase→task                     */}
+      {/* (19/05/2026 4d: toggle Elenco/Timeline rimosso. La lista dei    */}
+      {/* progetti non aggiungeva valore essendo già selezionabili dalla  */}
+      {/* tendina "Progetto" qui sotto e accessibili dal click sulle      */}
+      {/* barre. Approfondimento read-only completo: /elenco/{id}.)       */}
       {/* ═══════════════════════════════════════════════════════════════ */}
-      {vista === 'elenco' && (
-        <>
+      <>
           <div className="flex gap-4 mb-4 flex-wrap items-center">
             <label className="text-sm text-gray-400">Stato:</label>
             <select
@@ -697,20 +398,6 @@ export default function GanttPage() {
               <option value="in esecuzione">Solo In esecuzione</option>
               <option value="sospeso">Solo Sospeso</option>
             </select>
-            <span className="text-xs text-gray-500 italic ml-2">
-              Bozze e progetti chiusi non sono mostrati qui.
-            </span>
-          </div>
-          <VistaElenco filtroStato={filtroStato} navigate={navigate} />
-        </>
-      )}
-
-      {/* ═══════════════════════════════════════════════════════════════ */}
-      {/* VISTA TIMELINE — GANTT classico (invariato)                     */}
-      {/* ═══════════════════════════════════════════════════════════════ */}
-      {vista === 'timeline' && (
-        <>
-          <div className="flex gap-4 mb-4 flex-wrap items-center">
             <select value={filtroProgetto} onChange={e => setFiltroProgetto(e.target.value)}
               className="bg-gray-800 border border-gray-600 rounded-lg px-4 py-2 text-sm">
               <option value="">Tutti i progetti</option>
@@ -768,37 +455,24 @@ export default function GanttPage() {
             </div>
           </div>
 
-          <GanttChart
-            tasks={ganttData}
-            onTaskClick={setSelectedTask}
+          <GanttChartFasi
+            progetti={ganttFiltrato}
+            onProgettoClick={(progettoId) => navigate(`/elenco/${progettoId}`)}
+            onTaskClick={(task) => {
+              // Click su barra task → naviga all'approfondimento del progetto.
+              const prog = ganttFiltrato.find(p =>
+                (p.fasi || []).some(f => (f.tasks || []).some(t => t.id === task.id))
+              )
+              if (prog) navigate(`/elenco/${prog.id}`)
+            }}
           />
 
-          {selectedTask && (
-            <TaskDetailPanel
-              task={selectedTask}
-              allTasks={ganttData}
-              progetti={progetti}
-              dipendenti={dipendenti}
-              onClose={() => setSelectedTask(null)}
-              onElimina={async (taskId) => {
-                try {
-                  const res = await fetch(`/api/tasks/${taskId}/elimina`, { method: 'PATCH' })
-                  if (!res.ok) throw new Error('Errore')
-                  setSelectedTask(null)
-                  const newData = await fetchGantt(filtroProgetto || null)
-                  setGanttData(filtroProfilo ? newData.filter(t => t.profile === filtroProfilo) : newData)
-                } catch (err) {
-                  alert('Errore nell\'eliminazione: ' + err.message)
-                }
-              }}
-            />
+          {ganttFiltrato.length > 0 && (
+            <p className="text-xs text-gray-600 mt-3 text-center">
+              Clicca su una barra per aprire l'approfondimento del progetto
+            </p>
           )}
-
-          {!selectedTask && ganttData.length > 0 && (
-            <p className="text-xs text-gray-600 mt-3 text-center">Clicca su un task nel GANTT per vedere i dettagli</p>
-          )}
-        </>
-      )}
+      </>
     </div>
   )
 }

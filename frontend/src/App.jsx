@@ -9,7 +9,10 @@ import Pipeline from './pages/Pipeline'
 import Economia from './pages/Economia'
 import AttivitaInterne from './pages/AttivitaInterne'
 import Configurazione from './pages/Configurazione'
+import Cantiere from './pages/Cantiere'
 import CantiereDettaglio from './pages/CantiereDettaglio'
+import ElencoDettaglio from './pages/ElencoDettaglio'
+import Archivio from './pages/Archivio'
 import Login from './pages/Login'
 import Forbidden from './pages/Forbidden'
 import NotFound from './pages/NotFound'
@@ -24,12 +27,14 @@ import { useAuth } from './contexts/AuthContext'
 const navItems = [
   { to: '/', label: 'Home', icon: '📊', end: true, requiresManager: false },
   { to: '/gantt', label: 'GANTT', icon: '📅', requiresManager: true },
+  { to: '/cantiere', label: 'Cantiere', icon: '🔨', requiresManager: true },
   { to: '/analisi', label: 'Tavolo di Lavoro', icon: '🔬', requiresManager: true },
   { to: '/risorse', label: 'Risorse', icon: '👥', requiresManager: true },
   { to: '/consuntivazione', label: 'Consuntivazione', icon: '⏱️', requiresManager: false },
   { to: '/pipeline', label: 'Pipeline', icon: '📋', requiresManager: true },
   { to: '/economia', label: 'Economia', icon: '💰', requiresManager: true },
   { to: '/attivita-interne', label: 'Attività Interne', icon: '🏢', requiresManager: true },
+  { to: '/archivio', label: 'Archivio', icon: '📦', requiresManager: true },
   { to: '/configurazione', label: 'Configurazione', icon: '⚙️', requiresManager: true },
 ]
 
@@ -173,8 +178,20 @@ function MainLayout() {
           <Route path="/configurazione" element={
             <RequireManager><Configurazione /></RequireManager>
           } />
+          <Route path="/cantiere" element={
+            <RequireManager><Cantiere /></RequireManager>
+          } />
           <Route path="/cantiere/:progettoId" element={
             <RequireManager><CantiereDettaglio /></RequireManager>
+          } />
+          {/* /elenco/:id — approfondimento read-only del progetto (19/05/2026).
+              La route /cantiere/:id resta attiva come transizione finché lo
+              Step 2.7 non costruisce la pagina Cantiere come pagina di scrittura. */}
+          <Route path="/elenco/:progettoId" element={
+            <RequireManager><ElencoDettaglio /></RequireManager>
+          } />
+          <Route path="/archivio" element={
+            <RequireManager><Archivio /></RequireManager>
           } />
 
           {/* Fallback per URL ignoti */}

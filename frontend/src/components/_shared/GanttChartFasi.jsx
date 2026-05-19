@@ -61,7 +61,7 @@ const PROJECT_PALETTES = [
 // ─────────────────────────────────────────────────────────────────────
 // Componente principale
 // ─────────────────────────────────────────────────────────────────────
-export default function GanttChartFasi({ progetti, onTaskClick }) {
+export default function GanttChartFasi({ progetti, onTaskClick, onProgettoClick }) {
   const scrollRef = useRef(null)
   const labelsRef = useRef(null)
 
@@ -121,6 +121,7 @@ export default function GanttChartFasi({ progetti, onTaskClick }) {
         kind: 'project_header',
         progettoId: prog.id,
         progettoNome: prog.nome,
+        cliente: prog.cliente || '',
         accent: palette.accent,
         labelBg: palette.label,
         height: PROJECT_HEADER_H,
@@ -174,12 +175,26 @@ export default function GanttChartFasi({ progetti, onTaskClick }) {
   }, [progetti, setEspansione])
 
   // ── Timeline (asse) ────────────────────────────────────────────────
+  // NOTA (Debito #16 chiuso 19/05): il useMemo cacha l'asse temporale,
+  // ma `oggiX` deve riflettere "ora" e non essere cachato. Lo calcoliamo
+  // a parte sotto, dopo aver destrutturato il resto della timeline.
   const timeline = useMemo(() => buildTimeline(allBars), [allBars])
+
+  // Tick: forza un re-render ogni 5 minuti per mantenere `oggiX` allineato
+  // se la pagina sta aperta a lungo. 5 min è un compromesso tra reattività
+  // e costo: il GANTT è una vista di lavoro che resta aperta ore.
+  const [, setTick] = useState(0)
+  useEffect(() => {
+    const id = setInterval(() => setTick(t => t + 1), 5 * 60 * 1000)
+    return () => clearInterval(id)
+  }, [])
 
   // Auto-scroll su "oggi" al primo render utile
   useEffect(() => {
     if (scrollRef.current && timeline) {
-      scrollRef.current.scrollLeft = Math.max(0, timeline.oggiX - 300)
+      const oggiPx = (new Date().getTime() - timeline.firstMonday.getTime())
+        / (timeline.totalWeeks * 7 * 86400000) * timeline.totalWidth
+      scrollRef.current.scrollLeft = Math.max(0, oggiPx - 300)
     }
   }, [timeline])
 
@@ -202,10 +217,16 @@ export default function GanttChartFasi({ progetti, onTaskClick }) {
     )
   }
 
-  const { firstMonday, totalWeeks, weekPx, totalWidth, weeks, months, oggiX } = timeline
+  const { firstMonday, totalWeeks, weekPx, totalWidth, weeks, months } = timeline
   const msPerPx = (totalWeeks * 7 * 86400000) / totalWidth
 
-  // Altezza totale = somma altezze righe visibili
+  // oggiX ricalcolato fresco a ogni render (vedi commento sopra al useMemo).
+  // Ignoro `timeline.oggiX` proprio per evitare il valore cachato.
+  const oggiX = (new Date().getTime() - firstMonday.getTime()) / msPerPx
+
+  // Altezza totale = somma altezze righe visibili.
+  // Usata per il layer di sfondo (grid settimane + linea oggi) che è
+  // l'unico elemento absolute-positioned a tutta altezza nel body timeline.
   const totalHeight = rows.reduce((sum, r) => sum + r.height, 0)
 
   // Helper: posizione X+W di una barra dato start/end
@@ -214,14 +235,6 @@ export default function GanttChartFasi({ progetti, onTaskClick }) {
     const w = Math.max(4, (new Date(end).getTime() - new Date(start).getTime()) / msPerPx)
     return { x, w }
   }
-
-  // Per disegnare le bande di sfondo per riga in modo cumulativo (top)
-  let cumTop = 0
-  const rowTops = rows.map(r => {
-    const t = cumTop
-    cumTop += r.height
-    return t
-  })
 
   return (
     <div className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
@@ -240,11 +253,18 @@ export default function GanttChartFasi({ progetti, onTaskClick }) {
           <div ref={labelsRef} className="overflow-hidden" style={{ maxHeight: 600 }}>
             {rows.map((r, i) => {
               if (r.kind === 'project_header') {
+                const tooltip = (r.cliente ? `${r.progettoNome} — ${r.cliente}` : r.progettoNome) + ' · Click per approfondire'
                 return (
                   <div
                     key={`ph-${r.progettoId}`}
-                    className="flex items-center gap-2 px-3 border-t border-gray-700"
-                    style={{ height: r.height, backgroundColor: r.labelBg }}
+                    className="flex items-center gap-2 px-3 cursor-pointer hover:brightness-125 transition-all"
+                    style={{
+                      height: r.height,
+                      backgroundColor: r.labelBg,
+                      boxShadow: 'inset 0 1px 0 rgb(55 65 81)',
+                    }}
+                    title={tooltip}
+                    onClick={() => onProgettoClick && onProgettoClick(r.progettoId)}
                   >
                     <div style={{ width: 3, height: 12, backgroundColor: r.accent, borderRadius: 2 }} />
                     <span
@@ -260,8 +280,12 @@ export default function GanttChartFasi({ progetti, onTaskClick }) {
                 return (
                   <div
                     key={`fl-${r.faseId}`}
-                    className="border-b border-gray-800/50 px-3 flex items-center gap-2 cursor-pointer hover:bg-gray-800/40 transition-colors"
-                    style={{ height: r.height, backgroundColor: r.progettoBg }}
+                    className="px-3 flex items-center gap-2 cursor-pointer hover:bg-gray-800/40 transition-colors"
+                    style={{
+                      height: r.height,
+                      backgroundColor: r.progettoBg,
+                      boxShadow: 'inset 0 -1px 0 rgb(55 65 81)',  // simula border-b senza occupare spazio
+                    }}
                     onClick={() => toggleFase(r.faseId)}
                     title={r.isEspansa ? 'Click per chiudere' : 'Click per espandere i task'}
                   >
@@ -277,8 +301,13 @@ export default function GanttChartFasi({ progetti, onTaskClick }) {
               return (
                 <div
                   key={`tl-${r.taskId}`}
-                  className="border-b border-gray-800/30 px-3 flex items-center gap-2 cursor-pointer hover:bg-gray-800/40 transition-colors"
-                  style={{ height: r.height, backgroundColor: r.progettoBg, paddingLeft: 28 }}
+                  className="px-3 flex items-center gap-2 cursor-pointer hover:bg-gray-800/40 transition-colors"
+                  style={{
+                    height: r.height,
+                    backgroundColor: r.progettoBg,
+                    paddingLeft: 28,
+                    boxShadow: 'inset 0 -1px 0 rgb(55 65 81 / 0.6)',
+                  }}
                   onClick={() => onTaskClick && onTaskClick(r.task)}
                 >
                   <span className="text-[11px] text-gray-300 truncate">{r.task.nome}</span>
@@ -295,7 +324,7 @@ export default function GanttChartFasi({ progetti, onTaskClick }) {
         <div className="flex-1 overflow-hidden">
           {/* Header settimane+mesi (scroll orizzontale sincronizzato) */}
           <div className="overflow-hidden" style={{ height: HEADER_H }}>
-            <div className="overflow-x-auto" style={{ height: HEADER_H + 20 }}>
+            <div className="overflow-x-auto" style={{ height: HEADER_H + 20, overscrollBehaviorX: 'contain' }}>
               <div style={{ width: totalWidth }}>
                 {/* Riga mesi */}
                 <div className="flex h-[26px] border-b border-gray-700/50">
@@ -339,34 +368,41 @@ export default function GanttChartFasi({ progetti, onTaskClick }) {
           <div
             ref={scrollRef}
             className="overflow-x-auto overflow-y-auto"
-            style={{ maxHeight: 600 }}
+            style={{ maxHeight: 600, overscrollBehaviorX: 'contain' }}
             onScroll={(e) => {
               const headerEl = e.target.previousElementSibling?.firstElementChild
               if (headerEl) headerEl.scrollLeft = e.target.scrollLeft
               if (labelsRef.current) labelsRef.current.scrollTop = e.target.scrollTop
             }}
           >
+            {/* Container in flow naturale: stessa strategia della colonna labels.
+                Garantisce allineamento al pixel per costruzione, senza calcoli
+                cumulativi soggetti a drift di rendering. */}
             <div style={{ width: totalWidth, position: 'relative' }}>
-              {/* Layer di sfondo: grid settimane + linea oggi */}
+              {/* Layer di sfondo: grid settimane + linea oggi.
+                  position: absolute con height totale dinamica (= somma altezze righe). */}
               <div
-                className="absolute pointer-events-none z-0"
-                style={{ width: totalWidth, height: totalHeight }}
+                className="pointer-events-none"
+                style={{
+                  position: 'absolute',
+                  top: 0, left: 0,
+                  width: totalWidth, height: totalHeight,
+                  zIndex: 0,
+                }}
               >
                 {weeks.map((w, i) => (
                   <div
                     key={i}
                     className={w.monday.getDate() <= 7 ? 'bg-gray-700/60' : 'bg-gray-800/30'}
-                    style={{ position: 'absolute', left: w.x, top: 0, width: 1, height: totalHeight }}
+                    style={{ position: 'absolute', left: w.x, top: 0, width: 1, height: '100%' }}
                   />
                 ))}
                 {oggiX > 0 && oggiX < totalWidth && (
                   <div
                     style={{
                       position: 'absolute',
-                      left: oggiX,
-                      top: 0,
-                      width: 2,
-                      height: totalHeight,
+                      left: oggiX, top: 0,
+                      width: 2, height: '100%',
                       backgroundColor: 'rgba(239,68,68,0.7)',
                       zIndex: 5,
                     }}
@@ -374,23 +410,22 @@ export default function GanttChartFasi({ progetti, onTaskClick }) {
                 )}
               </div>
 
-              {/* Righe + barre */}
+              {/* Righe in flow naturale, ognuna con la sua barra interna position:absolute */}
               {rows.map((r, i) => {
-                const top = rowTops[i]
-
                 if (r.kind === 'project_header') {
                   return (
                     <div
                       key={`ph-bar-${r.progettoId}`}
-                      className="border-t border-gray-700"
+                      className="cursor-pointer hover:brightness-125 transition-all"
                       style={{
-                        position: 'absolute',
-                        left: 0,
-                        top,
+                        position: 'relative',
                         width: totalWidth,
                         height: r.height,
                         backgroundColor: r.labelBg,
+                        boxShadow: 'inset 0 1px 0 rgb(55 65 81)',
                       }}
+                      onClick={() => onProgettoClick && onProgettoClick(r.progettoId)}
+                      title="Click per approfondire il progetto"
                     />
                   )
                 }
@@ -399,23 +434,21 @@ export default function GanttChartFasi({ progetti, onTaskClick }) {
                   const { x, w } = barXW(r.start, r.end)
                   const color = COLORI_FASE[r.stato] || COLORI_FASE['Da iniziare']
                   return (
-                    <React.Fragment key={`fb-${r.faseId}`}>
-                      <div
-                        className="border-b border-gray-800/50"
-                        style={{
-                          position: 'absolute',
-                          left: 0,
-                          top,
-                          width: totalWidth,
-                          height: r.height,
-                          backgroundColor: r.progettoBg,
-                        }}
-                      />
+                    <div
+                      key={`fb-${r.faseId}`}
+                      style={{
+                        position: 'relative',
+                        width: totalWidth,
+                        height: r.height,
+                        backgroundColor: r.progettoBg,
+                        boxShadow: 'inset 0 -1px 0 rgb(55 65 81)',
+                      }}
+                    >
                       <div
                         className="absolute rounded-[3px] hover:brightness-110 cursor-pointer z-10 transition-all"
                         style={{
                           left: x,
-                          top: top + (r.height - BAR_FASE_H) / 2,
+                          top: (r.height - BAR_FASE_H) / 2,
                           width: w,
                           height: BAR_FASE_H,
                           backgroundColor: color,
@@ -434,7 +467,7 @@ export default function GanttChartFasi({ progetti, onTaskClick }) {
                           </span>
                         )}
                       </div>
-                    </React.Fragment>
+                    </div>
                   )
                 }
 
@@ -442,33 +475,31 @@ export default function GanttChartFasi({ progetti, onTaskClick }) {
                 const { x, w } = barXW(r.start, r.end)
                 const color = COLORI_TASK[r.stato] || COLORI_TASK['Da iniziare']
                 return (
-                  <React.Fragment key={`tb-${r.taskId}`}>
+                  <div
+                    key={`tb-${r.taskId}`}
+                    style={{
+                      position: 'relative',
+                      width: totalWidth,
+                      height: r.height,
+                      backgroundColor: r.progettoBg,
+                      boxShadow: 'inset 0 -1px 0 rgb(55 65 81 / 0.6)',
+                    }}
+                  >
                     <div
-                      className="border-b border-gray-800/30"
-                      style={{
-                        position: 'absolute',
-                        left: 0,
-                        top,
-                        width: totalWidth,
-                        height: r.height,
-                        backgroundColor: r.progettoBg,
-                      }}
-                    />
-                    <div
-                      className="absolute rounded-[2px] hover:brightness-110 cursor-pointer z-10 transition-all"
+                      className="absolute rounded-[2px] hover:brightness-110 hover:opacity-100 cursor-pointer z-10 transition-all"
                       style={{
                         left: x,
-                        top: top + (r.height - BAR_TASK_H) / 2,
+                        top: (r.height - BAR_TASK_H) / 2,
                         width: w,
                         height: BAR_TASK_H,
                         backgroundColor: color,
-                        opacity: 0.85,
+                        opacity: 0.6,
                         minWidth: 4,
                       }}
                       onClick={() => onTaskClick && onTaskClick(r.task)}
                       title={`${r.task.nome}\n${r.task.dipendente_nome || 'Non assegnato'}\nClick per dettagli`}
                     />
-                  </React.Fragment>
+                  </div>
                 )
               })}
             </div>
