@@ -33,24 +33,60 @@ import { fetchDipendenti } from '../../api'
 import { FormInput, FormSelect } from '../_shared/Form'
 
 
-export default function WizardCreazioneProgetto({ onClose, onCreaProgetto }) {
+export default function WizardCreazioneProgetto({ onClose, onCreaProgetto, bozzaIniziale = null }) {
+  // bozzaIniziale: se presente, il Wizard funziona in modalità "completa bozza"
+  // (form precaricato + submit che AGGIORNA la bozza). Se null, modalità
+  // "crea da zero" (form vuoto + submit che CREA un progetto nuovo).
+  const modalitaBozza = bozzaIniziale !== null
+
   const [step, setStep] = useState(1)
   const [dipendenti, setDipendenti] = useState([])
 
-  // Stato form complessivo
-  const [anagrafica, setAnagrafica] = useState({
-    nome: '',
-    cliente: '',
-    tipologia: 'ordinario',
-    pm_id: '',
-    data_inizio: '',
-    data_fine: '',
-    budget_ore: 0,
-  })
-  const [fasi, setFasi] = useState([
-    { nome: '', ordine: 1, data_inizio: '', data_fine: '', ore_vendute: 0 }
-  ])
-  const [taskIniziali, setTaskIniziali] = useState([])
+  // Stato form complessivo — precaricato dalla bozza se presente
+  const [anagrafica, setAnagrafica] = useState(
+    modalitaBozza
+      ? {
+          nome: bozzaIniziale.nome || '',
+          cliente: bozzaIniziale.cliente || '',
+          tipologia: bozzaIniziale.tipologia || 'ordinario',
+          pm_id: bozzaIniziale.pm_id || '',
+          data_inizio: bozzaIniziale.data_inizio || '',
+          data_fine: bozzaIniziale.data_fine || '',
+          budget_ore: bozzaIniziale.budget_ore || 0,
+        }
+      : {
+          nome: '',
+          cliente: '',
+          tipologia: 'ordinario',
+          pm_id: '',
+          data_inizio: '',
+          data_fine: '',
+          budget_ore: 0,
+        }
+  )
+  const [fasi, setFasi] = useState(
+    modalitaBozza && bozzaIniziale.fasi && bozzaIniziale.fasi.length > 0
+      ? bozzaIniziale.fasi.map((f, i) => ({
+          nome: f.nome || '',
+          ordine: f.ordine || i + 1,
+          data_inizio: f.data_inizio || '',
+          data_fine: f.data_fine || '',
+          ore_vendute: f.ore_vendute || 0,
+        }))
+      : [{ nome: '', ordine: 1, data_inizio: '', data_fine: '', ore_vendute: 0 }]
+  )
+  const [taskIniziali, setTaskIniziali] = useState(
+    modalitaBozza && bozzaIniziale.task_iniziali
+      ? bozzaIniziale.task_iniziali.map(t => ({
+          nome: t.nome || '',
+          fase_idx: t.fase_idx ?? 0,
+          dipendente_id: t.dipendente_id || '',
+          ore_stimate: t.ore_stimate || 0,
+          data_inizio: t.data_inizio || '',
+          data_fine: t.data_fine || '',
+        }))
+      : []
+  )
 
   useEffect(() => {
     fetchDipendenti().then(d => setDipendenti(d || []))
@@ -65,6 +101,74 @@ export default function WizardCreazioneProgetto({ onClose, onCreaProgetto }) {
     && fasi.every(f => f.nome.trim() !== '' && f.ore_vendute > 0)
   const oreQuadrano = totaleOreFasi === Number(anagrafica.budget_ore)
 
+  // ── Regole di stato alla creazione (Step 2.7, 20/05/2026) ─────────────
+  // Bozza: sempre disponibile (censimento incompleto, si completa dopo).
+  // Da iniziare / In esecuzione: il progetto è "censito" — richiedono fasi
+  // valide, ore quadrate e un PM assegnato (minimo staffing).
+  // La distinzione la fa data_inizio: futura -> Da iniziare; oggi o passata
+  // -> In esecuzione (il progetto parte adesso). Vedi handoff §0.4.
+  const [submitting, setSubmitting] = useState(false)
+  const [erroreSubmit, setErroreSubmit] = useState(null)
+
+  const progettoCensito = step1Valido && step2Valido && oreQuadrano
+    && anagrafica.pm_id.trim() !== ''
+
+  // data_inizio futura? (stringa ISO 'YYYY-MM-DD' confrontata con oggi)
+  const oggiISO = new Date().toISOString().slice(0, 10)
+  const dataInizioFutura = anagrafica.data_inizio !== '' && anagrafica.data_inizio > oggiISO
+
+  // "In esecuzione" sensato solo se la data non è nel futuro;
+  // "Da iniziare" sensato solo se la data c'è ed è futura.
+  const puoEssereInEsecuzione = progettoCensito && anagrafica.data_inizio !== '' && !dataInizioFutura
+  const puoEssereDaIniziare = progettoCensito && dataInizioFutura
+
+  async function handleSubmit(statoScelto) {
+    setErroreSubmit(null)
+    setSubmitting(true)
+    try {
+      // Payload transazionale: crea o completa progetto + fasi + task.
+      // In modalità bozza include `id` (la bozza da completare); in modalità
+      // creazione `id` è null e il backend lo genera.
+      const payload = {
+        progetto: {
+          id: modalitaBozza ? bozzaIniziale.id : null,
+          nome: anagrafica.nome.trim(),
+          cliente: anagrafica.cliente.trim() || null,
+          tipologia: anagrafica.tipologia,
+          stato: statoScelto,
+          pm_id: anagrafica.pm_id || null,
+          data_inizio: anagrafica.data_inizio || null,
+          data_fine: anagrafica.data_fine || null,
+          budget_ore: Number(anagrafica.budget_ore) || 0,
+        },
+        fasi: fasi.map(f => ({
+          nome: f.nome.trim(),
+          ordine: f.ordine,
+          data_inizio: f.data_inizio || null,
+          data_fine: f.data_fine || null,
+          ore_vendute: Number(f.ore_vendute) || 0,
+        })),
+        // I task referenziano la fase per indice (fase_idx): il backend
+        // risolve l'indice all'id reale dopo aver creato le fasi.
+        task_iniziali: taskIniziali.map(t => ({
+          nome: t.nome.trim(),
+          fase_idx: t.fase_idx,
+          dipendente_id: t.dipendente_id || null,
+          ore_stimate: Number(t.ore_stimate) || 0,
+          data_inizio: t.data_inizio || null,
+          data_fine: t.data_fine || null,
+        })),
+      }
+      // Secondo argomento: true se è un completamento bozza, così Cantiere
+      // sa se chiamare l'endpoint di creazione o quello di completamento.
+      await onCreaProgetto(payload, modalitaBozza)
+      // onCreaProgetto, se va a buon fine, chiude il Wizard lato Cantiere.
+    } catch (e) {
+      setErroreSubmit(e.message || 'Errore durante il salvataggio del progetto')
+      setSubmitting(false)
+    }
+  }
+
   return (
     <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4">
       <div className="bg-gray-900 rounded-xl border border-gray-700 max-w-4xl w-full max-h-[90vh] overflow-y-auto">
@@ -72,7 +176,11 @@ export default function WizardCreazioneProgetto({ onClose, onCreaProgetto }) {
         {/* Header con progress 3 step */}
         <div className="border-b border-gray-800 p-5">
           <div className="flex items-center justify-between mb-3">
-            <h2 className="text-xl font-semibold">＋ Nuovo progetto</h2>
+            <h2 className="text-xl font-semibold">
+              {modalitaBozza
+                ? `Completa bozza · ${bozzaIniziale.nome || bozzaIniziale.id}`
+                : '＋ Nuovo progetto'}
+            </h2>
             <button onClick={onClose} className="text-gray-500 hover:text-gray-200 text-xl">×</button>
           </div>
           <div className="flex items-center gap-2">
@@ -113,7 +221,13 @@ export default function WizardCreazioneProgetto({ onClose, onCreaProgetto }) {
         </div>
 
         {/* Footer navigazione */}
-        <div className="border-t border-gray-800 p-4 flex items-center justify-between flex-wrap gap-3">
+        <div className="border-t border-gray-800 p-4">
+          {erroreSubmit && (
+            <div className="mb-3 bg-red-900/30 border border-red-700 rounded-lg px-3 py-2 text-sm text-red-300">
+              {erroreSubmit}
+            </div>
+          )}
+          <div className="flex items-center justify-between flex-wrap gap-3">
           <div className="flex gap-2">
             {step > 1 && (
               <button
@@ -140,22 +254,41 @@ export default function WizardCreazioneProgetto({ onClose, onCreaProgetto }) {
             {step === 3 && (
               <>
                 <button
-                  disabled
-                  title="Submit attivo dopo Step 2.7-pre (formalizzazione stati domani)"
-                  className="px-4 py-2 bg-amber-700/40 text-amber-300/60 rounded-lg text-sm font-semibold cursor-not-allowed opacity-60 border border-amber-700/50"
+                  onClick={() => handleSubmit('Bozza')}
+                  disabled={submitting || !step1Valido}
+                  title="Salva come bozza: censimento incompleto, completabile dal Cantiere"
+                  className="px-4 py-2 bg-amber-700 hover:bg-amber-600 disabled:bg-gray-700 disabled:text-gray-500 disabled:cursor-not-allowed text-amber-50 rounded-lg text-sm font-semibold border border-amber-600/50"
                 >
                   Salva come Bozza
                 </button>
                 <button
-                  disabled
-                  title="Submit attivo dopo Step 2.7-pre"
-                  className="px-4 py-2 bg-blue-700/40 text-blue-300/60 rounded-lg text-sm font-semibold cursor-not-allowed opacity-60 border border-blue-700/50"
+                  onClick={() => handleSubmit('Da iniziare')}
+                  disabled={submitting || !puoEssereDaIniziare}
+                  title={
+                    puoEssereDaIniziare
+                      ? 'Progetto censito, parte in una data futura'
+                      : 'Richiede: fasi valide, ore quadrate, PM assegnato e data inizio futura'
+                  }
+                  className="px-4 py-2 bg-gray-600 hover:bg-gray-500 disabled:bg-gray-700 disabled:text-gray-500 disabled:cursor-not-allowed text-gray-50 rounded-lg text-sm font-semibold border border-gray-500/50"
                 >
-                  ▶ Crea progetto
+                  Crea · Da iniziare
+                </button>
+                <button
+                  onClick={() => handleSubmit('In esecuzione')}
+                  disabled={submitting || !puoEssereInEsecuzione}
+                  title={
+                    puoEssereInEsecuzione
+                      ? 'Progetto censito, parte subito'
+                      : 'Richiede: fasi valide, ore quadrate, PM assegnato e data inizio non futura'
+                  }
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-700 disabled:text-gray-500 disabled:cursor-not-allowed text-white rounded-lg text-sm font-semibold"
+                >
+                  ▶ Crea · In esecuzione
                 </button>
               </>
             )}
           </div>
+        </div>
         </div>
       </div>
     </div>
@@ -199,8 +332,8 @@ function StepAnagrafica({ dati, onChange, dipendenti }) {
           value={dati.tipologia}
           onChange={v => onChange({ ...dati, tipologia: v })}
           options={[
-            { value: 'ordinario', label: 'Ordinario (cliente esterno)' },
-            { value: 'interno', label: 'Interno (sviluppo IMC)' },
+            { value: 'ordinario', label: 'Ordinario (progetto sviluppato da IMC)' },
+            { value: 'bando', label: 'Bando (gestione iter per conto terzi)' },
           ]}
         />
       </div>

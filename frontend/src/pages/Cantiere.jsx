@@ -31,11 +31,52 @@
 //
 // ═════════════════════════════════════════════════════════════════════════
 
-import React, { useState, useEffect, useMemo } from 'react'
+import React, { useState, useEffect, useMemo, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { fetchGanttStrutturato } from '../api'
+import { fetchGanttStrutturato, createProgettoCompleto, completaProgetto } from '../api'
 import StatoBadge from '../components/_shared/StatoBadge'
 import WizardCreazioneProgetto from '../components/cantiere/WizardCreazioneProgetto'
+import AggiungiTaskModal from '../components/cantiere/AggiungiTaskModal'
+
+
+// ── Trasformazione: progetto da /gantt/strutturato → bozzaIniziale Wizard ──
+// Il Wizard vuole le date come stringa '' (non null, per gli <input date>) e
+// i task "piatti" con fase_idx invece che annidati nelle fasi.
+function progettoABozzaIniziale(p) {
+  const fasi = (p.fasi || []).map(f => ({
+    nome: f.nome || '',
+    ordine: f.ordine || 1,
+    data_inizio: f.data_inizio || '',
+    data_fine: f.data_fine || '',
+    ore_vendute: f.ore_vendute || 0,
+  }))
+  // Task: appiattiti, con fase_idx = posizione della fase di appartenenza.
+  const task_iniziali = []
+  ;(p.fasi || []).forEach((f, idx) => {
+    ;(f.tasks || []).forEach(t => {
+      task_iniziali.push({
+        nome: t.nome || '',
+        fase_idx: idx,
+        dipendente_id: t.dipendente_id || '',
+        ore_stimate: t.ore_stimate || 0,
+        data_inizio: t.data_inizio || '',
+        data_fine: t.data_fine || '',
+      })
+    })
+  })
+  return {
+    id: p.id,
+    nome: p.nome || '',
+    cliente: p.cliente || '',
+    tipologia: p.tipologia || 'ordinario',
+    pm_id: p.pm_id || '',
+    data_inizio: p.data_inizio || '',
+    data_fine: p.data_fine || '',
+    budget_ore: p.budget_ore || 0,
+    fasi,
+    task_iniziali,
+  }
+}
 
 
 export default function CantierePage() {
@@ -44,15 +85,25 @@ export default function CantierePage() {
   const [loading, setLoading] = useState(true)
   const [errore, setErrore] = useState(null)
   const [wizardAperto, setWizardAperto] = useState(false)
+  // bozzaSelezionata: se valorizzata, il Wizard si apre in modalità
+  // "completa bozza" precaricato; se null, modalità "crea da zero".
+  const [bozzaSelezionata, setBozzaSelezionata] = useState(null)
+  // progettoStaffing: se valorizzato, è aperto il modale "Aggiungi task"
+  // su quel progetto.
+  const [progettoStaffing, setProgettoStaffing] = useState(null)
 
-  useEffect(() => {
+  const caricaCantiere = useCallback(() => {
     setLoading(true)
     setErrore(null)
-    fetchGanttStrutturato({ stato: 'all' })
+    return fetchGanttStrutturato({ stato: 'all' })
       .then(d => setData(d || []))
       .catch(e => setErrore(e.message || 'Errore di caricamento'))
       .finally(() => setLoading(false))
   }, [])
+
+  useEffect(() => {
+    caricaCantiere()
+  }, [caricaCantiere])
 
   // Categorizzazione per sezione
   const bozze = useMemo(() => data.filter(p => p.stato === 'Bozza'), [data])
@@ -74,7 +125,7 @@ export default function CantierePage() {
           </p>
         </div>
         <button
-          onClick={() => setWizardAperto(true)}
+          onClick={() => { setBozzaSelezionata(null); setWizardAperto(true) }}
           title="Apri Wizard creazione nuovo progetto"
           className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-sm font-semibold transition-colors"
         >
@@ -82,14 +133,37 @@ export default function CantierePage() {
         </button>
       </div>
 
-      {/* Wizard creazione (modale) */}
+      {/* Wizard creazione / completamento bozza (modale) */}
       {wizardAperto && (
         <WizardCreazioneProgetto
-          onClose={() => setWizardAperto(false)}
-          onCreaProgetto={(dati) => {
-            // TODO Step 2.7 parte 2 domani: chiamata API create_progetto + ricarica
-            console.log('Wizard submit (placeholder):', dati)
+          bozzaIniziale={bozzaSelezionata}
+          onClose={() => { setWizardAperto(false); setBozzaSelezionata(null) }}
+          onCreaProgetto={async (payload, modalitaBozza) => {
+            // Step 2.7 (20/05/2026): submit reale via endpoint transazionale.
+            // L'errore NON viene inghiottito qui: viene rilanciato così il
+            // Wizard può mostrarlo e restare aperto (l'utente corregge e
+            // riprova). Il Wizard si chiude solo a operazione riuscita.
+            if (modalitaBozza) {
+              // Completamento bozza: PUT /progetti/{id}/completo
+              await completaProgetto(payload.progetto.id, payload)
+            } else {
+              // Creazione nuovo progetto: POST /progetti/completo
+              await createProgettoCompleto(payload)
+            }
             setWizardAperto(false)
+            setBozzaSelezionata(null)
+            await caricaCantiere()  // il progetto compare/aggiornato subito
+          }}
+        />
+      )}
+
+      {/* Modale "Aggiungi task" (staffing progressivo) */}
+      {progettoStaffing && (
+        <AggiungiTaskModal
+          progetto={progettoStaffing}
+          onClose={() => setProgettoStaffing(null)}
+          onTaskAggiunti={async () => {
+            await caricaCantiere()  // i task aggiunti compaiono subito
           }}
         />
       )}
@@ -109,8 +183,12 @@ export default function CantierePage() {
             descrizione="Progetti iniziati ma non ancora avviati. Riprendi per finire la pianificazione."
             progetti={bozze}
             ctaLabel="Riprendi"
-            ctaDisabled={true}
-            ctaTooltip="Step 2.7: Wizard ripresa bozza"
+            ctaDisabled={false}
+            ctaTooltip="Apri il Wizard precaricato per completare questa bozza"
+            onCta={(progetto) => {
+              setBozzaSelezionata(progettoABozzaIniziale(progetto))
+              setWizardAperto(true)
+            }}
             emptyMessage="Nessuna bozza in sospeso."
             navigate={navigate}
             colorAccent="#f59e0b"
@@ -122,8 +200,9 @@ export default function CantierePage() {
             descrizione="Progetti in corso a cui aggiungere task progressivamente — i task si sviluppano nel tempo, le ore vendute restano quelle delle fasi."
             progetti={attiviSospesi}
             ctaLabel="Aggiungi task"
-            ctaDisabled={true}
-            ctaTooltip="Step 2.7: mini-Wizard aggiungi task a fase esistente"
+            ctaDisabled={false}
+            ctaTooltip="Aggiungi uno o più task a una fase di questo progetto"
+            onCta={(progetto) => setProgettoStaffing(progetto)}
             emptyMessage="Nessun progetto attivo o sospeso al momento."
             navigate={navigate}
             colorAccent="#3b82f6"
@@ -151,7 +230,7 @@ export default function CantierePage() {
 // "completati" o altro in futuro).
 // ═════════════════════════════════════════════════════════════════════════
 
-function SezioneCantiere({ titolo, descrizione, progetti, ctaLabel, ctaDisabled, ctaTooltip, emptyMessage, navigate, colorAccent }) {
+function SezioneCantiere({ titolo, descrizione, progetti, ctaLabel, ctaDisabled, ctaTooltip, onCta, emptyMessage, navigate, colorAccent }) {
   return (
     <section className="mb-8">
       <div className="mb-3">
@@ -175,6 +254,7 @@ function SezioneCantiere({ titolo, descrizione, progetti, ctaLabel, ctaDisabled,
               ctaLabel={ctaLabel}
               ctaDisabled={ctaDisabled}
               ctaTooltip={ctaTooltip}
+              onCta={onCta}
               navigate={navigate}
               colorAccent={colorAccent}
             />
@@ -186,7 +266,7 @@ function SezioneCantiere({ titolo, descrizione, progetti, ctaLabel, ctaDisabled,
 }
 
 
-function CardCantiere({ progetto, ctaLabel, ctaDisabled, ctaTooltip, navigate, colorAccent }) {
+function CardCantiere({ progetto, ctaLabel, ctaDisabled, ctaTooltip, onCta, navigate, colorAccent }) {
   const nTaskTot = (progetto.fasi || []).reduce((s, f) => s + (f.tasks?.length || 0), 0)
   const sforamento = progetto.ore_vendute_totali > 0 && progetto.ore_consumate_totali > progetto.ore_vendute_totali
 
@@ -229,6 +309,7 @@ function CardCantiere({ progetto, ctaLabel, ctaDisabled, ctaTooltip, navigate, c
           {/* CTA contestuale */}
           <button
             disabled={ctaDisabled}
+            onClick={() => { if (!ctaDisabled && onCta) onCta(progetto) }}
             title={ctaTooltip}
             className={`px-3 py-1.5 rounded text-sm font-medium flex-shrink-0 ${
               ctaDisabled

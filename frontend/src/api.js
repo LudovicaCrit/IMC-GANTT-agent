@@ -154,6 +154,34 @@ export async function createProgetto(data) {
   return apiFetch(`${API_BASE}/progetti`, { method: 'POST', body: data });
 }
 
+export async function createProgettoCompleto(data) {
+  // Step 2.7 (20/05/2026): crea progetto + fasi + task iniziali in UN'UNICA
+  // transazione DB. O viene creato tutto, o niente (nessun progetto orfano).
+  // Body: { progetto: {...}, fasi: [...], task_iniziali: [...] }.
+  // I task referenziano la fase per indice (fase_idx): il backend risolve
+  // l'indice all'id reale dopo aver creato le fasi nella stessa transazione.
+  return apiFetch(`${API_BASE}/progetti/completo`, { method: 'POST', body: data });
+}
+
+export async function completaProgetto(progettoId, data) {
+  // Step 2.7 parte 2 (20/05/2026): completa una BOZZA. Aggiorna l'anagrafica
+  // e rimpiazza fasi + task in un'unica transazione. Ammesso solo se il
+  // progetto è in stato 'Bozza'. Stesso shape di body di createProgettoCompleto.
+  return apiFetch(`${API_BASE}/progetti/${progettoId}/completo`, {
+    method: 'PUT', body: data,
+  });
+}
+
+export async function aggiungiTaskMultipli(progettoId, data) {
+  // Step 2.7 parte 3 (20/05/2026): staffing progressivo. Aggiunge più task
+  // a fasi esistenti di un progetto attivo/sospeso, in un'unica transazione.
+  // Body: { task: [{ nome, fase_id, dipendente_id?, ore_stimate, data_inizio?,
+  //         data_fine?, predecessore? }, ...] }.
+  return apiFetch(`${API_BASE}/progetti/${progettoId}/task-multipli`, {
+    method: 'POST', body: data,
+  });
+}
+
 export async function updateProgetto(progettoId, data) {
   // Aggiorna campi di un progetto. Body: campi parziali.
   return apiFetch(`${API_BASE}/progetti/${progettoId}`, { method: 'PATCH', body: data });

@@ -108,7 +108,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func
 
 from deps import require_manager
-from models import get_session, Utente, Fase, Task, Consuntivo, STATI_FASE
+from models import get_session, Utente, Fase, Task, Consuntivo, Progetto, STATI_FASE
 
 
 # ── DTO ──────────────────────────────────────────────────────────────────
@@ -187,25 +187,37 @@ def crea_fase(req: FaseRequest, _: Utente = Depends(require_manager)):
 
     Vedi handoff v14.3 D5 per il contesto del refactoring da dict free-form
     a DTO Pydantic.
+
+    Step 2.7 (20/05/2026): aggiunto try/finally per non lasciare la sessione
+    aperta in caso di errore, e check di esistenza del progetto padre (prima
+    una fase poteva essere creata puntando a un progetto_id inesistente —
+    il vincolo FK l'avrebbe rifiutata con un errore opaco a commit time).
     """
-    
     session = get_session()
-    fase = Fase(
-        progetto_id=req.progetto_id,
-        nome=req.nome,
-        ordine=req.ordine,
-        data_inizio=req.data_inizio,
-        data_fine=req.data_fine,
-        ore_vendute=req.ore_vendute,
-        ore_pianificate=req.ore_pianificate,
-        note=req.note,
-        stato="Da iniziare",
-    )
-    session.add(fase)
-    session.commit()
-    result = {"id": fase.id, "nome": fase.nome}
-    session.close()
-    return result
+    try:
+        progetto = session.query(Progetto).filter(Progetto.id == req.progetto_id).first()
+        if not progetto:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Progetto '{req.progetto_id}' non trovato: impossibile creare la fase."
+            )
+
+        fase = Fase(
+            progetto_id=req.progetto_id,
+            nome=req.nome,
+            ordine=req.ordine,
+            data_inizio=req.data_inizio,
+            data_fine=req.data_fine,
+            ore_vendute=req.ore_vendute,
+            ore_pianificate=req.ore_pianificate,
+            note=req.note,
+            stato="Da iniziare",
+        )
+        session.add(fase)
+        session.commit()
+        return {"id": fase.id, "nome": fase.nome}
+    finally:
+        session.close()
 
 
 @router.patch("/{fase_id}")

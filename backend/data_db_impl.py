@@ -206,6 +206,46 @@ def _next_task_id():
     return "T001"
 
 
+def genera_id_task_multipli(n, session=None):
+    """Genera `n` id task consecutivi (formato T###) in un colpo solo.
+
+    Step 2.7 (20/05/2026) — chiude la triplicazione del debito #22.
+    Serve quando si creano PIÙ task nella stessa transazione: chiamare
+    _next_task_id() in loop darebbe id duplicati, perché legge sempre lo
+    stesso max() finché la transazione non è committata. Questa funzione
+    legge il max UNA volta e poi incrementa un contatore locale.
+
+    Parametri:
+      n: quanti id servono (>= 0).
+      session: se fornita, riusa quella sessione (caso transazionale: il
+        chiamante sta già dentro una transazione aperta). Se None, ne apre
+        e chiude una propria.
+
+    Ritorna: lista di `n` stringhe id, es. ["T071", "T072", "T073"].
+
+    NOTA (debito #22, forma residua): la generazione resta applicativa
+    (max+1). La soluzione definitiva è una sequence lato DB — rimandata al
+    ridisegno DB pilota (handoff §5.9). Questa utility elimina la
+    triplicazione del pattern, non la sua natura applicativa.
+    """
+    if n <= 0:
+        return []
+    from sqlalchemy import func
+    proprietaria = session is None
+    if proprietaria:
+        session = get_session()
+    try:
+        max_id = session.query(func.max(Task.id)).scalar()
+        if max_id and max_id.startswith("T") and max_id[1:].isdigit():
+            partenza = int(max_id[1:]) + 1
+        else:
+            partenza = 1
+        return [f"T{partenza + i:03d}" for i in range(n)]
+    finally:
+        if proprietaria:
+            session.close()
+
+
 def _next_progetto_id():
     session = get_session()
     from sqlalchemy import func
