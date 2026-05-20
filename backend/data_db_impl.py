@@ -111,39 +111,95 @@ def _reload():
 def get_dipendente(did):
     if not did or did == "":
         return pd.Series({"id": "", "nome": "Non assegnato", "profilo": "-", "ore_sett": 40, "costo_ora": 0, "competenze": []})
-    matches = DIPENDENTI[DIPENDENTI["id"] == did]
-    if len(matches) == 0:
+    session = get_session()
+    r = session.query(Dipendente).filter(
+        Dipendente.id == did,
+        Dipendente.attivo == True,
+    ).first()
+    session.close()
+    if r is None:
         return pd.Series({"id": did, "nome": f"Sconosciuto ({did})", "profilo": "-", "ore_sett": 40, "costo_ora": 0, "competenze": []})
-    return matches.iloc[0]
+    return pd.Series({
+        "id": r.id, "nome": r.nome, "profilo": r.profilo,
+        "ore_sett": r.ore_sett, "costo_ora": r.costo_ora or 0,
+        "competenze": r.competenze or [],
+    })
 
 def get_progetto(pid):
     if not pid or pid == "":
         return pd.Series({"id": "", "nome": "Sconosciuto", "cliente": "", "stato": ""})
-    matches = PROGETTI[PROGETTI["id"] == pid]
-    if len(matches) == 0:
+    session = get_session()
+    r = session.query(Progetto).filter(Progetto.id == pid).first()
+    session.close()
+    if r is None:
         return pd.Series({"id": pid, "nome": f"Sconosciuto ({pid})", "cliente": "", "stato": ""})
-    return matches.iloc[0]
+    return pd.Series({
+        "id": r.id, "nome": r.nome, "cliente": r.cliente, "stato": r.stato,
+        "data_inizio": _to_dt(r.data_inizio), "data_fine": _to_dt(r.data_fine),
+        "budget_ore": r.budget_ore or 0, "valore_contratto": r.valore_contratto or 0,
+        "descrizione": r.descrizione or "", "fase_corrente": r.fase_corrente or "",
+    })
 
 def get_tasks_progetto(pid):
-    return TASKS[TASKS["progetto_id"] == pid].copy()
+    session = get_session()
+    from sqlalchemy.orm import joinedload
+    rows = session.query(Task).options(joinedload(Task.fase_rel)).filter(
+        Task.progetto_id == pid
+    ).all()
+    data = [{"id": r.id, "progetto_id": r.progetto_id, "nome": r.nome,
+             "fase_id": r.fase_id,
+             "fase": r.fase_rel.nome if r.fase_rel else "",
+             "ore_stimate": r.ore_stimate or 0,
+             "data_inizio": _to_dt(r.data_inizio), "data_fine": _to_dt(r.data_fine),
+             "stato": r.stato, "profilo_richiesto": r.profilo_richiesto or "",
+             "dipendente_id": r.dipendente_id or "", "predecessore": r.predecessore or ""} for r in rows]
+    session.close()
+    df = pd.DataFrame(data) if data else pd.DataFrame(columns=["id","progetto_id","nome","fase_id","fase","ore_stimate","data_inizio","data_fine","stato","profilo_richiesto","dipendente_id","predecessore"])
+    return df.fillna({"predecessore": ""})
 
 def get_consuntivi_task(tid):
-    return CONSUNTIVI[CONSUNTIVI["task_id"] == tid].copy()
+    session = get_session()
+    rows = session.query(Consuntivo).filter(Consuntivo.task_id == tid).all()
+    data = [{"task_id": r.task_id, "dipendente_id": r.dipendente_id,
+             "settimana": _to_dt(r.settimana), "ore_dichiarate": r.ore_dichiarate,
+             "compilato": r.compilato, "data_compilazione": r.data_compilazione,
+             "nota": r.nota or ""} for r in rows]
+    session.close()
+    return pd.DataFrame(data) if data else pd.DataFrame(columns=["task_id","dipendente_id","settimana","ore_dichiarate","compilato","data_compilazione","nota"])
 
 def get_consuntivi_dipendente(did):
-    return CONSUNTIVI[CONSUNTIVI["dipendente_id"] == did].copy()
+    session = get_session()
+    rows = session.query(Consuntivo).filter(Consuntivo.dipendente_id == did).all()
+    data = [{"task_id": r.task_id, "dipendente_id": r.dipendente_id,
+             "settimana": _to_dt(r.settimana), "ore_dichiarate": r.ore_dichiarate,
+             "compilato": r.compilato, "data_compilazione": r.data_compilazione,
+             "nota": r.nota or ""} for r in rows]
+    session.close()
+    return pd.DataFrame(data) if data else pd.DataFrame(columns=["task_id","dipendente_id","settimana","ore_dichiarate","compilato","data_compilazione","nota"])
 
 def ore_consuntivate_progetto(pid):
-    task_ids = TASKS[TASKS["progetto_id"] == pid]["id"].tolist()
-    cons = CONSUNTIVI[CONSUNTIVI["task_id"].isin(task_ids)]
-    return cons["ore_dichiarate"].sum()
+    from sqlalchemy import func
+    session = get_session()
+    total = session.query(
+        func.coalesce(func.sum(Consuntivo.ore_dichiarate), 0.0)
+    ).join(Task, Consuntivo.task_id == Task.id).filter(
+        Task.progetto_id == pid
+    ).scalar()
+    session.close()
+    return total or 0
 
 def tasso_compilazione_progetto(pid):
-    task_ids = TASKS[TASKS["progetto_id"] == pid]["id"].tolist()
-    cons = CONSUNTIVI[CONSUNTIVI["task_id"].isin(task_ids)]
-    if len(cons) == 0:
+    session = get_session()
+    base = session.query(Consuntivo).join(
+        Task, Consuntivo.task_id == Task.id
+    ).filter(Task.progetto_id == pid)
+    n_tot = base.count()
+    if n_tot == 0:
+        session.close()
         return 0
-    return cons["compilato"].sum() / len(cons) * 100
+    n_comp = base.filter(Consuntivo.compilato == True).count()
+    session.close()
+    return n_comp / n_tot * 100
 
 def carico_settimanale_dipendente(did, settimana):
     """Carico di un dipendente in una settimana (in ore).
@@ -184,12 +240,20 @@ def carico_settimanale_dipendente(did, settimana):
     return round(ore, 1)
 
 def get_progetti_dipendente(did):
-    task_dip = TASKS[
-        (TASKS["dipendente_id"] == did) &
-        (TASKS["stato"].isin(["In corso", "Da iniziare"]))
-    ]
-    proj_ids = task_dip["progetto_id"].unique()
-    return [PROGETTI[PROGETTI["id"] == pid].iloc[0]["nome"] for pid in proj_ids]
+    session = get_session()
+    rows = session.query(Task.progetto_id, Progetto.nome).join(
+        Progetto, Task.progetto_id == Progetto.id
+    ).filter(
+        Task.dipendente_id == did,
+        Task.stato.in_(["In corso", "Da iniziare"]),
+    ).order_by(Task.id).all()
+    session.close()
+    seen, out = set(), []
+    for pid, nome in rows:
+        if pid not in seen:
+            seen.add(pid)
+            out.append(nome)
+    return out
 
 
 # ══════════════════════════════════════════════════════════════════════

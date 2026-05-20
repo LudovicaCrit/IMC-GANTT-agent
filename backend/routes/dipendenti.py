@@ -47,22 +47,19 @@ PATTERN AUTH USATI
 DIPENDENZE
 ──────────
 - `data` (modulo): funzioni `get_dipendente`, `get_progetti_dipendente`,
-  `carico_settimanale_dipendente`, e accesso ai DataFrame
-  DIPENDENTI/PROGETTI/TASKS via `data_module.<NOME>`.
+  `carico_settimanale_dipendente`.
+- `models`: `Dipendente`, `Task`, `get_session` (lettura diretta Postgres).
+- `data_db_impl._to_dt`: serializzazione date a datetime-mezzanotte (per
+  preservare il formato ISO `YYYY-MM-DDT00:00:00` storicamente esposto).
 - `deps`: `get_current_user`, `require_manager`.
 - `models`: classe `Utente` per type hint.
 
 NOTE TECNICHE
 ─────────────
-Gli helper _DIPENDENTI(), _PROGETTI(), _TASKS() e get_oggi() sono
-replicati localmente in questo file (inizialmente erano in main.py).
-Sono temporanei: quando il refactoring sarà avanzato e più di 2 router
-li useranno, andranno estratti in `backend/dataframes.py` (cache DF) e
-`backend/utils.py` (clock).
-
-📌 TODO — REFACTORING SUCCESSIVO
-   Estrarre _DIPENDENTI/_PROGETTI/_TASKS/get_oggi quando avremo ≥3 router
-   che li replicano. Vedi `backend/routes/README.md` per stato generale.
+`carico_settimanale_dipendente` resta come helper di `data` perché
+contiene calcolo non meccanico (trappola §4 dell'handoff migrazione
+Postgres): sarà trattata a parte. Le letture qui non passano più dai
+DataFrame in cache: ogni richiesta interroga direttamente Postgres.
 
 STORIA
 ──────
@@ -73,14 +70,14 @@ a Roberto un codice modulare per R2 (settembre 2026).
 """
 
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import joinedload
 
 from deps import get_current_user, require_manager
-from models import Utente
-import data as data_module
+from models import Utente, Dipendente, Task, get_session
 from data import (
     get_dipendente, get_progetti_dipendente, carico_settimanale_dipendente,
 )
-from dataframes import _DIPENDENTI, _PROGETTI, _TASKS
+from data_db_impl import _to_dt
 from utils import get_oggi
 
 
@@ -95,24 +92,28 @@ def lista_dipendenti(_: Utente = Depends(require_manager)):
     Scenario B: il dettaglio aggregato sui colleghi è informazione
     manageriale, non visibile agli user.
     """
+    session = get_session()
+    dipendenti = session.query(Dipendente).filter(Dipendente.attivo == True).all()
     result = []
-    for _, d in _DIPENDENTI().iterrows():
-        carico = carico_settimanale_dipendente(d["id"], get_oggi())
-        progetti = get_progetti_dipendente(d["id"])
+    for d in dipendenti:
+        carico = carico_settimanale_dipendente(d.id, get_oggi())
+        progetti = get_progetti_dipendente(d.id)
+        n_task_attivi = session.query(Task).filter(
+            Task.dipendente_id == d.id,
+            Task.stato.in_(["In corso", "Da iniziare"]),
+        ).count()
         result.append({
-            "id": d["id"],
-            "nome": d["nome"],
-            "profilo": d["profilo"],
-            "ore_sett": int(d["ore_sett"]),
-            "competenze": d["competenze"],
+            "id": d.id,
+            "nome": d.nome,
+            "profilo": d.profilo,
+            "ore_sett": int(d.ore_sett),
+            "competenze": d.competenze or [],
             "carico_corrente": float(carico),
-            "saturazione_pct": round(carico / d["ore_sett"] * 100),
+            "saturazione_pct": round(carico / d.ore_sett * 100),
             "progetti_attivi": progetti,
-            "n_task_attivi": len(_TASKS()[
-                (_TASKS()["dipendente_id"] == d["id"]) &
-                (_TASKS()["stato"].isin(["In corso", "Da iniziare"]))
-            ]),
+            "n_task_attivi": n_task_attivi,
         })
+    session.close()
     return result
 
 
@@ -135,10 +136,14 @@ def dettaglio_dipendente(
 
     carico = carico_settimanale_dipendente(dip_id, get_oggi())
     progetti = get_progetti_dipendente(dip_id)
-    tasks = _TASKS()[
-        (_TASKS()["dipendente_id"] == dip_id) &
-        (_TASKS()["stato"].isin(["In corso", "Da iniziare"]))
-    ]
+    session = get_session()
+    tasks = session.query(Task).options(
+        joinedload(Task.progetto), joinedload(Task.fase_rel)
+    ).filter(
+        Task.dipendente_id == dip_id,
+        Task.stato.in_(["In corso", "Da iniziare"]),
+    ).all()
+    session.close()
 
     return {
         "id": d["id"],
@@ -151,15 +156,15 @@ def dettaglio_dipendente(
         "progetti_attivi": progetti,
         "tasks": [
             {
-                "id": t["id"],
-                "nome": t["nome"],
-                "progetto": _PROGETTI()[_PROGETTI()["id"] == t["progetto_id"]].iloc[0]["nome"],
-                "fase": t["fase"],
-                "stato": t["stato"],
-                "ore_stimate": int(t["ore_stimate"]),
-                "data_inizio": t["data_inizio"].isoformat(),
-                "data_fine": t["data_fine"].isoformat(),
+                "id": t.id,
+                "nome": t.nome,
+                "progetto": t.progetto.nome if t.progetto else "",
+                "fase": t.fase_rel.nome if t.fase_rel else "",
+                "stato": t.stato,
+                "ore_stimate": int(t.ore_stimate or 0),
+                "data_inizio": _to_dt(t.data_inizio).isoformat(),
+                "data_fine": _to_dt(t.data_fine).isoformat(),
             }
-            for _, t in tasks.iterrows()
+            for t in tasks
         ],
     }

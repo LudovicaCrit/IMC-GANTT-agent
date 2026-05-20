@@ -71,16 +71,13 @@ NON come task di un progetto in stato "In bando" (stato rimosso).
 
 DIPENDENZE
 ──────────
-- `data` (modulo): `get_dipendente`, `aggiungi_task`, `modifica_task`,
-  e DataFrame PROGETTI/TASKS.
+- `data` (modulo): `get_dipendente`, `aggiungi_task`, `modifica_task`.
+- `models`: `Progetto`, `Task`, `get_session` (lettura diretta Postgres).
 - `deps`: `get_current_user`.
 - `models`: classe `Utente` per type hint.
 
 NOTE TECNICHE
 ─────────────
-Helper locali `_PROGETTI`, `_TASKS`.
-📌 TODO: estrarre in moduli condivisi.
-
 Lo `time.sleep(0.3)` in POST è un workaround legacy per la race condition
 sul contatore `_next_task_id` in modalità memoria. In modalità db
 persistente NON serve (il SELECT MAX è atomico). Quando rimuoveremo il
@@ -98,9 +95,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from deps import get_current_user
-from models import Utente
+from models import Utente, Progetto, Task, get_session
 from data import get_dipendente, aggiungi_task, modifica_task
-from dataframes import _PROGETTI, _TASKS
 
 
 # ── DTO ──────────────────────────────────────────────────────────────────
@@ -134,8 +130,10 @@ def crea_attivita_interna(
     except (IndexError, KeyError):
         raise HTTPException(404, "Dipendente non trovato")
 
-    p010 = _PROGETTI()[_PROGETTI()["id"] == "P010"]
-    if p010.empty:
+    session = get_session()
+    exists_p010 = session.query(Progetto).filter(Progetto.id == "P010").first() is not None
+    session.close()
+    if not exists_p010:
         raise HTTPException(400, "Progetto P010 non trovato")
 
     time.sleep(0.3)  # workaround race condition contatore in legacy memory mode
@@ -171,15 +169,16 @@ def elimina_attivita_interna(
     current_user: Utente = Depends(get_current_user),
 ):
     """Elimina (soft) un task di attività interna (solo P010, Pattern Y)."""
-    tasks = _TASKS()
-    task = tasks[tasks["id"] == task_id]
-    if task.empty:
+    session = get_session()
+    task = session.query(Task).filter(Task.id == task_id).first()
+    session.close()
+    if task is None:
         raise HTTPException(404, "Task non trovato")
-    if task.iloc[0]["progetto_id"] != "P010":
+    if task.progetto_id != "P010":
         raise HTTPException(400, "Solo task di Attività Interne possono essere eliminati da qui")
 
     # User può cancellare SOLO le proprie attività (anti-impersonation)
-    if current_user.ruolo_app != "manager" and task.iloc[0]["dipendente_id"] != current_user.dipendente_id:
+    if current_user.ruolo_app != "manager" and task.dipendente_id != current_user.dipendente_id:
         raise HTTPException(403, "Puoi cancellare solo le tue attività")
 
     ok = modifica_task(task_id, stato="Eliminato")
