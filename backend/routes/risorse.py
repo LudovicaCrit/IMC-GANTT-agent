@@ -57,32 +57,37 @@ Sono evoluzioni R2.
 
 DIPENDENZE
 ──────────
-- `data` (modulo): `carico_settimanale_dipendente`, e DataFrame
-  DIPENDENTI/PROGETTI/TASKS.
+- `data` (modulo): `carico_settimanale_dipendente` (trappola §4 della
+  migrazione DataFrame→Postgres, lasciata intatta).
+- `models`: `Dipendente`, `Task`, `Progetto`, `get_session` (lettura
+  diretta Postgres).
+- `data_db_impl._to_dt`: normalizza `Date` SQL → `datetime` a mezzanotte
+  per i confronti con `lun_w_dt + timedelta(...)` (storicamente i task
+  erano `pandas.Timestamp` a 00:00).
 - `deps`: `require_manager`.
 - `models`: classe `Utente` per type hint.
 
 NOTE TECNICHE
 ─────────────
-Helper locali `_DIPENDENTI`, `_PROGETTI`, `_TASKS`, `get_oggi`.
-📌 TODO: estrarre in moduli condivisi quando ≥3 router li replicano.
-
 P010 (Attività Interne) escluso dal calcolo task attivi del bilanciamento:
 non ha senso "redistribuire" la formazione interna.
 
 STORIA
 ──────
 Estratto da main.py il 5 maggio 2026 nell'ambito del refactoring strangler.
+Letture migrate da DataFrame in cache a Postgres diretto il 21 maggio 2026
+(handoff migrazione §6-ter), preservando iso-comportamento.
 ═══════════════════════════════════════════════════════════════════════════
 """
 
 from datetime import datetime, timedelta
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import joinedload
 
 from deps import require_manager
-from models import Utente
+from models import Utente, Dipendente, Progetto, Task, get_session
 from data import carico_settimanale_dipendente
-from dataframes import _DIPENDENTI, _PROGETTI, _TASKS
+from data_db_impl import _to_dt
 from utils import get_oggi
 
 
@@ -119,23 +124,26 @@ def carico_risorse(
         oggi_raw.date() if hasattr(oggi_raw, 'date') else oggi_raw,
         datetime.min.time()
     )
-    for _, d in _DIPENDENTI().iterrows():
+    session = get_session()
+    dipendenti = session.query(Dipendente).filter(Dipendente.attivo == True).all()
+    session.close()
+    for d in dipendenti:
         settimane_data = []
         for w in range(settimane):
             sett = oggi + timedelta(weeks=w)
             lun = sett - timedelta(days=sett.weekday())
-            carico = carico_settimanale_dipendente(d["id"], sett)
+            carico = carico_settimanale_dipendente(d.id, sett)
             settimane_data.append({
                 "settimana": lun.strftime("%Y-%m-%d"),
                 "settimana_label": lun.strftime("%d/%m"),
                 "ore_assegnate": float(carico),
-                "saturazione_pct": round(carico / d["ore_sett"] * 100),
+                "saturazione_pct": round(carico / d.ore_sett * 100),
             })
         result.append({
-            "dipendente_id": d["id"],
-            "nome": d["nome"],
-            "profilo": d["profilo"],
-            "ore_sett": int(d["ore_sett"]),
+            "dipendente_id": d.id,
+            "nome": d.nome,
+            "profilo": d.profilo,
+            "ore_sett": int(d.ore_sett),
             "settimane": settimane_data,
         })
     return result
@@ -178,24 +186,36 @@ def saturazione_periodo(
             ]
         }
     """
-    from datetime import date as _date
     try:
         di = datetime.fromisoformat(data_inizio).date()
         df = datetime.fromisoformat(data_fine).date()
     except ValueError:
-        from fastapi import HTTPException
         raise HTTPException(status_code=422, detail="Formato date non valido (atteso ISO yyyy-mm-dd).")
 
     if df < di:
-        from fastapi import HTTPException
         raise HTTPException(status_code=422, detail="data_fine precede data_inizio.")
 
-    dip_match = _DIPENDENTI()[_DIPENDENTI()["id"] == dipendente_id]
-    if len(dip_match) == 0:
-        from fastapi import HTTPException
+    session = get_session()
+    d = session.query(Dipendente).filter(
+        Dipendente.id == dipendente_id,
+        Dipendente.attivo == True,
+    ).first()
+    if d is None:
+        session.close()
         raise HTTPException(status_code=404, detail=f"Dipendente '{dipendente_id}' non trovato.")
-    d = dip_match.iloc[0]
-    ore_sett_dip = int(d["ore_sett"])
+    ore_sett_dip = int(d.ore_sett)
+    nome_dip = d.nome
+
+    # Lookup del task da escludere (al massimo uno: filtro per id + dipendente
+    # + stato non terminale). Una sola query fuori dal loop sulle settimane.
+    task_da_escludere = None
+    if escludi_task_id:
+        task_da_escludere = session.query(Task).filter(
+            Task.dipendente_id == dipendente_id,
+            Task.id == escludi_task_id,
+            ~Task.stato.in_(["Completato", "Sospeso", "Eliminato"]),
+        ).first()
+    session.close()
 
     # Calcolo settimane coperte: dalla settimana del data_inizio alla settimana del data_fine
     lun_start = di - timedelta(days=di.weekday())  # lunedì della settimana di data_inizio
@@ -214,20 +234,16 @@ def saturazione_periodo(
         carico_w = carico_settimanale_dipendente(dipendente_id, lun_w_dt)
 
         # Escludi il task corrente (se in modifica) dal calcolo
-        if escludi_task_id:
-            tasks_dip = _TASKS()[
-                (_TASKS()["dipendente_id"] == dipendente_id) &
-                (_TASKS()["id"] == escludi_task_id) &
-                (~_TASKS()["stato"].isin(["Completato", "Sospeso", "Eliminato"]))
-            ]
-            for _, t in tasks_dip.iterrows():
-                # Calcola se questo task si sovrappone alla settimana w
-                # NB: confronto con datetime (lun_w_dt), non date pura (lun_w)
-                # perché pandas Timestamp non supporta confronto con date.
-                if t["data_inizio"] <= lun_w_dt + timedelta(days=4) and t["data_fine"] >= lun_w_dt:
-                    weeks_task = max(1, (t["data_fine"] - t["data_inizio"]).days / 7)
-                    ore_task_in_w = t["ore_stimate"] / weeks_task
-                    carico_w = max(0, carico_w - ore_task_in_w)
+        if task_da_escludere is not None:
+            t_inizio = _to_dt(task_da_escludere.data_inizio)
+            t_fine = _to_dt(task_da_escludere.data_fine)
+            # Calcola se questo task si sovrappone alla settimana w
+            # NB: confronto con datetime (lun_w_dt), non date pura (lun_w)
+            # perché pandas Timestamp non supporta confronto con date.
+            if t_inizio <= lun_w_dt + timedelta(days=4) and t_fine >= lun_w_dt:
+                weeks_task = max(1, (t_fine - t_inizio).days / 7)
+                ore_task_in_w = (task_da_escludere.ore_stimate or 0) / weeks_task
+                carico_w = max(0, carico_w - ore_task_in_w)
 
         sat_pct = round(carico_w / ore_sett_dip * 100) if ore_sett_dip > 0 else 0
         saturazioni.append(sat_pct)
@@ -248,7 +264,7 @@ def saturazione_periodo(
 
     return {
         "dipendente_id": dipendente_id,
-        "nome": d["nome"],
+        "nome": nome_dip,
         "ore_sett": ore_sett_dip,
         "settimane_coperte": n_sett,
         "saturazione_media_pct": sat_media,
@@ -264,46 +280,57 @@ def suggerisci_bilanciamento(_: Utente = Depends(require_manager)):
     """Analizza le saturazioni e propone redistribuzioni per bilanciare il carico."""
     oggi = datetime.now()
 
+    session = get_session()
+    dipendenti = session.query(Dipendente).filter(Dipendente.attivo == True).all()
+    # Pre-fetch dei task attivi (escluso P010) con joinedload sul progetto per
+    # evitare N+1 query nel lookup del nome progetto. Una sola query SQL.
+    tasks_rows = session.query(Task).options(joinedload(Task.progetto)).filter(
+        Task.stato.in_(["In corso", "Da iniziare"]),
+        Task.progetto_id != "P010",
+    ).all()
+    session.close()
+
+    # Raggruppa i task per dipendente_id
+    tasks_per_dip = {}
+    for t in tasks_rows:
+        if t.dipendente_id:
+            tasks_per_dip.setdefault(t.dipendente_id, []).append(t)
+
     # Calcola saturazione per tutti
     persone = []
-    for _, d in _DIPENDENTI().iterrows():
-        carico = carico_settimanale_dipendente(d["id"], oggi)
-        sat = round(carico / d["ore_sett"] * 100)
-
-        # Trova i task attivi di questa persona (escludendo Attività Interne)
-        tasks_attivi = _TASKS()[
-            (_TASKS()["dipendente_id"] == d["id"]) &
-            (_TASKS()["stato"].isin(["In corso", "Da iniziare"])) &
-            (_TASKS()["progetto_id"] != "P010")
-        ]
+    for d in dipendenti:
+        carico = carico_settimanale_dipendente(d.id, oggi)
+        sat = round(carico / d.ore_sett * 100)
 
         task_list = []
-        for _, t in tasks_attivi.iterrows():
+        for t in tasks_per_dip.get(d.id, []):
             # Calcola ore settimanali per questo task
-            durata_giorni = max(1, (t["data_fine"] - t["data_inizio"]).days)
+            t_inizio = _to_dt(t.data_inizio)
+            t_fine = _to_dt(t.data_fine)
+            durata_giorni = max(1, (t_fine - t_inizio).days)
             durata_sett = max(1, durata_giorni / 7)
-            ore_sett_task = round(t["ore_stimate"] / durata_sett, 1)
+            ore_stimate = t.ore_stimate or 0
+            ore_sett_task = round(ore_stimate / durata_sett, 1)
 
-            proj = _PROGETTI()[_PROGETTI()["id"] == t["progetto_id"]]
-            proj_nome = proj.iloc[0]["nome"] if len(proj) > 0 else "?"
+            proj_nome = t.progetto.nome if t.progetto else "?"
 
             task_list.append({
-                "task_id": t["id"],
-                "task_nome": t["nome"],
-                "progetto_id": t["progetto_id"],
+                "task_id": t.id,
+                "task_nome": t.nome,
+                "progetto_id": t.progetto_id,
                 "progetto_nome": proj_nome,
-                "profilo_richiesto": t["profilo_richiesto"],
-                "ore_stimate": int(t["ore_stimate"]),
+                "profilo_richiesto": t.profilo_richiesto or "",
+                "ore_stimate": int(ore_stimate),
                 "ore_sett": ore_sett_task,
-                "stato": t["stato"],
+                "stato": t.stato,
             })
 
         persone.append({
-            "id": d["id"],
-            "nome": d["nome"],
-            "profilo": d["profilo"],
-            "competenze": d["competenze"] if isinstance(d["competenze"], list) else [],
-            "ore_sett": int(d["ore_sett"]),
+            "id": d.id,
+            "nome": d.nome,
+            "profilo": d.profilo,
+            "competenze": d.competenze if isinstance(d.competenze, list) else [],
+            "ore_sett": int(d.ore_sett),
             "carico": float(carico),
             "saturazione": sat,
             "task_attivi": task_list,
