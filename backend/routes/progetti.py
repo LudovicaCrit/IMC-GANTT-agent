@@ -57,12 +57,24 @@ PATTERN AUTH USATI
 
 TODO R2 (ABAC): PATCH e DELETE potranno diventare PM-only sul progetto specifico.
 
+NOTE TECNICHE
+─────────────
+Le 6 chiamate a `_reload()` post-commit restano intenzionalmente in piedi:
+servono ai consumatori dei DataFrame in cache (gantt.py, scenario.py,
+simulazione.py, gemini_client.costruisci_contesto, le funzioni-trappola
+§4) che oggi leggono ancora `DIPENDENTI/PROGETTI/TASKS`. Rimuoverle ora
+genererebbe il bug silenzioso descritto in §1 dell'handoff (DB aggiornato
+ma viste GANTT/Tavolo di Lavoro ferme allo stato vecchio finché il
+backend non viene riavviato). Verranno eliminate al passo finale della
+migrazione, quando nessun lettore DataFrame sarà più attivo.
+
 DIPENDENZE
 ──────────
 - `data`: `ore_consuntivate_progetto`, `tasso_compilazione_progetto`.
-- `dataframes`: `_PROGETTI`, `_TASKS`.
-- `data_db_impl`: `_next_progetto_id` per generazione id.
-- `models`: `get_session`, `Utente`, `Progetto`.
+- `data_db_impl`: `_next_progetto_id`, `genera_id_task_multipli`,
+  `_reload` (vedi sopra), `_to_dt` (per format ISO datetime).
+- `models`: `get_session`, `Utente`, `Progetto`, `Fase`, `Task`,
+  `Assegnazione`, `STATI_PROGETTO`, `STATI_PROGETTO_ATTIVI`.
 - `deps`: `require_manager`.
 
 STORIA
@@ -71,6 +83,8 @@ STORIA
 - 13 mag 2026: aggiunti POST/PATCH/DELETE + filtro stato nel quadro di
   Step 2.0 (handoff v15). Sostituisce in pratica routes/pianificazione.py
   per il caso d'uso "bozze di progetto".
+- 21 mag 2026: GET migrato da DataFrame a Postgres diretto (handoff
+  migrazione §6-ter). Le 6 `_reload()` post-commit restano (vedi NOTE).
 ═══════════════════════════════════════════════════════════════════════════
 """
 
@@ -79,6 +93,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
+from sqlalchemy import func, case
 
 from deps import require_manager
 from models import (
@@ -86,8 +101,7 @@ from models import (
     STATI_PROGETTO, STATI_PROGETTO_ATTIVI,
 )
 from data import ore_consuntivate_progetto, tasso_compilazione_progetto
-from data_db_impl import _next_progetto_id, genera_id_task_multipli, _reload
-from dataframes import _PROGETTI, _TASKS
+from data_db_impl import _next_progetto_id, genera_id_task_multipli, _reload, _to_dt
 
 
 # ── DTO ──────────────────────────────────────────────────────────────────
@@ -210,51 +224,39 @@ class StaffingRequest(BaseModel):
 
 
 
-
 # ── Router ───────────────────────────────────────────────────────────────
 router = APIRouter(prefix="/api/progetti", tags=["progetti"])
 
 
-def _is_nat(v) -> bool:
-    """Verifica robusta per NaT/NaN/None su valori pandas."""
-    import pandas as pd
-    try:
-        return pd.isna(v)
-    except (TypeError, ValueError):
-        return False
+def _serializza_progetto_con_aggregati(p: Progetto, task_totali: int, task_completati: int) -> dict:
+    """Serializza un `Progetto` ORM con dati aggregati.
 
-
-def _serializza_progetto_con_aggregati(p) -> dict:
-    """Serializza una riga DataFrame progetto con dati aggregati."""
-    ore_cons = ore_consuntivate_progetto(p["id"])
-    tasso = tasso_compilazione_progetto(p["id"])
-    tasks_proj = _TASKS()[_TASKS()["progetto_id"] == p["id"]]
-    completati = len(tasks_proj[tasks_proj["stato"] == "Completato"])
-
-    def _opt(v, conv=lambda x: x):
-        if v is None or _is_nat(v):
-            return None
-        try:
-            return conv(v)
-        except (ValueError, TypeError):
-            return None
+    `task_totali` e `task_completati` arrivano pre-calcolati da una query
+    aggregata in `lista_progetti` (evita N+1).
+    `ore_consuntivate` e `tasso_compilazione` provengono dagli helper
+    già migrati a Postgres (`data.ore_consuntivate_progetto`, etc.).
+    """
+    ore_cons = ore_consuntivate_progetto(p.id)
+    tasso = tasso_compilazione_progetto(p.id)
 
     return {
-        "id": p["id"],
-        "nome": p["nome"],
-        "cliente": p.get("cliente"),
-        "stato": p["stato"],
-        "tipologia": p.get("tipologia", "ordinario"),
-        "data_inizio": _opt(p.get("data_inizio"), lambda d: d.isoformat()),
-        "data_fine": _opt(p.get("data_fine"), lambda d: d.isoformat()),
-        "budget_ore": _opt(p.get("budget_ore"), int),
-        "valore_contratto": _opt(p.get("valore_contratto"), float),
-        "fase_corrente": p.get("fase_corrente"),
-        "pm_id": p.get("pm_id"),
+        "id": p.id,
+        "nome": p.nome,
+        "cliente": p.cliente,
+        "stato": p.stato,
+        "tipologia": p.tipologia or "ordinario",
+        # _to_dt preserva il formato `YYYY-MM-DDT00:00:00` storicamente
+        # esposto quando i progetti erano pandas.Timestamp.
+        "data_inizio": _to_dt(p.data_inizio).isoformat() if p.data_inizio else None,
+        "data_fine": _to_dt(p.data_fine).isoformat() if p.data_fine else None,
+        "budget_ore": int(p.budget_ore) if p.budget_ore is not None else None,
+        "valore_contratto": float(p.valore_contratto) if p.valore_contratto is not None else None,
+        "fase_corrente": p.fase_corrente,
+        "pm_id": p.pm_id,
         "ore_consuntivate": float(ore_cons),
         "tasso_compilazione": round(tasso, 1),
-        "task_completati": completati,
-        "task_totali": len(tasks_proj),
+        "task_completati": task_completati,
+        "task_totali": task_totali,
     }
 
 
@@ -268,16 +270,36 @@ def lista_progetti(stato: Optional[str] = None, _: Utente = Depends(require_mana
       - "all": tutti i progetti
       - altro: filtro singolo case-insensitive su `stato`
     """
-    df = _PROGETTI()
+    session = get_session()
+    q = session.query(Progetto)
 
     if stato is None or stato.lower() == "attivi":
-        df = df[df["stato"].isin(STATI_ATTIVI)]
+        q = q.filter(Progetto.stato.in_(STATI_ATTIVI))
     elif stato.lower() == "all":
         pass
     else:
-        df = df[df["stato"].str.lower() == stato.lower()]
+        q = q.filter(func.lower(Progetto.stato) == stato.lower())
 
-    return [_serializza_progetto_con_aggregati(p) for _, p in df.iterrows()]
+    progetti = q.all()
+
+    # Aggregati task in UNA sola query (GROUP BY progetto_id) per evitare
+    # un filter DataFrame N+1 nella serializzazione.
+    prog_ids = [p.id for p in progetti]
+    counts_map: dict[str, tuple[int, int]] = {}
+    if prog_ids:
+        rows = session.query(
+            Task.progetto_id,
+            func.count(Task.id),
+            func.sum(case((Task.stato == "Completato", 1), else_=0)),
+        ).filter(Task.progetto_id.in_(prog_ids)).group_by(Task.progetto_id).all()
+        counts_map = {r[0]: (int(r[1] or 0), int(r[2] or 0)) for r in rows}
+    session.close()
+
+    result = []
+    for p in progetti:
+        totale, completati = counts_map.get(p.id, (0, 0))
+        result.append(_serializza_progetto_con_aggregati(p, totale, completati))
+    return result
 
 
 @router.post("", status_code=201)

@@ -99,14 +99,18 @@ con fallback graceful: se Gemini risponde con testo non parsabile, il
 payload include `{"raw_response": ..., "parse_error": True}` invece di
 crashare. Pattern molto buono, da mantenere.
 
-Helper locali `_DIPENDENTI`, `_PROGETTI`, `_TASKS`, `get_oggi`,
-`get_contesto_ia`. Tutti TODO da estrarre in moduli condivisi.
-
 `get_contesto_ia()` è la funzione (con cache TTL 60s) che produce il
 contesto JSON completo del sistema (dipendenti+progetti attivi), usata
-da interpreta-scenario per ragionare bene. È replicata localmente qui
-e in routes/scenario.py — verrà estratta nel modulo `backend/contesto.py`
-nel commit di pulizia finale del refactoring.
+da interpreta-scenario per ragionare bene. Vive in `backend/contesto.py`
+(estratto nel commit di pulizia del refactoring).
+
+📌 RESIDUO DataFrame in /chat:
+   `gemini_client.costruisci_contesto` riceve `tasks_attivi` come
+   DataFrame (fa `.iterrows()`, `.iloc[0]`). Per questo `/chat` continua
+   a leggere `_TASKS()` qui: convertire la lettura significherebbe
+   convertire anche `costruisci_contesto`, che è in `gemini_client.py`,
+   modulo esplicitamente fuori scope di §6-ter (verrà migrato in un
+   passaggio successivo).
 
 📌 TODO Pulizia DTO orfani: rimuovere da main.py le classi
 ChatRequest, AnalisiRequest, SuggerisciTaskRequest,
@@ -126,8 +130,13 @@ DIPENDENZE
 - `agent` (modulo locale): `init_gemini`, `costruisci_contesto`,
   `chiedi_agente`, `is_agent_available`. NON da confondere con questo router.
 - `data` (modulo): `get_dipendente`, `carico_settimanale_dipendente`,
-  `get_progetti_dipendente`, e DataFrame DIPENDENTI/PROGETTI/TASKS.
-  Persistenza segnalazioni: `aggiungi_segnalazione` se PERSISTENT_MODE.
+  `get_progetti_dipendente`. Persistenza segnalazioni:
+  `aggiungi_segnalazione` se PERSISTENT_MODE.
+- `models`: `Dipendente`, `Progetto`, `Task`, `get_session` (lettura
+  diretta Postgres per /analisi-gantt e /verifica-pianificazione).
+- `dataframes._TASKS`: residuo per /chat, vedi nota sopra.
+- `utils.get_oggi`: data di sistema (era usata ma non importata: bug
+  latente corretto durante la migrazione del 21/05).
 - `deps`: `get_current_user`, `require_manager`.
 - `models`: classe `Utente`.
 
@@ -140,23 +149,29 @@ Decisione architetturale: tutti gli endpoint che chiamano Gemini
 appartengono semanticamente a "agent", indipendentemente dal contesto
 di business (Consuntivazione, Pipeline, Tavolo di Lavoro). Il prefisso
 URL esplicita questa coerenza. Frontend api.js aggiornato in coerenza.
+Letture DataFrame (analisi-gantt, verifica-pianificazione) migrate a
+Postgres diretto il 21 maggio 2026 (handoff migrazione §6-ter). La
+lettura in /chat resta residua perché alimenta costruisci_contesto
+(gemini_client.py), da migrare a parte.
 ═══════════════════════════════════════════════════════════════════════════
 """
 
 import json as json_mod
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from sqlalchemy.orm import joinedload
 
 from deps import get_current_user, require_manager
-from models import Utente
+from models import Utente, Dipendente, Progetto, Task, get_session
 from data import (
     get_dipendente, carico_settimanale_dipendente, get_progetti_dipendente,
 )
 from gemini_client import (
     init_gemini, costruisci_contesto, chiedi_agente, is_agent_available,
 )
-from dataframes import _DIPENDENTI, _PROGETTI, _TASKS
+from dataframes import _TASKS
 from contesto import get_contesto_ia
+from utils import get_oggi
 
 # Persistenza opzionale per segnalazioni (chat)
 try:
@@ -253,6 +268,10 @@ def agent_chat(
     except (IndexError, KeyError):
         raise HTTPException(404, "Dipendente non trovato")
 
+    # NB: _TASKS() resta qui perché costruisci_contesto (gemini_client.py)
+    # consuma `tasks_attivi` come DataFrame (.iterrows, .iloc, indicizzazione
+    # booleana). Convertibile solo migrando anche gemini_client. Vedi nota
+    # nel docstring del modulo.
     tasks_attivi = _TASKS()[
         (_TASKS()["dipendente_id"] == req.dipendente_id) &
         (_TASKS()["stato"].isin(["In corso", "Da iniziare"]))
@@ -380,51 +399,63 @@ def analisi_gantt(
     except (IndexError, KeyError):
         raise HTTPException(400, f"Dipendente '{req.dipendente_id}' non trovato")
 
+    # Caricamento aggregato: 3 query invece di N+M filter su DataFrame
+    session = get_session()
+    dipendenti = session.query(Dipendente).filter(Dipendente.attivo == True).all()
+    tasks_rows = session.query(Task).options(joinedload(Task.progetto)).filter(
+        Task.stato.in_(["In corso", "Da iniziare"])
+    ).all()
+    progetti_rows = session.query(Progetto).filter(
+        Progetto.stato.in_(["In esecuzione", "In bando"])
+    ).all()
+    session.close()
+
+    # Raggruppa task per dipendente_id (l'originale rifiltrava per ogni dipendente)
+    tasks_per_dip = {}
+    for t in tasks_rows:
+        if t.dipendente_id:
+            tasks_per_dip.setdefault(t.dipendente_id, []).append(t)
+
     # Tutti i dipendenti con carico
     dip_contesto = []
-    for _, d in _DIPENDENTI().iterrows():
-        carico = carico_settimanale_dipendente(d["id"], get_oggi())
-        progetti = get_progetti_dipendente(d["id"])
-        tasks_attivi = _TASKS()[
-            (_TASKS()["dipendente_id"] == d["id"]) &
-            (_TASKS()["stato"].isin(["In corso", "Da iniziare"]))
-        ]
+    for d in dipendenti:
+        carico = carico_settimanale_dipendente(d.id, get_oggi())
+        progetti = get_progetti_dipendente(d.id)
         dip_contesto.append({
-            "id": d["id"],
-            "nome": d["nome"],
-            "profilo": d["profilo"],
-            "ore_sett": int(d["ore_sett"]),
+            "id": d.id,
+            "nome": d.nome,
+            "profilo": d.profilo,
+            "ore_sett": int(d.ore_sett),
             "carico_corrente": float(carico),
-            "saturazione_pct": round(carico / d["ore_sett"] * 100),
+            "saturazione_pct": round(carico / d.ore_sett * 100),
             "progetti": progetti,
             "task_attivi": [
                 {
-                    "id": t["id"],
-                    "nome": t["nome"],
-                    "progetto": _PROGETTI()[_PROGETTI()["id"] == t["progetto_id"]].iloc[0]["nome"],
-                    "ore_stimate": int(t["ore_stimate"]),
-                    "data_inizio": t["data_inizio"].strftime("%Y-%m-%d"),
-                    "data_fine": t["data_fine"].strftime("%Y-%m-%d"),
-                    "stato": t["stato"],
-                    "profilo_richiesto": t["profilo_richiesto"],
-                    "predecessore": t["predecessore"] if t["predecessore"] else None,
+                    "id": t.id,
+                    "nome": t.nome,
+                    "progetto": t.progetto.nome if t.progetto else "?",
+                    "ore_stimate": int(t.ore_stimate or 0),
+                    "data_inizio": t.data_inizio.strftime("%Y-%m-%d"),
+                    "data_fine": t.data_fine.strftime("%Y-%m-%d"),
+                    "stato": t.stato,
+                    "profilo_richiesto": t.profilo_richiesto or "",
+                    "predecessore": t.predecessore if t.predecessore else None,
                 }
-                for _, t in tasks_attivi.iterrows()
+                for t in tasks_per_dip.get(d.id, [])
             ],
         })
 
     # Tutti i progetti con scadenze
     proj_contesto = []
-    for _, p in _PROGETTI().iterrows():
-        if p["stato"] in ["In esecuzione", "In bando"]:
-            proj_contesto.append({
-                "id": p["id"],
-                "nome": p["nome"],
-                "cliente": p["cliente"],
-                "stato": p["stato"],
-                "data_fine": p["data_fine"].strftime("%Y-%m-%d"),
-                "budget_ore": int(p["budget_ore"]),
-            })
+    for p in progetti_rows:
+        proj_contesto.append({
+            "id": p.id,
+            "nome": p.nome,
+            "cliente": p.cliente,
+            "stato": p.stato,
+            "data_fine": p.data_fine.strftime("%Y-%m-%d"),
+            "budget_ore": int(p.budget_ore or 0),
+        })
 
     contesto_completo = {
         "segnalazione": {
@@ -562,15 +593,20 @@ def verifica_pianificazione(
         if t.get("assegnato"):
             nomi_coinvolti.add(t["assegnato"])
 
-    for nome in nomi_coinvolti:
-        dip_match = _DIPENDENTI()[_DIPENDENTI()["nome"] == nome]
-        if len(dip_match) > 0:
-            d = dip_match.iloc[0]
-            carico = carico_settimanale_dipendente(d["id"], get_oggi())
+    if nomi_coinvolti:
+        # 1 query con IN(...) invece di N filter su DataFrame
+        session = get_session()
+        dipendenti_match = session.query(Dipendente).filter(
+            Dipendente.nome.in_(nomi_coinvolti),
+            Dipendente.attivo == True,
+        ).all()
+        session.close()
+        for d in dipendenti_match:
+            carico = carico_settimanale_dipendente(d.id, get_oggi())
             contesto["dipendenti_coinvolti"].append({
-                "nome": nome,
-                "profilo": d["profilo"],
-                "saturazione_attuale": round(carico / d["ore_sett"] * 100),
+                "nome": d.nome,
+                "profilo": d.profilo,
+                "saturazione_attuale": round(carico / d.ore_sett * 100),
             })
 
     # Chiama Gemini

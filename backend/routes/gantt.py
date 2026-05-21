@@ -73,7 +73,8 @@ DIPENDENZE ESTERNE (oltre al backend)
   `sudo apt install poppler-utils`. Se manca, l'endpoint risponde 500 con
   messaggio chiaro.
 - `openpyxl`: rendering Excel. Se manca, fallback su CSV.
-- `pandas`: manipolazione DataFrame in export.
+- `pandas`: usato come strumento di sort/iter dentro l'export Excel
+  (NON più come cache di lettura — i dati arrivano da Postgres).
 
 📌 TODO Blocco 2 roadmap (Macchina delle Fasi):
    Riprogettare `dati_gantt` per restituire dati strutturati a livello di
@@ -84,21 +85,32 @@ DIPENDENZE ESTERNE (oltre al backend)
 
 DIPENDENZE INTERNE
 ──────────────────
-- `data` (modulo): `get_dipendente`, e DataFrame PROGETTI/TASKS/CONSUNTIVI.
+- `data` (modulo): `get_dipendente`.
+- `models`: `Progetto`, `Fase`, `Task`, `Consuntivo`, `Dipendente`,
+  `get_session`, `STATI_PROGETTO_ATTIVI`.
+- `data_db_impl._to_dt`: normalizza `Date` SQL → `datetime` a mezzanotte
+  (necessario per l'export Excel — vedi NOTE TECNICHE).
 - `deps`: `require_manager`.
-- `models`: classe `Utente` per type hint.
+- `models.Utente` per type hint.
 
 NOTE TECNICHE
 ─────────────
-Helper locali `_PROGETTI()`, `_TASKS()`, `_CONSUNTIVI()`.
-📌 TODO: estrarre in `backend/dataframes.py` quando ≥3 router li replicano
-(condizione già soddisfatta — da fare presto).
+**Date e formato datetime per l'export Excel.** Il foglio "GANTT Visivo"
+fa `if hasattr(di, "date")` per validare i task con date valide. Un
+oggetto `date` puro NON ha l'attributo `.date` (ce l'ha `datetime`),
+mentre lo storico pandas.Timestamp ce l'aveva. Inoltre i confronti
+`task_start <= sett_end` (datetime vs datetime nel codice originale)
+solleverebbero TypeError se mescolassimo date e datetime. Per iso-
+comportamento, le date dei task sono **pre-convertite a datetime via
+_to_dt()** quando costruiamo `task_records`.
 
 STORIA
 ──────
 Estratto da main.py il 5 maggio 2026 nell'ambito del refactoring strangler.
 Tutti e 4 gli endpoint /api/gantt/* sono qui (decisione presa con Ludovica
 durante il refactoring stesso).
+Letture DataFrame migrate a Postgres diretto il 21 maggio 2026 (handoff
+migrazione §6-ter). `gantt_strutturato` era già nativamente su SQLAlchemy.
 ═══════════════════════════════════════════════════════════════════════════
 """
 
@@ -110,11 +122,11 @@ from sqlalchemy import func
 
 from deps import require_manager
 from models import (
-    Utente, Progetto, Fase, Task, Consuntivo, get_session,
+    Utente, Progetto, Fase, Task, Consuntivo, Dipendente, get_session,
     STATI_PROGETTO_ATTIVI,
 )
 from data import get_dipendente
-from dataframes import _PROGETTI, _TASKS, _CONSUNTIVI
+from data_db_impl import _to_dt
 
 
 # ── Router ───────────────────────────────────────────────────────────────
@@ -131,50 +143,66 @@ def dati_gantt(
     _: Utente = Depends(require_manager),
 ):
     """Restituisce i dati formattati per il componente GANTT del frontend."""
-    tasks = _TASKS().copy()
-    tasks = tasks[tasks["stato"] != "Eliminato"]
+    session = get_session()
+    q = session.query(Task).options(
+        joinedload(Task.progetto)
+    ).filter(Task.stato != "Eliminato")
     if progetto_id:
-        tasks = tasks[tasks["progetto_id"] == progetto_id]
+        q = q.filter(Task.progetto_id == progetto_id)
+    tasks = q.all()
+
+    # Ore consuntivate per task in UNA query (GROUP BY task_id)
+    task_ids = [t.id for t in tasks]
+    ore_per_task = {}
+    if task_ids:
+        rows = session.query(
+            Consuntivo.task_id,
+            func.coalesce(func.sum(Consuntivo.ore_dichiarate), 0)
+        ).filter(Consuntivo.task_id.in_(task_ids)).group_by(Consuntivo.task_id).all()
+        ore_per_task = {tid: float(ore) for tid, ore in rows}
+
+    # Nomi predecessori in UNA query (sostituisce il lookup _TASKS()[...id == pred])
+    pred_ids = [t.predecessore for t in tasks if t.predecessore]
+    nomi_pred = {}
+    if pred_ids:
+        pred_rows = session.query(Task.id, Task.nome).filter(Task.id.in_(pred_ids)).all()
+        nomi_pred = {pid: pn for pid, pn in pred_rows}
+    session.close()
 
     result = []
-    for _, t in tasks.iterrows():
-        dip = get_dipendente(t["dipendente_id"])
-        proj = _PROGETTI()[_PROGETTI()["id"] == t["progetto_id"]].iloc[0]
-        # Ore consuntivate reali per questo task
-        cons_task = _CONSUNTIVI()[_CONSUNTIVI()["task_id"] == t["id"]]
-        ore_cons = float(cons_task["ore_dichiarate"].sum()) if len(cons_task) > 0 else 0
-        ore_stimate = int(t["ore_stimate"]) if t["ore_stimate"] else 0
+    for t in tasks:
+        dip = get_dipendente(t.dipendente_id)
+        ore_cons = ore_per_task.get(t.id, 0.0)
+        ore_stimate = int(t.ore_stimate) if t.ore_stimate else 0
 
         # Progress calcolato su ore consuntivate / ore stimate
-        if t["stato"] == "Completato":
+        if t.stato == "Completato":
             progress = 100
         elif ore_stimate > 0 and ore_cons > 0:
             progress = min(99, round(ore_cons / ore_stimate * 100))
         else:
             progress = 0
 
+        pred = t.predecessore or ""
         result.append({
-            "id": t["id"],
-            "name": t["nome"],
-            "start": t["data_inizio"].strftime("%Y-%m-%d"),
-            "end": t["data_fine"].strftime("%Y-%m-%d"),
+            "id": t.id,
+            "name": t.nome,
+            # Date opzionali: un task senza data compare comunque nel GANTT
+            # con stringa vuota (frappe-gantt lo ignora visivamente, ma il
+            # task resta nel payload — niente 500).
+            "start": t.data_inizio.strftime("%Y-%m-%d") if t.data_inizio else "",
+            "end": t.data_fine.strftime("%Y-%m-%d") if t.data_fine else "",
             "progress": progress,
-            "dependencies": t["predecessore"] if t["predecessore"] else "",
-            "predecessor_name": "",  # popolato sotto se c'è predecessore
-            "project": proj["nome"],
-            "project_id": t["progetto_id"],
+            "dependencies": pred,
+            "predecessor_name": nomi_pred.get(pred, "") if pred else "",
+            "project": t.progetto.nome if t.progetto else "",
+            "project_id": t.progetto_id,
             "assignee": dip["nome"],
             "profile": dip["profilo"],
-            "status": t["stato"],
+            "status": t.stato,
             "estimated_hours": ore_stimate,
             "hours_done": round(ore_cons, 1),
         })
-
-        # Aggiungi nome predecessore (per il pannello dettaglio del frontend)
-        if t["predecessore"]:
-            pred_row = _TASKS()[_TASKS()["id"] == t["predecessore"]]
-            if len(pred_row) > 0:
-                result[-1]["predecessor_name"] = pred_row.iloc[0]["nome"]
 
     return result
 
@@ -263,7 +291,6 @@ def gantt_strutturato(
             ore_per_task = {tid: float(ore) for tid, ore in righe}
 
         # ── 3. Cache nomi dipendenti per evitare lookup ripetuti ──────
-        from models import Dipendente
         dip_rows = session.query(Dipendente).all()
         nomi_dip = {d.id: d.nome for d in dip_rows}
 
@@ -340,6 +367,64 @@ def gantt_strutturato(
         session.close()
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# Helper privato: carica i task per l'export (PDF/PNG/Excel) da Postgres
+# e restituisce una lista di dict pronti all'uso. Centralizza il filtro
+# "progetti non Sospesi" e la pre-conversione delle date a datetime
+# (necessaria per il foglio "GANTT Visivo" — vedi NOTE TECNICHE).
+# ─────────────────────────────────────────────────────────────────────────
+
+def _carica_task_export(
+    progetto_id: Optional[str],
+    *,
+    escludi_eliminati: bool,
+    include_fase: bool = False,
+) -> list[dict]:
+    """Carica i task per gli endpoint di export con tutti i campi serviti.
+
+    Args:
+        progetto_id: filtro su singolo progetto. Se None, esclude i
+            progetti in stato 'Sospeso' (replica del comportamento DataFrame).
+        escludi_eliminati: se True, scarta i task con stato 'Eliminato'.
+            PDF/PNG storicamente NON filtravano; Excel sì — passare il
+            flag corretto preserva l'iso-comportamento per ciascun endpoint.
+        include_fase: se True, joinedload anche su Task.fase_rel per
+            poter leggere il nome fase (usato solo dall'export Excel).
+    """
+    session = get_session()
+    opts = [joinedload(Task.progetto)]
+    if include_fase:
+        opts.append(joinedload(Task.fase_rel))
+    q = session.query(Task).options(*opts)
+    if progetto_id:
+        q = q.filter(Task.progetto_id == progetto_id)
+    else:
+        q = q.filter(Task.progetto.has(Progetto.stato != "Sospeso"))
+    if escludi_eliminati:
+        q = q.filter(Task.stato != "Eliminato")
+    tasks = q.all()
+    session.close()
+
+    records = []
+    for t in tasks:
+        records.append({
+            "id": t.id,
+            "nome": t.nome,
+            "stato": t.stato,
+            "ore_stimate": int(t.ore_stimate or 0),
+            # Pre-converto a datetime per coerenza con lo storico pandas.Timestamp:
+            # i confronti e i `hasattr(x, "date")` del foglio GANTT Visivo
+            # dipendono dal tipo `datetime`, non `date`.
+            "data_inizio": _to_dt(t.data_inizio),
+            "data_fine": _to_dt(t.data_fine),
+            "dipendente_id": t.dipendente_id or "",
+            "progetto_id": t.progetto_id,
+            "progetto_nome": t.progetto.nome if t.progetto else "?",
+            "fase": (t.fase_rel.nome if t.fase_rel else "") if include_fase else "",
+        })
+    return records
+
+
 # ═════════════════════════════════════════════════════════════════════════
 # 2. GET /api/gantt/export-pdf — esportazione PDF
 # ═════════════════════════════════════════════════════════════════════════
@@ -352,36 +437,39 @@ def export_gantt_pdf(
     """Genera e scarica un PDF del GANTT."""
     from gantt_pdf import genera_gantt_pdf
 
-    # Riusa la logica di dati_gantt
-    tasks = _TASKS().copy()
-    if progetto_id:
-        tasks = tasks[tasks["progetto_id"] == progetto_id]
+    # NB: PDF/PNG storicamente non filtravano "Eliminato" (asimmetria col
+    # GET /api/gantt e l'Excel). Iso-comportamento → escludi_eliminati=False.
+    records = _carica_task_export(progetto_id, escludi_eliminati=False)
 
-    # Filtra solo progetti attivi (esclude sospesi)
-    progetti_attivi = _PROGETTI()[~_PROGETTI()["stato"].isin(["Sospeso"])]["id"].tolist()
-    if not progetto_id:
-        tasks = tasks[tasks["progetto_id"].isin(progetti_attivi)]
+    # PDF e PNG sono grafici su asse temporale: un task senza date non è
+    # rappresentabile lì e farebbe crashare gantt_pdf.py su
+    # datetime.strptime("", "%Y-%m-%d"). Lo scartiamo qui. I task senza
+    # date restano comunque visibili in GET /api/gantt (con start/end "")
+    # e nell'Excel (riga senza barra).
+    records = [r for r in records if r["data_inizio"] and r["data_fine"]]
 
     gantt_data = []
-    for _, t in tasks.iterrows():
-        dip = get_dipendente(t["dipendente_id"])
-        proj = _PROGETTI()[_PROGETTI()["id"] == t["progetto_id"]]
-        proj_nome = proj.iloc[0]["nome"] if len(proj) > 0 else "?"
+    for r in records:
+        dip = get_dipendente(r["dipendente_id"])
         gantt_data.append({
-            "id": t["id"],
-            "name": t["nome"],
-            "start": t["data_inizio"].strftime("%Y-%m-%d"),
-            "end": t["data_fine"].strftime("%Y-%m-%d"),
-            "project": proj_nome,
+            "id": r["id"],
+            "name": r["nome"],
+            # Date opzionali: task senza data passa con stringa vuota
+            # al generatore PDF (evita AttributeError sul .strftime di None).
+            "start": r["data_inizio"].strftime("%Y-%m-%d") if r["data_inizio"] else "",
+            "end": r["data_fine"].strftime("%Y-%m-%d") if r["data_fine"] else "",
+            "project": r["progetto_nome"],
             "assignee": dip["nome"],
-            "status": t["stato"],
-            "estimated_hours": int(t["ore_stimate"]),
+            "status": r["stato"],
+            "estimated_hours": r["ore_stimate"],
         })
 
     # Titolo
     if progetto_id:
-        proj = _PROGETTI()[_PROGETTI()["id"] == progetto_id]
-        titolo = f"GANTT — {proj.iloc[0]['nome']}" if len(proj) > 0 else "GANTT"
+        session = get_session()
+        prog = session.query(Progetto).filter(Progetto.id == progetto_id).first()
+        session.close()
+        titolo = f"GANTT — {prog.nome}" if prog else "GANTT"
     else:
         titolo = "GANTT IMC-Group — Tutti i progetti"
 
@@ -410,30 +498,30 @@ def export_gantt_png(
     import tempfile
     import os
 
-    # Genera prima il PDF (come export-pdf)
-    tasks = _TASKS().copy()
-    if progetto_id:
-        tasks = tasks[tasks["progetto_id"] == progetto_id]
-    progetti_attivi = _PROGETTI()[~_PROGETTI()["stato"].isin(["Sospeso"])]["id"].tolist()
-    if not progetto_id:
-        tasks = tasks[tasks["progetto_id"].isin(progetti_attivi)]
+    # Stessa logica di export-pdf (storicamente non filtrava "Eliminato").
+    records = _carica_task_export(progetto_id, escludi_eliminati=False)
+
+    # Stesso filtro di export-pdf: task senza date non sono rappresentabili
+    # su asse temporale (vedi nota in export_gantt_pdf).
+    records = [r for r in records if r["data_inizio"] and r["data_fine"]]
 
     gantt_data = []
-    for _, t in tasks.iterrows():
-        dip = get_dipendente(t["dipendente_id"])
-        proj = _PROGETTI()[_PROGETTI()["id"] == t["progetto_id"]]
-        proj_nome = proj.iloc[0]["nome"] if len(proj) > 0 else "?"
+    for r in records:
+        dip = get_dipendente(r["dipendente_id"])
         gantt_data.append({
-            "id": t["id"], "name": t["nome"],
-            "start": t["data_inizio"].strftime("%Y-%m-%d"),
-            "end": t["data_fine"].strftime("%Y-%m-%d"),
-            "project": proj_nome, "assignee": dip["nome"],
-            "status": t["stato"], "estimated_hours": int(t["ore_stimate"]),
+            "id": r["id"], "name": r["nome"],
+            # Date opzionali: stesso pattern di export-pdf.
+            "start": r["data_inizio"].strftime("%Y-%m-%d") if r["data_inizio"] else "",
+            "end": r["data_fine"].strftime("%Y-%m-%d") if r["data_fine"] else "",
+            "project": r["progetto_nome"], "assignee": dip["nome"],
+            "status": r["stato"], "estimated_hours": r["ore_stimate"],
         })
 
     if progetto_id:
-        proj = _PROGETTI()[_PROGETTI()["id"] == progetto_id]
-        titolo = f"GANTT — {proj.iloc[0]['nome']}" if len(proj) > 0 else "GANTT"
+        session = get_session()
+        prog = session.query(Progetto).filter(Progetto.id == progetto_id).first()
+        session.close()
+        titolo = f"GANTT — {prog.nome}" if prog else "GANTT"
     else:
         titolo = "GANTT IMC-Group — Tutti i progetti"
 
@@ -485,30 +573,24 @@ def export_gantt_excel(
     import io
     import pandas as pd
 
-    tasks = _TASKS().copy()
-    tasks = tasks[tasks["stato"] != "Eliminato"]
-    if progetto_id:
-        tasks = tasks[tasks["progetto_id"] == progetto_id]
-    progetti_attivi = _PROGETTI()[~_PROGETTI()["stato"].isin(["Sospeso"])]["id"].tolist()
-    if not progetto_id:
-        tasks = tasks[tasks["progetto_id"].isin(progetti_attivi)]
+    # Excel storicamente filtrava "Eliminato".
+    records = _carica_task_export(progetto_id, escludi_eliminati=True, include_fase=True)
 
-    # Costruisci DataFrame per l'export
+    # Costruisci dati per il foglio "Dati GANTT"
     export_data = []
-    for _, t in tasks.iterrows():
-        dip = get_dipendente(t["dipendente_id"])
-        proj = _PROGETTI()[_PROGETTI()["id"] == t["progetto_id"]]
-        proj_nome = proj.iloc[0]["nome"] if len(proj) > 0 else "?"
+    for r in records:
+        dip = get_dipendente(r["dipendente_id"])
         export_data.append({
-            "Progetto": proj_nome,
-            "Task": t["nome"],
-            "Fase": t["fase"],
+            "Progetto": r["progetto_nome"],
+            "Task": r["nome"],
+            "Fase": r["fase"],
             "Assegnato a": dip["nome"],
             "Profilo": dip["profilo"],
-            "Ore stimate": int(t["ore_stimate"]),
-            "Data inizio": t["data_inizio"] if hasattr(t["data_inizio"], "strftime") else t["data_inizio"],
-            "Data fine": t["data_fine"] if hasattr(t["data_fine"], "strftime") else t["data_fine"],
-            "Stato": t["stato"],
+            "Ore stimate": r["ore_stimate"],
+            # Datetime: hasattr(.,"strftime") sempre True. Equivalente a passare il valore.
+            "Data inizio": r["data_inizio"],
+            "Data fine": r["data_fine"],
+            "Stato": r["stato"],
         })
 
     df = pd.DataFrame(export_data)
@@ -541,8 +623,11 @@ def export_gantt_excel(
         for row_idx, (_, row) in enumerate(df.iterrows(), 2):
             for col_idx, h in enumerate(headers, 1):
                 val = row[h]
-                if h in ("Data inizio", "Data fine") and hasattr(val, "strftime"):
-                    val = val.strftime("%d/%m/%Y")
+                if h in ("Data inizio", "Data fine"):
+                    # pd.notna() copre sia None che NaT (a differenza di
+                    # hasattr(., "strftime") che è True su NaT e fa crashare
+                    # NaT.strftime con ValueError). Date assenti → cella vuota.
+                    val = val.strftime("%d/%m/%Y") if pd.notna(val) else None
                 cell = ws_data.cell(row=row_idx, column=col_idx, value=val)
                 cell.alignment = Alignment(horizontal="left")
 
@@ -562,15 +647,9 @@ def export_gantt_excel(
         # ═══ FOGLIO 2: GANTT Visivo ═══
         ws_gantt = wb.create_sheet("GANTT Visivo")
 
-        # Trova range date
-        date_inizio = []
-        date_fine = []
-        for _, t in tasks.iterrows():
-            di = t["data_inizio"]
-            df_t = t["data_fine"]
-            if hasattr(di, "date"):
-                date_inizio.append(di)
-                date_fine.append(df_t)
+        # Trova range date — records ha già le date come datetime (_to_dt)
+        date_inizio = [r["data_inizio"] for r in records if r["data_inizio"] is not None]
+        date_fine = [r["data_fine"] for r in records if r["data_fine"] is not None]
 
         if not date_inizio:
             ws_gantt.cell(row=1, column=1, value="Nessun task da visualizzare")
@@ -631,13 +710,18 @@ def export_gantt_excel(
                 )
                 ws_gantt.cell(row=1, column=col).font = Font(color="FFFFFF", bold=True, size=8)
 
-            # Righe task
+            # Righe task — sort Python-side per (progetto_id, data_inizio).
+            # Task senza data_inizio → in fondo al loro progetto (datetime.max),
+            # altrimenti sorted() solleva TypeError confrontando None vs datetime.
+            records_ordinati = sorted(
+                records,
+                key=lambda r: (r["progetto_id"], r["data_inizio"] or datetime.max)
+            )
             row = 2
             current_project = ""
-            for _, t in tasks.sort_values(["progetto_id", "data_inizio"]).iterrows():
-                dip = get_dipendente(t["dipendente_id"])
-                proj = _PROGETTI()[_PROGETTI()["id"] == t["progetto_id"]]
-                proj_nome = proj.iloc[0]["nome"] if len(proj) > 0 else "?"
+            for r in records_ordinati:
+                dip = get_dipendente(r["dipendente_id"])
+                proj_nome = r["progetto_nome"]
 
                 # Riga separatore progetto
                 if proj_nome != current_project:
@@ -652,29 +736,33 @@ def export_gantt_excel(
                     row += 1
 
                 # Task info
-                ws_gantt.cell(row=row, column=1, value=t["nome"]).font = Font(size=9)
+                ws_gantt.cell(row=row, column=1, value=r["nome"]).font = Font(size=9)
                 ws_gantt.cell(row=row, column=2, value=dip["nome"]).font = Font(size=8, color="666666")
                 ws_gantt.cell(row=row, column=3, value=proj_nome).font = Font(size=8, color="666666")
-                ws_gantt.cell(row=row, column=4, value=t["stato"]).font = Font(size=8)
+                ws_gantt.cell(row=row, column=4, value=r["stato"]).font = Font(size=8)
 
                 # Colore stato nella cella stato
-                stato_color = colori_stato.get(t["stato"], "95a5a6")
+                stato_color = colori_stato.get(r["stato"], "95a5a6")
                 ws_gantt.cell(row=row, column=4).fill = PatternFill(
                     start_color=stato_color, end_color=stato_color, fill_type="solid"
                 )
                 ws_gantt.cell(row=row, column=4).font = Font(size=8, color="FFFFFF")
 
-                # Barre GANTT
-                task_start = t["data_inizio"]
-                task_end = t["data_fine"]
-                bar_color = colori_stato.get(t["stato"], colore_default)
+                # Barre GANTT — confronto datetime vs datetime (date pre-convertite)
+                task_start = r["data_inizio"]
+                task_end = r["data_fine"]
+                bar_color = colori_stato.get(r["stato"], colore_default)
 
-                for i, sett in enumerate(settimane):
-                    sett_end = sett + td(days=6)
-                    if task_start <= sett_end and task_end >= sett:
-                        ws_gantt.cell(row=row, column=5 + i).fill = PatternFill(
-                            start_color=bar_color, end_color=bar_color, fill_type="solid"
-                        )
+                # Se manca anche una sola delle due date, nessuna barra:
+                # la riga task compare comunque (info + stato colorato),
+                # niente confronto None vs datetime che solleverebbe TypeError.
+                if task_start is not None and task_end is not None:
+                    for i, sett in enumerate(settimane):
+                        sett_end = sett + td(days=6)
+                        if task_start <= sett_end and task_end >= sett:
+                            ws_gantt.cell(row=row, column=5 + i).fill = PatternFill(
+                                start_color=bar_color, end_color=bar_color, fill_type="solid"
+                            )
 
                 row += 1
 
@@ -697,11 +785,13 @@ def export_gantt_excel(
         # Fallback CSV
         buffer = io.BytesIO()
         df_export = df.copy()
+        # pd.notna() copre None e NaT (vedi nota nel foglio "Dati GANTT").
+        # Date assenti → stringa vuota nel CSV.
         df_export["Data inizio"] = df_export["Data inizio"].apply(
-            lambda x: x.strftime("%d/%m/%Y") if hasattr(x, "strftime") else str(x)
+            lambda x: x.strftime("%d/%m/%Y") if pd.notna(x) else ""
         )
         df_export["Data fine"] = df_export["Data fine"].apply(
-            lambda x: x.strftime("%d/%m/%Y") if hasattr(x, "strftime") else str(x)
+            lambda x: x.strftime("%d/%m/%Y") if pd.notna(x) else ""
         )
         df_export.to_csv(buffer, index=False, sep=";", encoding="utf-8-sig")
         media_type = "text/csv"
