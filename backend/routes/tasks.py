@@ -75,16 +75,16 @@ Ora tutti i 4 endpoint vivono coerentemente sotto /api/tasks/*.
 DIPENDENZE
 ──────────
 - `data` (modulo): `get_dipendente`, `get_tasks_progetto`, `aggiungi_task`,
-  `modifica_task`, `cambia_stato_progetto`, `calcola_impatto_saturazione`,
-  e DataFrame DIPENDENTI/PROGETTI/TASKS/CONSUNTIVI.
+  `modifica_task`, `cambia_stato_progetto`, `calcola_impatto_saturazione`.
+- `models`: `Task`, `get_session` (lettura diretta Postgres).
+- `data_db_impl._to_dt`: normalizza `Date` SQL → `datetime` a mezzanotte
+  per preservare il formato ISO `YYYY-MM-DDT00:00:00` storicamente esposto
+  dal DataFrame (pandas.Timestamp).
 - `deps`: `get_current_user`, `require_manager`.
 - `models`: classe `Utente` per type hint.
 
 NOTE TECNICHE
 ─────────────
-Helper locali `_DIPENDENTI`, `_PROGETTI`, `_TASKS`, `_CONSUNTIVI`, `get_oggi`.
-📌 TODO: estrarre in moduli condivisi (debito comune a tutti i router).
-
 📌 TODO Blocco 2 roadmap (Macchina delle Fasi):
    `GET /api/tasks` andrà adattato per restituire i task strutturati per
    fase. Anche le modifiche/applica dovranno coerentemente operare nel
@@ -95,6 +95,8 @@ STORIA
 ──────
 Estratto da main.py il 5 maggio 2026, dopo unificazione prefisso
 /api/task → /api/tasks (commit precedente).
+Letture migrate da DataFrame in cache a Postgres diretto il 21 maggio 2026
+(handoff migrazione §6-ter), preservando iso-comportamento.
 ═══════════════════════════════════════════════════════════════════════════
 """
 
@@ -102,15 +104,16 @@ from datetime import datetime
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from sqlalchemy.orm import joinedload
 
 from deps import get_current_user, require_manager
-from models import Utente
+from models import Utente, Task, get_session
 from data import (
     get_dipendente, get_tasks_progetto,
     aggiungi_task, modifica_task, cambia_stato_progetto,
     calcola_impatto_saturazione,
 )
-from dataframes import _DIPENDENTI, _PROGETTI, _TASKS, _CONSUNTIVI
+from data_db_impl import _to_dt
 from utils import get_oggi
 
 
@@ -159,34 +162,39 @@ def lista_tasks(
     current_user: Utente = Depends(get_current_user),
 ):
     """Lista task con filtri opzionali (Scenario B in lettura)."""
-    tasks = _TASKS().copy()
-    tasks = tasks[tasks["stato"] != "Eliminato"]
+    session = get_session()
+    # joinedload su progetto + fase_rel: evita N+1 nel render del nome
+    # progetto e del nome fase.
+    q = session.query(Task).options(
+        joinedload(Task.progetto), joinedload(Task.fase_rel)
+    ).filter(Task.stato != "Eliminato")
     # Scenario B: user vede solo i propri task, manager vede tutto
     if current_user.ruolo_app != "manager":
-        tasks = tasks[tasks["dipendente_id"] == current_user.dipendente_id]
+        q = q.filter(Task.dipendente_id == current_user.dipendente_id)
     if progetto_id:
-        tasks = tasks[tasks["progetto_id"] == progetto_id]
+        q = q.filter(Task.progetto_id == progetto_id)
     if profilo:
-        tasks = tasks[tasks["profilo_richiesto"] == profilo]
+        q = q.filter(Task.profilo_richiesto == profilo)
+    tasks = q.all()
+    session.close()
 
     result = []
-    for _, t in tasks.iterrows():
-        dip = get_dipendente(t["dipendente_id"])
-        proj = _PROGETTI()[_PROGETTI()["id"] == t["progetto_id"]].iloc[0]
+    for t in tasks:
+        dip = get_dipendente(t.dipendente_id)
         result.append({
-            "id": t["id"],
-            "nome": t["nome"],
-            "progetto_id": t["progetto_id"],
-            "progetto_nome": proj["nome"],
-            "fase": t["fase"],
-            "stato": t["stato"],
-            "ore_stimate": int(t["ore_stimate"]),
-            "data_inizio": t["data_inizio"].isoformat(),
-            "data_fine": t["data_fine"].isoformat(),
-            "profilo_richiesto": t["profilo_richiesto"],
-            "dipendente_id": t["dipendente_id"],
+            "id": t.id,
+            "nome": t.nome,
+            "progetto_id": t.progetto_id,
+            "progetto_nome": t.progetto.nome if t.progetto else "",
+            "fase": t.fase_rel.nome if t.fase_rel else "",
+            "stato": t.stato,
+            "ore_stimate": int(t.ore_stimate or 0),
+            "data_inizio": _to_dt(t.data_inizio).isoformat(),
+            "data_fine": _to_dt(t.data_fine).isoformat(),
+            "profilo_richiesto": t.profilo_richiesto or "",
+            "dipendente_id": t.dipendente_id or "",
             "dipendente_nome": dip["nome"],
-            "predecessore": t["predecessore"],
+            "predecessore": t.predecessore or "",
         })
     return result
 
@@ -544,12 +552,13 @@ def applica_modifiche(req: ApplicaRequest, _: Utente = Depends(require_manager))
 @router.patch("/{task_id}/elimina")
 def elimina_task_generico(task_id: str, _: Utente = Depends(require_manager)):
     """Elimina (soft) qualsiasi task cambiando lo stato a 'Eliminato'."""
-    tasks = _TASKS()
-    task = tasks[tasks["id"] == task_id]
-    if task.empty:
+    session = get_session()
+    task = session.query(Task).filter(Task.id == task_id).first()
+    session.close()
+    if task is None:
         raise HTTPException(404, "Task non trovato")
 
-    task_nome = task.iloc[0]["nome"]
+    task_nome = task.nome
     ok = modifica_task(task_id, stato="Eliminato")
     if ok:
         return {"ok": True, "messaggio": f"Task '{task_nome}' eliminato"}

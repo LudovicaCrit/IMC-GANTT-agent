@@ -85,7 +85,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import joinedload
 
 from deps import require_manager
-from models import Utente, Dipendente, Progetto, Task, get_session
+from models import Utente, Dipendente, Task, get_session
 from data import carico_settimanale_dipendente
 from data_db_impl import _to_dt
 from utils import get_oggi

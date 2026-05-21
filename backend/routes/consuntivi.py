@@ -72,34 +72,34 @@ Coerente con la "filosofia della settimana intera" e con Scenario B.
 
 DIPENDENZE
 ──────────
-- `data` (modulo): `get_dipendente`, `salva_consuntivo` (in PERSISTENT_MODE),
-  e DataFrame DIPENDENTI/PROGETTI/TASKS/CONSUNTIVI.
+- `data` (modulo): `get_dipendente`, `salva_consuntivo` (in PERSISTENT_MODE).
+- `models`: `Dipendente`, `Task`, `Consuntivo`, `get_session` (lettura
+  diretta Postgres).
 - `deps`: `get_current_user`, `require_manager`.
 - `models`: classe `Utente` per type hint.
 
 NOTE TECNICHE
 ─────────────
-Helper locali `_DIPENDENTI`, `_PROGETTI`, `_TASKS`, `_CONSUNTIVI`.
-📌 TODO: estrarre in `backend/dataframes.py` quando ≥3 router li replicano
-(condizione largamente superata — da fare presto).
-
 Helper privato `_consuntivo_vuoto_per_user` per coerenza del payload
 quando l'utente non ha ancora consuntivi.
 
 STORIA
 ──────
 Estratto da main.py il 5 maggio 2026 nell'ambito del refactoring strangler.
+Letture migrate da DataFrame in cache a Postgres diretto il 21 maggio 2026
+(handoff migrazione §6-ter), preservando iso-comportamento.
 ═══════════════════════════════════════════════════════════════════════════
 """
 
 from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from sqlalchemy import func
+from sqlalchemy.orm import joinedload
 
 from deps import get_current_user, require_manager
-from models import Utente
+from models import Utente, Dipendente, Task, Consuntivo, get_session
 from data import get_dipendente
-from dataframes import _DIPENDENTI, _PROGETTI, _TASKS, _CONSUNTIVI
 
 
 # Import condizionale per scrittura
@@ -151,39 +151,52 @@ def consuntivi_settimana_corrente(_: Utente = Depends(require_manager)):
     Per la vista personale del dipendente vedi /api/consuntivi/me."""
     lun = datetime.now() - timedelta(days=datetime.now().weekday())
     lun_date = lun.date() if hasattr(lun, 'date') else lun
+    ven_date = lun_date + timedelta(days=6)
 
-    consuntivi = _CONSUNTIVI()
-    if consuntivi.empty:
+    session = get_session()
+    # Iso-comportamento: l'originale fa early-return [] se la tabella
+    # consuntivi è completamente vuota (db appena seedato, prima
+    # compilazione mai avvenuta). Replicato con una query indicizzata
+    # su PK, di costo trascurabile.
+    has_any = session.query(Consuntivo.id).first() is not None
+    if not has_any:
+        session.close()
         return []
 
-    # Filtra per settimana corrente
-    ven_date = lun_date + timedelta(days=6)
-    cons_sett = consuntivi[consuntivi["settimana"].apply(
-        lambda x: lun_date <= (x.date() if hasattr(x, 'date') else x) <= ven_date
-    )]
+    # Una sola query con joinedload su Task → Progetto: evita N+1 nel
+    # lookup di nome task/progetto durante il loop.
+    cons_sett = session.query(Consuntivo).options(
+        joinedload(Consuntivo.task).joinedload(Task.progetto)
+    ).filter(
+        Consuntivo.settimana >= lun_date,
+        Consuntivo.settimana <= ven_date,
+    ).all()
+
+    # Raggruppa per dipendente_id (mantiene l'ordine di arrivo, come
+    # `unique()` su pandas Series).
+    cons_per_dip = {}
+    for c in cons_sett:
+        cons_per_dip.setdefault(c.dipendente_id, []).append(c)
 
     risultato = []
-    for did in cons_sett["dipendente_id"].unique():
+    for did, lista_cons in cons_per_dip.items():
         try:
             dip = get_dipendente(did)
         except (IndexError, KeyError):
             continue
-        cons_dip = cons_sett[cons_sett["dipendente_id"] == did]
         ore_per_task = []
         totale = 0
-        for _, c in cons_dip.iterrows():
-            if c["ore_dichiarate"] > 0:
-                task_row = _TASKS()[_TASKS()["id"] == c["task_id"]]
-                if not task_row.empty:
-                    t = task_row.iloc[0]
-                    proj = _PROGETTI()[_PROGETTI()["id"] == t["progetto_id"]]
-                    proj_nome = proj.iloc[0]["nome"] if not proj.empty else "?"
+        for c in lista_cons:
+            if c.ore_dichiarate > 0:
+                t = c.task
+                if t is not None:
+                    proj_nome = t.progetto.nome if t.progetto else "?"
                     ore_per_task.append({
-                        "task_nome": t["nome"],
+                        "task_nome": t.nome,
                         "progetto": proj_nome,
-                        "ore": float(c["ore_dichiarate"]),
+                        "ore": float(c.ore_dichiarate),
                     })
-                    totale += float(c["ore_dichiarate"])
+                    totale += float(c.ore_dichiarate)
 
         if ore_per_task:
             risultato.append({
@@ -196,23 +209,32 @@ def consuntivi_settimana_corrente(_: Utente = Depends(require_manager)):
                 "compilato": True,
             })
 
-    # Aggiungi dipendenti che NON hanno compilato (con almeno 1 task attivo)
-    for _, d in _DIPENDENTI().iterrows():
-        if d["id"] not in [r["dipendente_id"] for r in risultato]:
-            n_task = len(_TASKS()[
-                (_TASKS()["dipendente_id"] == d["id"]) &
-                (_TASKS()["stato"].isin(["In corso", "Da iniziare"]))
-            ])
-            if n_task > 0:
-                risultato.append({
-                    "dipendente_id": d["id"],
-                    "nome": d["nome"],
-                    "profilo": d["profilo"],
-                    "ore_contrattuali": int(d["ore_sett"]),
-                    "totale_ore": 0,
-                    "ore_per_task": [],
-                    "compilato": False,
-                })
+    # Aggiungi dipendenti che NON hanno compilato (con almeno 1 task attivo).
+    # Conteggio task attivi per dipendente fatto in UNA query aggregata,
+    # invece di un filtro DataFrame per ciascuno.
+    dipendenti_attivi = session.query(Dipendente).filter(Dipendente.attivo == True).all()
+    task_count_rows = session.query(
+        Task.dipendente_id, func.count(Task.id)
+    ).filter(
+        Task.stato.in_(["In corso", "Da iniziare"])
+    ).group_by(Task.dipendente_id).all()
+    task_count = {row[0]: row[1] for row in task_count_rows}
+    session.close()
+
+    ids_gia_presenti = {r["dipendente_id"] for r in risultato}
+    for d in dipendenti_attivi:
+        if d.id in ids_gia_presenti:
+            continue
+        if task_count.get(d.id, 0) > 0:
+            risultato.append({
+                "dipendente_id": d.id,
+                "nome": d.nome,
+                "profilo": d.profilo,
+                "ore_contrattuali": int(d.ore_sett),
+                "totale_ore": 0,
+                "ore_per_task": [],
+                "compilato": False,
+            })
 
     return sorted(risultato, key=lambda x: (-x["compilato"], x["nome"]))
 
@@ -228,16 +250,22 @@ def consuntivi_settimana_me(current_user: Utente = Depends(get_current_user)):
     lun_date = lun.date() if hasattr(lun, 'date') else lun
     ven_date = lun_date + timedelta(days=6)
 
-    consuntivi = _CONSUNTIVI()
-    if consuntivi.empty:
+    session = get_session()
+    # Iso-comportamento: payload vuoto se la tabella consuntivi è
+    # totalmente vuota (replica l'early-return su _CONSUNTIVI().empty).
+    has_any = session.query(Consuntivo.id).first() is not None
+    if not has_any:
+        session.close()
         return _consuntivo_vuoto_per_user(current_user.dipendente_id)
 
-    cons_user = consuntivi[
-        (consuntivi["dipendente_id"] == current_user.dipendente_id) &
-        (consuntivi["settimana"].apply(
-            lambda x: lun_date <= (x.date() if hasattr(x, 'date') else x) <= ven_date
-        ))
-    ]
+    cons_user = session.query(Consuntivo).options(
+        joinedload(Consuntivo.task).joinedload(Task.progetto)
+    ).filter(
+        Consuntivo.dipendente_id == current_user.dipendente_id,
+        Consuntivo.settimana >= lun_date,
+        Consuntivo.settimana <= ven_date,
+    ).all()
+    session.close()
 
     try:
         dip = get_dipendente(current_user.dipendente_id)
@@ -246,19 +274,17 @@ def consuntivi_settimana_me(current_user: Utente = Depends(get_current_user)):
 
     ore_per_task = []
     totale = 0
-    for _, c in cons_user.iterrows():
-        if c["ore_dichiarate"] > 0:
-            task_row = _TASKS()[_TASKS()["id"] == c["task_id"]]
-            if not task_row.empty:
-                t = task_row.iloc[0]
-                proj = _PROGETTI()[_PROGETTI()["id"] == t["progetto_id"]]
-                proj_nome = proj.iloc[0]["nome"] if not proj.empty else "?"
+    for c in cons_user:
+        if c.ore_dichiarate > 0:
+            t = c.task
+            if t is not None:
+                proj_nome = t.progetto.nome if t.progetto else "?"
                 ore_per_task.append({
-                    "task_nome": t["nome"],
+                    "task_nome": t.nome,
                     "progetto": proj_nome,
-                    "ore": float(c["ore_dichiarate"]),
+                    "ore": float(c.ore_dichiarate),
                 })
-                totale += float(c["ore_dichiarate"])
+                totale += float(c.ore_dichiarate)
 
     return {
         "dipendente_id": current_user.dipendente_id,
