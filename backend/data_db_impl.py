@@ -223,20 +223,35 @@ def carico_settimanale_dipendente(did, settimana):
     della realtà operativa. NON costruire sopra logiche di redistribuzione
     automatica IA prima dello Step 2.7-pre.
 
-    Confronto date: i task hanno pandas.Timestamp a 00:00. Chi chiama questa
-    funzione deve passare un datetime normalizzato a mezzanotte, altrimenti
-    si perdono task al confine settimana (es. data_fine == lunedì della settimana).
+    Filtri (iso-comportamento col vecchio DataFrame loader):
+      - task del dipendente, stato NON in ("Completato", "Sospeso")
+      - sovrapposizione con la settimana lunedì–venerdì
+      - task senza data_inizio/data_fine (NULL): esclusi (in SQL WHERE)
     """
     lun = settimana - timedelta(days=settimana.weekday())
-    tasks_dip = TASKS[
-        (TASKS["dipendente_id"] == did) &
-        (~TASKS["stato"].isin(["Completato", "Sospeso"]))
-    ]
+    ven = lun + timedelta(days=4)
+
+    session = get_session()
+    try:
+        tasks_dip = (
+            session.query(Task)
+            .filter(
+                Task.dipendente_id == did,
+                Task.stato.notin_(["Completato", "Sospeso"]),
+                Task.data_inizio <= ven,
+                Task.data_fine >= lun,
+            )
+            .all()
+        )
+    finally:
+        session.close()
+
     ore = 0
-    for _, t in tasks_dip.iterrows():
-        if t["data_inizio"] <= lun + timedelta(days=4) and t["data_fine"] >= lun:
-            weeks = max(1, (t["data_fine"] - t["data_inizio"]).days / 7)
-            ore += t["ore_stimate"] / weeks
+    for t in tasks_dip:
+        # Distribuzione uniforme: ore_stimate / durata in settimane.
+        # weeks = max(1, ...) per task brevi (< 1 settimana).
+        weeks = max(1, (t.data_fine - t.data_inizio).days / 7)
+        ore += (t.ore_stimate or 0) / weeks
     return round(ore, 1)
 
 def get_progetti_dipendente(did):
