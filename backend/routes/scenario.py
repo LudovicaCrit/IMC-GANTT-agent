@@ -72,15 +72,16 @@ DIPENDENZE
 ──────────
 - `scenario_engine`: motore deterministico con `simula_scenario()` e
   `_to_date()`. È il "cervello" delle propagazioni cascata.
-- `data` (modulo): `get_dipendente`, `get_progetto`, `modifica_task`,
-  e DataFrame DIPENDENTI/PROGETTI/TASKS.
+- `data` (modulo): `get_dipendente`, `get_progetto`, `modifica_task`.
 - `deps`: `require_manager`.
-- `models`: classe `Utente`.
+- `models`: classi `Utente`, `Dipendente`, `Progetto`, `Task`, `get_session`
+  (lettura diretta via SQLAlchemy nell'helper `_carica_dati_per_engine`).
 
 NOTE TECNICHE
 ─────────────
-Helper locali `_DIPENDENTI`, `_PROGETTI`, `_TASKS`, `get_oggi`.
-📌 TODO: estrarre in moduli condivisi.
+Helper locale `_carica_dati_per_engine()`: legge da Postgres via SQLAlchemy
+e produce le 3 list[dict] richieste da `simula_scenario` (iso-comportamento
+col vecchio caricamento da DataFrame _TASKS/_DIPENDENTI/_PROGETTI).
 
 📌 TODO Pulizia DTO orfani: rimuovere da main.py le classi
 ModificaScenario, SimulaRequest, ConfermaRequest, InterpretaRequest
@@ -111,10 +112,9 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
 from deps import require_manager
-from models import Utente
+from models import Utente, Dipendente, Progetto, Task, get_session
 from data import get_dipendente, get_progetto, modifica_task
 from scenario_engine import simula_scenario, _to_date
-from dataframes import _DIPENDENTI, _PROGETTI, _TASKS
 from utils import get_oggi
 
 
@@ -173,6 +173,50 @@ def _converti_modifiche_per_engine(modifiche_dto: list[ModificaScenario]) -> lis
     return modifiche
 
 
+def _carica_dati_per_engine():
+    """Costruisce le 3 list[dict] richieste da scenario_engine.simula_scenario.
+
+    Iso-comportamento col vecchio caricamento dei DataFrame in data_db_impl:
+    - Dipendenti: solo attivi (filtro Dipendente.attivo == True).
+    - Progetti: tutti.
+    - Task: tutti (la cascata cerca successori su tutto il grafo, quindi un
+      pre-filtro su `stato` spezzerebbe il legame `predecessore` con i task
+      Sospeso/Annullato; il motore ha già la sua logica interna sugli stati).
+
+    I dict contengono SOLO i campi che il motore consuma (vedi docstring di
+    simula_scenario in scenario_engine.py). I campi nullable nel modello che
+    il motore confronta con stringhe (`predecessore`, `dipendente_id`) sono
+    normalizzati a "" come faceva il loader DataFrame; `ore_stimate` a 0.
+
+    Ritorna: (tasks, dipendenti, progetti) — nell'ordine posizionale in cui
+    simula_scenario li accetta.
+    """
+    session = get_session()
+    try:
+        dipendenti = [
+            {"id": d.id, "nome": d.nome, "profilo": d.profilo,
+             "ore_sett": d.ore_sett}
+            for d in session.query(Dipendente).filter(Dipendente.attivo == True).all()
+        ]
+        progetti = [
+            {"id": p.id, "nome": p.nome, "cliente": p.cliente or "",
+             "stato": p.stato, "data_fine": p.data_fine}
+            for p in session.query(Progetto).all()
+        ]
+        tasks = [
+            {"id": t.id, "nome": t.nome, "progetto_id": t.progetto_id,
+             "dipendente_id": t.dipendente_id or "",
+             "predecessore": t.predecessore or "",
+             "data_inizio": t.data_inizio, "data_fine": t.data_fine,
+             "ore_stimate": t.ore_stimate or 0,
+             "stato": t.stato}
+            for t in session.query(Task).all()
+        ]
+    finally:
+        session.close()
+    return tasks, dipendenti, progetti
+
+
 # ── Router ───────────────────────────────────────────────────────────────
 router = APIRouter(prefix="/api/scenario", tags=["scenario"])
 
@@ -189,10 +233,11 @@ def scenario_simula(req: SimulaRequest, _: Utente = Depends(require_manager)):
     + conseguenze + saturazioni.
     """
     modifiche = _converti_modifiche_per_engine(req.modifiche)
+    tasks_list, dipendenti_list, progetti_list = _carica_dati_per_engine()
 
     # Esegui simulazione (motore deterministico, no IA)
     risultato = simula_scenario(
-        _TASKS(), _DIPENDENTI(), _PROGETTI(),
+        tasks_list, dipendenti_list, progetti_list,
         modifiche, data_oggi=get_oggi()
     )
 
@@ -284,9 +329,10 @@ def scenario_conferma(req: ConfermaRequest, _: Utente = Depends(require_manager)
     from datetime import datetime as dt
 
     modifiche = _converti_modifiche_per_engine(req.modifiche)
+    tasks_list, dipendenti_list, progetti_list = _carica_dati_per_engine()
 
     risultato = simula_scenario(
-        _TASKS(), _DIPENDENTI(), _PROGETTI(),
+        tasks_list, dipendenti_list, progetti_list,
         modifiche, data_oggi=get_oggi()
     )
 

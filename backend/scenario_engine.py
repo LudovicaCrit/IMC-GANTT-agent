@@ -148,14 +148,18 @@ def propaga_cascata(tasks, task_ids_modificati):
 # 2. SIMULAZIONE SCENARIO COMPLETO
 # ══════════════════════════════════════════════════════════════════════
 
-def simula_scenario(tasks_df, dipendenti_df, progetti_df, modifiche, data_oggi=None):
+def simula_scenario(tasks_list, dipendenti_list, progetti_list, modifiche, data_oggi=None):
     """
     Punto d'ingresso principale.
 
     Parametri:
-      tasks_df:      DataFrame dei task (da TASKS)
-      dipendenti_df: DataFrame dei dipendenti (da DIPENDENTI)
-      progetti_df:   DataFrame dei progetti (da PROGETTI)
+      tasks_list:      list[dict] dei task. Ogni dict ha almeno:
+                       id, nome, predecessore, data_inizio, data_fine,
+                       ore_stimate, stato, dipendente_id, progetto_id.
+      dipendenti_list: list[dict] dei dipendenti. Ogni dict ha almeno:
+                       id, nome, profilo, ore_sett.
+      progetti_list:   list[dict] dei progetti. Ogni dict ha almeno:
+                       id, nome, cliente, stato, data_fine.
       modifiche:     lista di dict, ciascuno con:
                        tipo: "sposta_task" | "cambia_focus"
 
@@ -186,19 +190,18 @@ def simula_scenario(tasks_df, dipendenti_df, progetti_df, modifiche, data_oggi=N
     # ── Clona i task in memoria ──
     tasks_prima = {}
     tasks_dopo = {}
-    for _, row in tasks_df.iterrows():
-        t = row.to_dict()
+    for t in tasks_list:
         tasks_prima[t["id"]] = deepcopy(t)
         tasks_dopo[t["id"]] = deepcopy(t)
 
     # Indici utili
     dipendenti = {}
-    for _, row in dipendenti_df.iterrows():
-        dipendenti[row["id"]] = row.to_dict()
+    for d in dipendenti_list:
+        dipendenti[d["id"]] = d
 
     progetti = {}
-    for _, row in progetti_df.iterrows():
-        progetti[row["id"]] = row.to_dict()
+    for p in progetti_list:
+        progetti[p["id"]] = p
 
     # ── Applica modifiche primarie ──
     task_ids_modificati = set()

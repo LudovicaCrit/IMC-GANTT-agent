@@ -9,7 +9,6 @@ Poi testa il cambia_focus: se la persona su "Sviluppo" si concentra al 100%
 su un altro progetto per 2 settimane, lo sviluppo slitta.
 """
 
-import pandas as pd
 from datetime import date, datetime
 from scenario_engine import (
     simula_scenario, _giorni_lavorativi, _aggiungi_giorni_lavorativi,
@@ -98,7 +97,6 @@ def test_simula_cambia_focus():
          "stato": "Da iniziare", "profilo_richiesto": "Tecnico Mid",
          "dipendente_id": "D002", "predecessore": "T011"},
     ]
-    tasks_df = pd.DataFrame(tasks_data)
 
     dip_data = [
         {"id": "D001", "nome": "Marco Bianchi", "profilo": "Tecnico Senior",
@@ -106,7 +104,6 @@ def test_simula_cambia_focus():
         {"id": "D002", "nome": "Laura Verdi", "profilo": "Tecnico Mid",
          "ore_sett": 40, "costo_ora": 35, "competenze": []},
     ]
-    dip_df = pd.DataFrame(dip_data)
 
     proj_data = [
         {"id": "P001", "nome": "Digital Health Records", "cliente": "ASL Bari",
@@ -118,7 +115,6 @@ def test_simula_cambia_focus():
          "data_fine": datetime(2026, 4, 30), "budget_ore": 300, "valore_contratto": 50000,
          "descrizione": "", "fase_corrente": ""},
     ]
-    proj_df = pd.DataFrame(proj_data)
 
     # Marco (D001) si concentra al 100% su P001 (Digital Health) per 2 settimane
     # → il suo task su P002 (Catalogo prodotti) dovrebbe slittare
@@ -132,7 +128,7 @@ def test_simula_cambia_focus():
         "data_inizio_focus": "2026-03-09",
     }]
 
-    risultato = simula_scenario(tasks_df, dip_df, proj_df, modifiche)
+    risultato = simula_scenario(tasks_data, dip_data, proj_data, modifiche)
 
     print(f"\n  Task modificati: {len(risultato['task_modificati'])}")
     print(f"  Conseguenze: {len(risultato['conseguenze'])}")
@@ -159,13 +155,11 @@ def test_scadenza_bucata():
          "stato": "In corso", "profilo_richiesto": "Tecnico Senior",
          "dipendente_id": "D001", "predecessore": ""},
     ]
-    tasks_df = pd.DataFrame(tasks_data)
 
     dip_data = [
         {"id": "D001", "nome": "Marco Bianchi", "profilo": "Tecnico Senior",
          "ore_sett": 40, "costo_ora": 45, "competenze": []},
     ]
-    dip_df = pd.DataFrame(dip_data)
 
     proj_data = [
         {"id": "P003", "nome": "Portale Turismo", "cliente": "Regione Puglia",
@@ -173,7 +167,6 @@ def test_scadenza_bucata():
          "data_fine": datetime(2026, 4, 20), "budget_ore": 400, "valore_contratto": 60000,
          "descrizione": "", "fase_corrente": ""},
     ]
-    proj_df = pd.DataFrame(proj_data)
 
     # Sposta il task a fine maggio → sfora la scadenza del progetto (20 aprile)
     modifiche = [{
@@ -182,7 +175,7 @@ def test_scadenza_bucata():
         "nuova_fine": "2026-05-15",
     }]
 
-    risultato = simula_scenario(tasks_df, dip_df, proj_df, modifiche)
+    risultato = simula_scenario(tasks_data, dip_data, proj_data, modifiche)
 
     assert len(risultato["scadenze_bucate"]) > 0, \
         "Dovrebbe segnalare la scadenza bucata del Portale Turismo"
