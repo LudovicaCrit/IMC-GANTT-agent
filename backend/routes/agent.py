@@ -169,7 +169,6 @@ from data import (
 from gemini_client import (
     init_gemini, costruisci_contesto, chiedi_agente, is_agent_available,
 )
-from dataframes import _TASKS
 from contesto import get_contesto_ia
 from utils import get_oggi
 
@@ -268,20 +267,66 @@ def agent_chat(
     except (IndexError, KeyError):
         raise HTTPException(404, "Dipendente non trovato")
 
-    # NB: _TASKS() resta qui perché costruisci_contesto (gemini_client.py)
-    # consuma `tasks_attivi` come DataFrame (.iterrows, .iloc, indicizzazione
-    # booleana). Convertibile solo migrando anche gemini_client. Vedi nota
-    # nel docstring del modulo.
-    tasks_attivi = _TASKS()[
-        (_TASKS()["dipendente_id"] == req.dipendente_id) &
-        (_TASKS()["stato"].isin(["In corso", "Da iniziare"]))
-    ]
+    # Carica i dati per costruisci_contesto (gemini_client.py). Strada A:
+    # il chiamante prepara list[dict]/dict via SQLAlchemy, la funzione consuma.
+    # Filtri iso-comportamento col vecchio loader DataFrame:
+    #  - task del dipendente: stati ["In corso","Da iniziare"]
+    #  - colleghi: attivo=True, escluso il dipendente stesso
+    #  - task dei colleghi: stessi stati attivi
+    session = get_session()
+    try:
+        tasks_dip_rows = (
+            session.query(Task)
+            .options(joinedload(Task.fase_rel))
+            .filter(
+                Task.dipendente_id == req.dipendente_id,
+                Task.stato.in_(["In corso", "Da iniziare"]),
+            )
+            .all()
+        )
+        tasks_attivi = [
+            {"id": t.id, "nome": t.nome, "progetto_id": t.progetto_id,
+             "fase": t.fase_rel.nome if t.fase_rel else "",
+             "ore_stimate": t.ore_stimate, "stato": t.stato}
+            for t in tasks_dip_rows
+        ]
+
+        colleghi_rows = (
+            session.query(Dipendente)
+            .filter(Dipendente.attivo == True, Dipendente.id != req.dipendente_id)
+            .all()
+        )
+        colleghi_nomi = {d.id: d.nome for d in colleghi_rows}
+
+        if colleghi_nomi:
+            tasks_colleghi_rows = (
+                session.query(Task)
+                .filter(
+                    Task.dipendente_id.in_(list(colleghi_nomi.keys())),
+                    Task.stato.in_(["In corso", "Da iniziare"]),
+                )
+                .all()
+            )
+            tasks_colleghi = [
+                {"id": t.id, "nome": t.nome, "progetto_id": t.progetto_id,
+                 "dipendente_id": t.dipendente_id}
+                for t in tasks_colleghi_rows
+            ]
+        else:
+            tasks_colleghi = []
+
+        progetti_nomi = {p.id: p.nome for p in session.query(Progetto).all()}
+    finally:
+        session.close()
 
     contesto = costruisci_contesto(
         dip_data=dip,
         ore_compilate=req.ore_compilate,
         stati_compilati=req.stati_compilati,
         tasks_attivi=tasks_attivi,
+        colleghi_nomi=colleghi_nomi,
+        tasks_colleghi=tasks_colleghi,
+        progetti_nomi=progetti_nomi,
         ore_assenza=req.ore_assenza,
         tipo_assenza=req.tipo_assenza,
         nota_assenza=req.nota_assenza,
