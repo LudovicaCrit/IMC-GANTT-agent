@@ -314,10 +314,6 @@ export async function fetchSegnalazioni() {
   return apiFetch(`${API_BASE}/segnalazioni`);
 }
 
-export async function anteprimaImpatto(data) {
-  return apiFetch(`${API_BASE}/tasks/anteprima-impatto`, { method: 'POST', body: data });
-}
-
 export async function applicaModifiche(data) {
   return apiFetch(`${API_BASE}/tasks/applica`, { method: 'POST', body: data });
 }

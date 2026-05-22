@@ -5,11 +5,11 @@ backend/routes/tasks.py — Router per endpoint /api/tasks
 
 SCOPO
 ─────
-Espone gli endpoint per la lettura, modifica e simulazione di impatto
-su task. È usato da molteplici pagine del frontend:
+Espone gli endpoint per la lettura e modifica di task. È usato da
+molteplici pagine del frontend:
   - GANTT (lettura)
-  - Tavolo di Lavoro (anteprima impatto + applica modifiche)
-  - Pipeline (anteprima impatto + applica per "Conferma e avvia progetto")
+  - Tavolo di Lavoro (applica modifiche)
+  - Pipeline (applica per "Conferma e avvia progetto")
   - Analisi e Interventi (applica)
 
 ENDPOINT ESPOSTI
@@ -18,7 +18,6 @@ ENDPOINT ESPOSTI
 │ Path                                      │ Metodo   │ Auth                │
 ├───────────────────────────────────────────┼──────────┼─────────────────────┤
 │ /api/tasks                                │ GET      │ AUTH+FILTRO (Sc B)  │
-│ /api/tasks/anteprima-impatto              │ POST     │ require_manager     │
 │ /api/tasks/applica                        │ POST     │ require_manager     │
 │ /api/tasks/{task_id}/elimina              │ PATCH    │ require_manager     │
 └───────────────────────────────────────────┴──────────┴─────────────────────┘
@@ -32,24 +31,16 @@ DETTAGLIO ENDPOINT
    - Filtri opzionali: progetto_id, profilo.
    - Restituisce lista task con dati anagrafici (dipendente, progetto, fase).
 
-2. POST /api/tasks/anteprima-impatto
-   - Manager-only.
-   - Body: {modifiche: [...], nuovi_task: [...], progetto_id: ""}
-   - NON applica nulla — è una preview pura.
-   - Calcola saturazioni prima/dopo, alert per il management, GANTT
-     simulato dei progetti impattati.
-   - Usato da: Pipeline (anteprima nuovi task), Tavolo di Lavoro
-     (anteprima modifica task esistenti), Analisi e Interventi.
-
-3. POST /api/tasks/applica
+2. POST /api/tasks/applica
    - Manager-only.
    - Body: {modifiche, nuovi_task, progetto_id, cambia_stato_progetto}
    - APPLICA le modifiche ai dati reali (modifica task, crea task, cambia
      stato progetto se richiesto).
-   - Restituisce: risultati per ogni operazione + impatto post-applicazione.
+   - Restituisce: risultati per ogni operazione, nuovi task ids, stato
+     progetto cambiato.
    - Usato dai bottoni "Applica" / "Conferma e avvia progetto".
 
-4. PATCH /api/tasks/{task_id}/elimina
+3. PATCH /api/tasks/{task_id}/elimina
    - Manager-only.
    - Soft delete: cambia lo stato a "Eliminato" (non rimuove la riga).
    - 404 se task non esiste.
@@ -59,7 +50,7 @@ DETTAGLIO ENDPOINT
 PATTERN AUTH USATI
 ──────────────────
 - `get_current_user` + filter manuale: per /tasks (Scenario B in lettura).
-- `require_manager`: per anteprima-impatto, applica, elimina (mutazioni
+- `require_manager`: per applica, elimina (mutazioni
   che impattano l'intero progetto/azienda).
 
 NOTA STORICA — UNIFICAZIONE PREFISSO TASK
@@ -74,8 +65,8 @@ Ora tutti i 4 endpoint vivono coerentemente sotto /api/tasks/*.
 
 DIPENDENZE
 ──────────
-- `data` (modulo): `get_dipendente`, `get_tasks_progetto`, `aggiungi_task`,
-  `modifica_task`, `cambia_stato_progetto`, `calcola_impatto_saturazione`.
+- `data` (modulo): `get_dipendente`, `aggiungi_task`, `modifica_task`,
+  `cambia_stato_progetto`.
 - `models`: `Task`, `get_session` (lettura diretta Postgres).
 - `data_db_impl._to_dt`: normalizza `Date` SQL → `datetime` a mezzanotte
   per preservare il formato ISO `YYYY-MM-DDT00:00:00` storicamente esposto
@@ -106,14 +97,11 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import joinedload
 
-import pandas as pd  # pd.notna in anteprima_impatto (DataFrame da get_tasks_progetto)
-
 from deps import get_current_user, require_manager
 from models import Utente, Task, get_session
 from data import (
-    get_dipendente, get_tasks_progetto,
+    get_dipendente,
     aggiungi_task, modifica_task, cambia_stato_progetto,
-    calcola_impatto_saturazione,
 )
 from data_db_impl import _to_dt
 from utils import get_oggi
@@ -136,13 +124,6 @@ class NuovoTask(BaseModel):
     dipendente_id: str = ""
     predecessore: str = ""
     stato: str = "Da iniziare"
-
-
-class AnteprimaRequest(BaseModel):
-    """Richiesta di anteprima impatto — non modifica nulla."""
-    modifiche: list[AzioneModifica] = []
-    nuovi_task: list[NuovoTask] = []
-    progetto_id: str = ""
 
 
 class ApplicaRequest(BaseModel):
@@ -416,72 +397,6 @@ def modifica_task_singolo(
     return {"id": task_id, "aggiornato": True}
 
 
-@router.post("/anteprima-impatto")
-def anteprima_impatto(req: AnteprimaRequest, _: Utente = Depends(require_manager)):
-    """Calcola l'impatto delle modifiche proposte SENZA applicarle.
-
-    Restituisce saturazioni prima/dopo, alert per il management, e GANTT
-    simulato dei progetti impattati.
-    """
-    task_modifiche = []
-    for mod in req.modifiche:
-        valore = mod.nuovo_valore
-        if mod.campo in ("data_inizio", "data_fine"):
-            valore = datetime.fromisoformat(valore)
-        elif mod.campo == "ore_stimate":
-            valore = int(valore)
-        task_modifiche.append({
-            "task_id": mod.task_id,
-            "campo": mod.campo,
-            "nuovo_valore": valore,
-        })
-
-    task_nuovi = []
-    for nt in req.nuovi_task:
-        task_nuovi.append({
-            "id": f"PREVIEW_{len(task_nuovi)}",
-            "progetto_id": req.progetto_id,
-            "nome": nt.nome,
-            "fase": nt.fase,
-            "ore_stimate": nt.ore_stimate,
-            "data_inizio": datetime.fromisoformat(nt.data_inizio) if nt.data_inizio else get_oggi(),
-            "data_fine": datetime.fromisoformat(nt.data_fine) if nt.data_fine else get_oggi(),
-            "stato": nt.stato,
-            "profilo_richiesto": nt.profilo_richiesto,
-            "dipendente_id": nt.dipendente_id,
-            "predecessore": nt.predecessore,
-        })
-
-    impatto = calcola_impatto_saturazione(task_modifiche, task_nuovi if task_nuovi else None)
-
-    # GANTT simulato dei progetti impattati
-    gantt_impattati = {}
-    for proj in impatto["progetti_impattati"]:
-        tasks_proj = get_tasks_progetto(proj["id"])
-        gantt_tasks = []
-        for _, t in tasks_proj.iterrows():
-            try:
-                dip = get_dipendente(t["dipendente_id"])
-                gantt_tasks.append({
-                    "id": t["id"],
-                    "name": t["nome"],
-                    # DataFrame da get_tasks_progetto: usa pd.NaT per le date assenti.
-                    "start": t["data_inizio"].strftime("%Y-%m-%d") if pd.notna(t["data_inizio"]) else "",
-                    "end": t["data_fine"].strftime("%Y-%m-%d") if pd.notna(t["data_fine"]) else "",
-                    "progress": 100 if t["stato"] == "Completato" else 50 if t["stato"] == "In corso" else 0,
-                    "assignee": dip["nome"],
-                    "status": t["stato"],
-                })
-            except (IndexError, KeyError):
-                pass
-        gantt_impattati[proj["id"]] = gantt_tasks
-
-    return {
-        "impatto": impatto,
-        "gantt_progetti_impattati": gantt_impattati,
-    }
-
-
 @router.post("/applica")
 def applica_modifiche(req: ApplicaRequest, _: Utente = Depends(require_manager)):
     """Applica le modifiche ai dati reali.
@@ -538,17 +453,10 @@ def applica_modifiche(req: ApplicaRequest, _: Utente = Depends(require_manager))
     if req.cambia_stato_progetto and req.progetto_id:
         stato_cambiato = cambia_stato_progetto(req.progetto_id, req.cambia_stato_progetto)
 
-    # 4) Ricalcola impatto post-applicazione
-    impatto_post = calcola_impatto_saturazione(
-        [{"task_id": r["task_id"], "campo": "stato", "nuovo_valore": "check"} for r in risultati if r["applicato"]],
-        None
-    )
-
     return {
         "risultati": risultati,
         "nuovi_task_ids": nuovi_ids,
         "stato_progetto_cambiato": stato_cambiato,
-        "impatto_post": impatto_post,
     }
 
 

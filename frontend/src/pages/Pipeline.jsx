@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react'
-import { fetchDipendenti, fetchProgetti, fetchTasks, anteprimaImpatto, applicaModifiche, salvaBozza, caricaBozza, suggerisciTask, verificaPianificazione } from '../api'
+import { fetchDipendenti, fetchProgetti, fetchTasks, applicaModifiche, salvaBozza, caricaBozza, suggerisciTask, verificaPianificazione } from '../api'
 
 const OGGI = new Date()
 const PROFILI = ['AD', 'Manager IT', 'Senior IT Consultant', 'IT Consultant', 'Senior Consultant', 'Consultant', 'PM', 'Manager HR', 'Responsabile amministrazione', 'Addetto amministrazione']
