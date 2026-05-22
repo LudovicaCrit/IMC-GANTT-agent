@@ -16,7 +16,6 @@ from routes.segnalazioni import router as segnalazioni_router
 from routes.pianificazione import router as pianificazione_router
 from routes.consuntivi import router as consuntivi_router
 from routes.tasks import router as tasks_router
-from routes.simulazione import router as simulazione_router
 from routes.attivita_interne import router as attivita_interne_router
 from routes.configurazione import router as configurazione_router
 from routes.agent import router as agent_router
@@ -44,7 +43,6 @@ app.include_router(segnalazioni_router)
 app.include_router(pianificazione_router)
 app.include_router(consuntivi_router)
 app.include_router(tasks_router)
-app.include_router(simulazione_router)
 app.include_router(attivita_interne_router)
 app.include_router(configurazione_router)
 app.include_router(agent_router)

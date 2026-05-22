@@ -307,24 +307,6 @@ export async function suggerisciTask(data) {
 }
 
 // ═════════════════════════════════════════════════════════════════════════
-//  SIMULAZIONE RITARDI (LEGACY — usato dal vecchio GANTT)
-// ═════════════════════════════════════════════════════════════════════════
-
-export async function simulaRitardo(taskId, giorniRitardo) {
-  return apiFetch(`${API_BASE}/simulazione/ritardo`, {
-    method: 'POST',
-    body: { task_id: taskId, giorni_ritardo: giorniRitardo },
-  });
-}
-
-export async function simulaRitardoMultiplo(ritardi) {
-  return apiFetch(`${API_BASE}/simulazione/ritardo-multiplo`, {
-    method: 'POST',
-    body: { ritardi },
-  });
-}
-
-// ═════════════════════════════════════════════════════════════════════════
 //  SEGNALAZIONI / ANTEPRIMA IMPATTO / APPLICA MODIFICHE
 // ═════════════════════════════════════════════════════════════════════════
 
