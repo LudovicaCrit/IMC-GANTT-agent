@@ -237,10 +237,13 @@ def saturazione_periodo(
         if task_da_escludere is not None:
             t_inizio = _to_dt(task_da_escludere.data_inizio)
             t_fine = _to_dt(task_da_escludere.data_fine)
-            # Calcola se questo task si sovrappone alla settimana w
+            # Calcola se questo task si sovrappone alla settimana w.
             # NB: confronto con datetime (lun_w_dt), non date pura (lun_w)
             # perché pandas Timestamp non supporta confronto con date.
-            if t_inizio <= lun_w_dt + timedelta(days=4) and t_fine >= lun_w_dt:
+            # Task senza date: non databile sulla settimana → niente da escludere.
+            if (t_inizio is not None and t_fine is not None
+                    and t_inizio <= lun_w_dt + timedelta(days=4)
+                    and t_fine >= lun_w_dt):
                 weeks_task = max(1, (t_fine - t_inizio).days / 7)
                 ore_task_in_w = (task_da_escludere.ore_stimate or 0) / weeks_task
                 carico_w = max(0, carico_w - ore_task_in_w)
@@ -307,10 +310,16 @@ def suggerisci_bilanciamento(_: Utente = Depends(require_manager)):
             # Calcola ore settimanali per questo task
             t_inizio = _to_dt(t.data_inizio)
             t_fine = _to_dt(t.data_fine)
-            durata_giorni = max(1, (t_fine - t_inizio).days)
-            durata_sett = max(1, durata_giorni / 7)
             ore_stimate = t.ore_stimate or 0
-            ore_sett_task = round(ore_stimate / durata_sett, 1)
+            # Task senza date: non distribuibile sulla settimana, ore_sett=0.
+            # Resta visibile in task_list ma non contribuisce alla saturazione
+            # né alle proposte di redistribuzione (sort by ore_sett a valle).
+            if t_inizio is not None and t_fine is not None:
+                durata_giorni = max(1, (t_fine - t_inizio).days)
+                durata_sett = max(1, durata_giorni / 7)
+                ore_sett_task = round(ore_stimate / durata_sett, 1)
+            else:
+                ore_sett_task = 0
 
             proj_nome = t.progetto.nome if t.progetto else "?"
 

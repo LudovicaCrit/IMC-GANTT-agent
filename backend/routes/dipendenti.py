@@ -162,8 +162,8 @@ def dettaglio_dipendente(
                 "fase": t.fase_rel.nome if t.fase_rel else "",
                 "stato": t.stato,
                 "ore_stimate": int(t.ore_stimate or 0),
-                "data_inizio": _to_dt(t.data_inizio).isoformat(),
-                "data_fine": _to_dt(t.data_fine).isoformat(),
+                "data_inizio": _to_dt(t.data_inizio).isoformat() if t.data_inizio else None,
+                "data_fine": _to_dt(t.data_fine).isoformat() if t.data_fine else None,
             }
             for t in tasks
         ],

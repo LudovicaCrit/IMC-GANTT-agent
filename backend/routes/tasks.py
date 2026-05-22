@@ -106,6 +106,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import joinedload
 
+import pandas as pd  # pd.notna in anteprima_impatto (DataFrame da get_tasks_progetto)
+
 from deps import get_current_user, require_manager
 from models import Utente, Task, get_session
 from data import (
@@ -189,8 +191,8 @@ def lista_tasks(
             "fase": t.fase_rel.nome if t.fase_rel else "",
             "stato": t.stato,
             "ore_stimate": int(t.ore_stimate or 0),
-            "data_inizio": _to_dt(t.data_inizio).isoformat(),
-            "data_fine": _to_dt(t.data_fine).isoformat(),
+            "data_inizio": _to_dt(t.data_inizio).isoformat() if t.data_inizio else None,
+            "data_fine": _to_dt(t.data_fine).isoformat() if t.data_fine else None,
             "profilo_richiesto": t.profilo_richiesto or "",
             "dipendente_id": t.dipendente_id or "",
             "dipendente_nome": dip["nome"],
@@ -463,8 +465,9 @@ def anteprima_impatto(req: AnteprimaRequest, _: Utente = Depends(require_manager
                 gantt_tasks.append({
                     "id": t["id"],
                     "name": t["nome"],
-                    "start": t["data_inizio"].strftime("%Y-%m-%d"),
-                    "end": t["data_fine"].strftime("%Y-%m-%d"),
+                    # DataFrame da get_tasks_progetto: usa pd.NaT per le date assenti.
+                    "start": t["data_inizio"].strftime("%Y-%m-%d") if pd.notna(t["data_inizio"]) else "",
+                    "end": t["data_fine"].strftime("%Y-%m-%d") if pd.notna(t["data_fine"]) else "",
                     "progress": 100 if t["stato"] == "Completato" else 50 if t["stato"] == "In corso" else 0,
                     "assignee": dip["nome"],
                     "status": t["stato"],

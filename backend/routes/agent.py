@@ -435,8 +435,8 @@ def analisi_gantt(
                     "nome": t.nome,
                     "progetto": t.progetto.nome if t.progetto else "?",
                     "ore_stimate": int(t.ore_stimate or 0),
-                    "data_inizio": t.data_inizio.strftime("%Y-%m-%d"),
-                    "data_fine": t.data_fine.strftime("%Y-%m-%d"),
+                    "data_inizio": t.data_inizio.strftime("%Y-%m-%d") if t.data_inizio else None,
+                    "data_fine": t.data_fine.strftime("%Y-%m-%d") if t.data_fine else None,
                     "stato": t.stato,
                     "profilo_richiesto": t.profilo_richiesto or "",
                     "predecessore": t.predecessore if t.predecessore else None,
@@ -453,7 +453,7 @@ def analisi_gantt(
             "nome": p.nome,
             "cliente": p.cliente,
             "stato": p.stato,
-            "data_fine": p.data_fine.strftime("%Y-%m-%d"),
+            "data_fine": p.data_fine.strftime("%Y-%m-%d") if p.data_fine else None,
             "budget_ore": int(p.budget_ore or 0),
         })
 
