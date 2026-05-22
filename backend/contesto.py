@@ -73,8 +73,10 @@ attuali noti:
 
 DIPENDENZE
 ──────────
-- `data` — `get_dipendente`, `carico_settimanale_dipendente`.
-- `dataframes` — `_DIPENDENTI`, `_PROGETTI`, `_TASKS`.
+- `data` — `carico_settimanale_dipendente`.
+- `models` — `Dipendente`, `Progetto`, `Task`, `get_session`
+  (lettura SQLAlchemy diretta nel modulo: strategia B, il contesto è
+  globale e non dipende dalla richiesta del chiamante).
 - `utils` — `get_oggi`.
 
 STORIA
@@ -87,8 +89,8 @@ i router possono importarlo correttamente.
 """
 
 from datetime import datetime
-from data import get_dipendente, carico_settimanale_dipendente
-from dataframes import _DIPENDENTI, _PROGETTI, _TASKS
+from data import carico_settimanale_dipendente
+from models import Dipendente, Progetto, Task, get_session
 from utils import get_oggi
 
 
@@ -113,41 +115,71 @@ def get_contesto_ia():
         return _contesto_cache["data"]
 
     # ── Cache miss: ricostruisci ──
+    # Strategia B: il modulo apre lui la session e fa le 3 query.
+    # Filtri iso-comportamento col vecchio loader DataFrame:
+    #  - progetti: stato in ("In esecuzione","In bando")
+    #  - task: nessun filtro (vecchio _load_tasks non filtrava)
+    #  - dipendenti: attivo=True (come _load_dipendenti)
+    session = get_session()
+    try:
+        progetti_rows = (
+            session.query(Progetto)
+            .filter(Progetto.stato.in_(["In esecuzione", "In bando"]))
+            .all()
+        )
+        tasks_rows = session.query(Task).all()
+        dipendenti_rows = (
+            session.query(Dipendente)
+            .filter(Dipendente.attivo == True)
+            .all()
+        )
+    finally:
+        session.close()
+
+    # Indici precostruiti: sostituiscono la bool-index ripetuta su PROGETTI
+    # e il N+1 di get_dipendente() del vecchio codice.
+    # Nota iso-comportamento: l'originale chiamava get_dipendente() che a
+    # sua volta filtra attivo=True e per id non trovato ritorna
+    # "Sconosciuto ({did})" — qui replichiamo lo stesso fallback.
+    dipendenti_nomi = {d.id: d.nome for d in dipendenti_rows}
+    tasks_per_progetto = {}
+    for t in tasks_rows:
+        tasks_per_progetto.setdefault(t.progetto_id, []).append(t)
+
     progetti_ctx = []
-    for _, p in _PROGETTI().iterrows():
-        if p["stato"] not in ("In esecuzione", "In bando"):
-            continue
-        tasks_prog = _TASKS()[_TASKS()["progetto_id"] == p["id"]]
+    for p in progetti_rows:
         tasks_list = []
-        for _, t in tasks_prog.iterrows():
-            dip_nome = (
-                get_dipendente(t["dipendente_id"])["nome"]
-                if t["dipendente_id"]
-                else "Non assegnato"
-            )
+        for t in tasks_per_progetto.get(p.id, []):
+            if not t.dipendente_id:
+                dip_nome = "Non assegnato"
+            else:
+                dip_nome = dipendenti_nomi.get(
+                    t.dipendente_id, f"Sconosciuto ({t.dipendente_id})"
+                )
             tasks_list.append({
-                "id": t["id"], "nome": t["nome"],
+                "id": t.id, "nome": t.nome,
                 "assegnato_a": dip_nome,
-                "inizio": t["data_inizio"].strftime("%Y-%m-%d") if t["data_inizio"] else "",
-                "fine": t["data_fine"].strftime("%Y-%m-%d") if t["data_fine"] else "",
-                "ore_stimate": int(t["ore_stimate"]),
-                "stato": t["stato"],
+                "inizio": t.data_inizio.strftime("%Y-%m-%d") if t.data_inizio else "",
+                "fine": t.data_fine.strftime("%Y-%m-%d") if t.data_fine else "",
+                # bugfix: ore_stimate da ORM può essere None (era 0 in _load_tasks).
+                "ore_stimate": int(t.ore_stimate or 0),
+                "stato": t.stato,
             })
         progetti_ctx.append({
-            "id": p["id"], "nome": p["nome"],
-            "cliente": p["cliente"], "stato": p["stato"],
-            "scadenza": p["data_fine"].strftime("%Y-%m-%d") if p["data_fine"] else "",
+            "id": p.id, "nome": p.nome,
+            "cliente": p.cliente, "stato": p.stato,
+            "scadenza": p.data_fine.strftime("%Y-%m-%d") if p.data_fine else "",
             "task": tasks_list,
         })
 
     dipendenti_ctx = []
-    for _, d in _DIPENDENTI().iterrows():
-        carico = carico_settimanale_dipendente(d["id"], get_oggi())
+    for d in dipendenti_rows:
+        carico = carico_settimanale_dipendente(d.id, get_oggi())
         dipendenti_ctx.append({
-            "id": d["id"], "nome": d["nome"],
-            "profilo": d["profilo"],
-            "ore_sett": int(d["ore_sett"]),
-            "saturazione_pct": round(carico / d["ore_sett"] * 100),
+            "id": d.id, "nome": d.nome,
+            "profilo": d.profilo,
+            "ore_sett": int(d.ore_sett),
+            "saturazione_pct": round(carico / d.ore_sett * 100),
         })
 
     contesto = {
