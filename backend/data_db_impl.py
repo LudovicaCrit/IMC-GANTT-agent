@@ -11,7 +11,7 @@ from models import (
 )
 
 # ══════════════════════════════════════════════════════════════════════
-# CARICAMENTO DataFrame (cache — ricaricati dopo le modifiche)
+# UTILITY DI CONVERSIONE
 # ══════════════════════════════════════════════════════════════════════
 
 def _to_dt(d):
@@ -19,89 +19,6 @@ def _to_dt(d):
     if isinstance(d, date) and not isinstance(d, datetime):
         return datetime.combine(d, datetime.min.time())
     return d
-
-
-def _load_dipendenti():
-    session = get_session()
-    rows = session.query(Dipendente).filter(Dipendente.attivo == True).all()
-    data = [{"id": r.id, "nome": r.nome, "profilo": r.profilo,
-             "ore_sett": r.ore_sett, "costo_ora": r.costo_ora or 0,
-             "competenze": r.competenze or []} for r in rows]
-    session.close()
-    return pd.DataFrame(data) if data else pd.DataFrame(columns=["id","nome","profilo","ore_sett","costo_ora","competenze"])
-
-
-def _load_progetti():
-    session = get_session()
-    rows = session.query(Progetto).all()
-    data = [{"id": r.id, "nome": r.nome, "cliente": r.cliente, "stato": r.stato,
-             "data_inizio": _to_dt(r.data_inizio), "data_fine": _to_dt(r.data_fine),
-             "budget_ore": r.budget_ore or 0, "valore_contratto": r.valore_contratto or 0,
-             "descrizione": r.descrizione or "", "fase_corrente": r.fase_corrente or ""} for r in rows]
-    session.close()
-    return pd.DataFrame(data) if data else pd.DataFrame()
-
-
-def _load_tasks():
-    session = get_session()
-    # joinedload per leggere fase_rel.nome senza N+1 query
-    from sqlalchemy.orm import joinedload
-    rows = session.query(Task).options(joinedload(Task.fase_rel)).all()
-    data = [{"id": r.id, "progetto_id": r.progetto_id, "nome": r.nome,
-             # Step 2.1 D1: la chiave "fase" è ora DERIVATA dalla relazione.
-             # Mantenuta nel DataFrame per retrocompatibilità con router e frontend
-             # che leggono task['fase']. La fonte di verità è fase_id.
-             "fase_id": r.fase_id,
-             "fase": r.fase_rel.nome if r.fase_rel else "",
-             "ore_stimate": r.ore_stimate or 0,
-             "data_inizio": _to_dt(r.data_inizio), "data_fine": _to_dt(r.data_fine),
-             "stato": r.stato, "profilo_richiesto": r.profilo_richiesto or "",
-             "dipendente_id": r.dipendente_id or "", "predecessore": r.predecessore or ""} for r in rows]
-    session.close()
-    df = pd.DataFrame(data) if data else pd.DataFrame(columns=["id","progetto_id","nome","fase_id","fase","ore_stimate","data_inizio","data_fine","stato","profilo_richiesto","dipendente_id","predecessore"])
-    return df.fillna({"predecessore": ""})
-
-
-def _load_consuntivi():
-    session = get_session()
-    rows = session.query(Consuntivo).all()
-    data = [{"task_id": r.task_id, "dipendente_id": r.dipendente_id,
-             "settimana": _to_dt(r.settimana), "ore_dichiarate": r.ore_dichiarate,
-             "compilato": r.compilato, "data_compilazione": r.data_compilazione,
-             "nota": r.nota or ""} for r in rows]
-    session.close()
-    return pd.DataFrame(data) if data else pd.DataFrame(columns=["task_id","dipendente_id","settimana","ore_dichiarate","compilato","data_compilazione","nota"])
-
-
-# Cache globale — usa un dict mutabile così _reload() funziona
-# anche quando importato con "from data_db_impl import *"
-_cache = {
-    "DIPENDENTI": _load_dipendenti(),
-    "PROGETTI": _load_progetti(),
-    "TASKS": _load_tasks(),
-    "CONSUNTIVI": _load_consuntivi(),
-}
-
-# Esponi come variabili di modulo (per compatibilità)
-DIPENDENTI = _cache["DIPENDENTI"]
-PROGETTI = _cache["PROGETTI"]
-TASKS = _cache["TASKS"]
-CONSUNTIVI = _cache["CONSUNTIVI"]
-
-
-def _reload():
-    global DIPENDENTI, PROGETTI, TASKS
-    _cache["DIPENDENTI"] = _load_dipendenti()
-    _cache["PROGETTI"] = _load_progetti()
-    _cache["TASKS"] = _load_tasks()
-    DIPENDENTI = _cache["DIPENDENTI"]
-    PROGETTI = _cache["PROGETTI"]
-    TASKS = _cache["TASKS"]
-    # Aggiorna anche nel modulo data (il router)
-    import data
-    data.DIPENDENTI = DIPENDENTI
-    data.PROGETTI = PROGETTI
-    data.TASKS = TASKS
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -383,7 +300,6 @@ def aggiungi_task(progetto_id, nome, fase, ore_stimate, data_inizio, data_fine,
             ))
     session.commit()
     session.close()
-    _reload()
     return new_id
 
 
@@ -400,7 +316,6 @@ def modifica_task(task_id, **kwargs):
             setattr(task, campo, valore)
     session.commit()
     session.close()
-    _reload()
     return True
 
 
@@ -413,7 +328,6 @@ def cambia_stato_progetto(progetto_id, nuovo_stato):
     proj.stato = nuovo_stato
     session.commit()
     session.close()
-    _reload()
     return True
 
 
@@ -477,7 +391,6 @@ def salva_consuntivo(dipendente_id, settimana, ore_per_task, stati_per_task,
     stati_per_task: dict {task_id: stato}
     """
     from models import PresenzaSettimanale, Spesa
-    global CONSUNTIVI
 
     session = get_session()
     settimana_date = settimana.date() if isinstance(settimana, datetime) else settimana
@@ -548,8 +461,5 @@ def salva_consuntivo(dipendente_id, settimana, ore_per_task, stati_per_task,
 
     session.commit()
     session.close()
-
-    # Ricarica consuntivi nella cache
-    CONSUNTIVI = _load_consuntivi()
 
     return True

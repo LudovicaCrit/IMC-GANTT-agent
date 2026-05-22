@@ -101,7 +101,7 @@ from models import (
     STATI_PROGETTO, STATI_PROGETTO_ATTIVI,
 )
 from data import ore_consuntivate_progetto, tasso_compilazione_progetto
-from data_db_impl import _next_progetto_id, genera_id_task_multipli, _reload, _to_dt
+from data_db_impl import _next_progetto_id, genera_id_task_multipli, _to_dt
 
 
 # ── DTO ──────────────────────────────────────────────────────────────────
@@ -343,7 +343,6 @@ def crea_progetto(req: ProgettoCreate, _: Utente = Depends(require_manager)):
         )
         session.add(nuovo)
         session.commit()
-        _reload()  # invalida cache DataFrame: il nuovo progetto è subito visibile alle GET
         return {"id": progetto_id, "nome": req.nome, "stato": req.stato}
     finally:
         session.close()
@@ -488,7 +487,6 @@ def crea_progetto_completo(req: ProgettoCompletoCreate, _: Utente = Depends(requ
 
         # ── 4. Commit unico: o tutto, o niente ───────────────────────────
         session.commit()
-        _reload()  # invalida la cache DataFrame: tutto subito visibile alle GET
 
         return {
             "id": progetto_id,
@@ -665,7 +663,6 @@ def completa_progetto(progetto_id: str, req: ProgettoCompletoCreate,
 
         # ── 5. Commit unico ──────────────────────────────────────────────
         session.commit()
-        _reload()
 
         return {
             "id": progetto_id,
@@ -790,7 +787,6 @@ def aggiungi_task_multipli(progetto_id: str, req: StaffingRequest,
 
         # ── 4. Commit unico ──────────────────────────────────────────────
         session.commit()
-        _reload()
 
         return {
             "progetto_id": progetto_id,
@@ -833,7 +829,6 @@ def aggiorna_progetto(progetto_id: str, req: ProgettoUpdate, _: Utente = Depends
             setattr(prog, field, value)
 
         session.commit()
-        _reload()  # invalida cache DataFrame
         return {"id": progetto_id, "aggiornato": True, "stato": prog.stato}
     finally:
         session.close()
@@ -861,7 +856,6 @@ def elimina_progetto(progetto_id: str, _: Utente = Depends(require_manager)):
 
         session.delete(prog)
         session.commit()
-        _reload()  # invalida cache DataFrame
         return None
     finally:
         session.close()
