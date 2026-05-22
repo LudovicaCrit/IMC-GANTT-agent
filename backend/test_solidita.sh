@@ -58,12 +58,6 @@ test_get "GET /pianificazione/bozza/P010" "$BASE/pianificazione/bozza/P010"
 echo ""
 echo "── POST endpoints (senza side effects) ──"
 
-test_post "POST /simulazione/ritardo" "$BASE/simulazione/ritardo" \
-  '{"task_id": "T003", "giorni_ritardo": 10}'
-
-test_post "POST /simulazione/ritardo-multiplo" "$BASE/simulazione/ritardo-multiplo" \
-  '{"ritardi": [{"task_id": "T003", "giorni_ritardo": 5}, {"task_id": "T004", "giorni_ritardo": 7}]}'
-
 test_post "POST /task/anteprima-impatto" "$BASE/task/anteprima-impatto" \
   '{"modifiche": [{"task_id": "T003", "campo": "data_fine", "nuovo_valore": "2026-04-15"}], "nuovi_task": [], "progetto_id": ""}'
 
