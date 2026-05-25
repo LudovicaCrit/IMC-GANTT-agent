@@ -114,6 +114,17 @@ class AzioneModifica(BaseModel):
     nuovo_valore: str    # tutto come stringa, il backend converte
 
 
+class DipendenzaInput(BaseModel):
+    """Step 3.1 (25/05/2026): una dipendenza in input — sostituisce il vecchio
+    campo `predecessore` stringa singola. Vedi alembic e5f6a7b8c9d0.
+
+      - task_predecessore_id: id del task da cui dipende
+      - tipo_dipendenza:      uno di TIPI_DIPENDENZA (FS/SS/FF/SF). Default 'FS'.
+    """
+    task_predecessore_id: str
+    tipo_dipendenza: str = "FS"
+
+
 class NuovoTask(BaseModel):
     nome: str
     fase: str = ""
@@ -122,7 +133,10 @@ class NuovoTask(BaseModel):
     data_fine: str = ""          # ISO format
     profilo_richiesto: str = ""
     dipendente_id: str = ""
-    predecessore: str = ""
+    # Step 3.1 (25/05/2026): era `predecessore: str` (singolo, implicitamente
+    # FS). Ora lista tipizzata che andrà in `dipendenza_task`. Vedi alembic
+    # e5f6a7b8c9d0.
+    dipendenze: list[DipendenzaInput] = []
     stato: str = "Da iniziare"
 
 
@@ -145,11 +159,16 @@ def lista_tasks(
     current_user: Utente = Depends(get_current_user),
 ):
     """Lista task con filtri opzionali (Scenario B in lettura)."""
+    # Step 3.1 (25/05/2026): selectinload sulle dipendenze entranti — 1 query
+    # in più, evita N+1 sul nuovo campo `dipendenze` (vedi alembic e5f6a7b8c9d0).
+    from sqlalchemy.orm import selectinload
     session = get_session()
     # joinedload su progetto + fase_rel: evita N+1 nel render del nome
     # progetto e del nome fase.
     q = session.query(Task).options(
-        joinedload(Task.progetto), joinedload(Task.fase_rel)
+        joinedload(Task.progetto),
+        joinedload(Task.fase_rel),
+        selectinload(Task.dipendenze_entranti),
     ).filter(Task.stato != "Eliminato")
     # Scenario B: user vede solo i propri task, manager vede tutto
     if current_user.ruolo_app != "manager":
@@ -177,7 +196,13 @@ def lista_tasks(
             "profilo_richiesto": t.profilo_richiesto or "",
             "dipendente_id": t.dipendente_id or "",
             "dipendente_nome": dip["nome"],
-            "predecessore": t.predecessore or "",
+            # Step 3.1 (25/05/2026): era `"predecessore": t.predecessore or ""`.
+            # Ora lista tipizzata dalla tabella dipendenza_task.
+            "dipendenze": [
+                {"task_predecessore_id": d.task_predecessore_id,
+                 "tipo_dipendenza": d.tipo_dipendenza}
+                for d in t.dipendenze_entranti
+            ],
         })
     return result
 
@@ -204,12 +229,33 @@ class NuovoTaskSingolo(BaseModel):
     data_fine: Optional[str] = None      # ISO
     profilo_richiesto: str = ""
     dipendente_id: str = ""
-    predecessore: str = ""
+    # Step 3.1 (25/05/2026): era `predecessore: str` (singolo, implicitamente
+    # FS). Ora lista tipizzata che andrà in `dipendenza_task`. Vedi
+    # DipendenzaInput sopra + alembic e5f6a7b8c9d0.
+    dipendenze: list[DipendenzaInput] = []
     stato: str = "Da iniziare"
 
 
 class ModificaTaskSingolo(BaseModel):
-    """Body per PATCH /api/tasks/{task_id}. Tutti i campi opzionali."""
+    """Body per PATCH /api/tasks/{task_id}. Tutti i campi opzionali.
+
+    Step 3.1 (25/05/2026): il campo `predecessore` è stato RIMOSSO da questo
+    DTO. La modifica delle dipendenze tra task richiede un endpoint dedicato
+    che non è ancora esposto — sarà parte del design di Cantiere
+    (vedi PIANO_3_MIGRATION.md e handoff v19).
+
+    Comportamento noto sui campi ignorati: Pydantic v2 con la config di
+    default (`extra="ignore"`) scarta in silenzio i campi non dichiarati.
+    Se un client invia ancora `predecessore` in PATCH, succede uno dei due:
+      - payload SOLO `predecessore`: il PATCH risponde 400 "Nessun campo da
+        modificare" — errore visibile, OK.
+      - payload `predecessore` + altri campi validi: gli altri vengono
+        applicati e `predecessore` ignorato → SILENT PARTIAL SUCCESS (il
+        client crede di aver impostato la dipendenza, non è così).
+    Accettato come comportamento noto per la Migration #1 (limitato e
+    tracciato qui), da rivedere quando Cantiere avrà l'endpoint dedicato
+    alla modifica delle dipendenze.
+    """
     nome: Optional[str] = None
     fase_id: Optional[int] = None
     ore_stimate: Optional[int] = None
@@ -217,7 +263,6 @@ class ModificaTaskSingolo(BaseModel):
     data_fine: Optional[str] = None
     profilo_richiesto: Optional[str] = None
     dipendente_id: Optional[str] = None
-    predecessore: Optional[str] = None
     stato: Optional[str] = None
 
 
@@ -307,7 +352,6 @@ def crea_task_singolo(req: NuovoTaskSingolo, _: Utente = Depends(require_manager
 
     # Normalizza FK: stringa vuota → None (Postgres rifiuta '' come FK valido)
     dip_id = req.dipendente_id or None
-    pred = req.predecessore or None
 
     try:
         new_id = aggiungi_task(
@@ -320,7 +364,11 @@ def crea_task_singolo(req: NuovoTaskSingolo, _: Utente = Depends(require_manager
             stato=req.stato,
             profilo_richiesto=req.profilo_richiesto,
             dipendente_id=dip_id,
-            predecessore=pred,
+            # Step 3.1 (25/05/2026): era `predecessore=pred` (stringa singola).
+            # `aggiungi_task` valida le dipendenze a monte (predecessori
+            # esistenti, no self-loop, no duplicati, tipo ammesso) e converte
+            # ValueError → HTTP 422 sotto.
+            dipendenze=[d.model_dump() for d in req.dipendenze],
         )
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
@@ -343,7 +391,9 @@ def modifica_task_singolo(
     payload = req.model_dump(exclude_unset=True)
 
     # Campi FK: stringa vuota → None (Postgres rifiuta '' come FK valido)
-    CAMPI_FK = ("dipendente_id", "predecessore")
+    # Step 3.1 (25/05/2026): rimosso "predecessore" dalla tupla — il campo
+    # non è più nel DTO ModificaTaskSingolo (vedi sua docstring).
+    CAMPI_FK = ("dipendente_id",)
 
     for k, v in payload.items():
         if k in ("data_inizio", "data_fine") and v is not None:
@@ -408,6 +458,22 @@ def applica_modifiche(req: ApplicaRequest, _: Utente = Depends(require_manager))
 
     # 1) Applica modifiche a task esistenti
     for mod in req.modifiche:
+        # Step 3.1 (25/05/2026): predecessore non è più un campo del task —
+        # le dipendenze vivono in `dipendenza_task`. Senza questo check
+        # esplicito, `modifica_task` ignorerebbe il campo via hasattr-guard
+        # ma risponderebbe ok=True → silent failure ingannevole. Rifiuto
+        # esplicito con motivo. La modifica delle dipendenze richiede
+        # endpoint dedicato (futuro, design Cantiere).
+        if mod.campo == "predecessore":
+            risultati.append({
+                "task_id": mod.task_id,
+                "campo": mod.campo,
+                "applicato": False,
+                "motivo": "Il campo 'predecessore' non esiste più (Step 3.1). "
+                          "Le dipendenze si modificano via endpoint dedicato.",
+            })
+            continue
+
         valore = mod.nuovo_valore
         if mod.campo in ("data_inizio", "data_fine"):
             valore = datetime.fromisoformat(valore)
@@ -435,11 +501,16 @@ def applica_modifiche(req: ApplicaRequest, _: Utente = Depends(require_manager))
                 stato=nt.stato,
                 profilo_richiesto=nt.profilo_richiesto,
                 dipendente_id=nt.dipendente_id,
-                predecessore=nt.predecessore,
+                # Step 3.1 (25/05/2026): era `predecessore=nt.predecessore`.
+                # Vedi DipendenzaInput in cima al file.
+                dipendenze=[d.model_dump() for d in nt.dipendenze],
             )
         except ValueError as e:
             # Step 2.1 D1: aggiungi_task lancia ValueError se la stringa fase
             # non corrisponde a nessuna Fase del progetto.
+            # Step 3.1: aggiungi_task lancia ValueError anche per dipendenze
+            # invalide (predecessori inesistenti, self-loop, duplicati,
+            # tipo non ammesso). Stesso 422 al chiamante.
             raise HTTPException(status_code=422, detail=str(e))
         nuovi_ids.append(new_id)
         risultati.append({

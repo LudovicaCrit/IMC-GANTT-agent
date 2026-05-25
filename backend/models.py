@@ -16,7 +16,7 @@ from dotenv import load_dotenv
 load_dotenv()
 from sqlalchemy import (
     create_engine, Column, Integer, String, Float, Boolean, Text, Date,
-    DateTime, ForeignKey, UniqueConstraint, JSON, SmallInteger,
+    DateTime, ForeignKey, UniqueConstraint, CheckConstraint, JSON, SmallInteger,
 )
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 
@@ -73,6 +73,17 @@ STATI_TASK = (
     "Sospeso",
     "Annullato",
 )
+
+# Step 3.1 (25/05/2026): tipi di dipendenza tra task ammessi.
+# Sostituiscono la vecchia colonna `Task.predecessore` (stringa singola, tipo
+# non registrato — implicitamente FS) con la tabella-grafo `dipendenza_task`.
+# - FS: Finish-to-Start  — il successore inizia quando il predecessore finisce (default storico)
+# - SS: Start-to-Start   — il successore inizia quando il predecessore inizia
+# - FF: Finish-to-Finish — il successore finisce quando il predecessore finisce
+# - SF: Start-to-Finish  — il successore finisce quando il predecessore inizia (raro)
+# CHECK constraint a livello DB: vedi migration alembic e5f6a7b8c9d0
+# (ck_dipendenza_task_tipo). Anche nel modello, su DipendenzaTask.
+TIPI_DIPENDENZA = ("FS", "SS", "FF", "SF")
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -334,7 +345,13 @@ class Task(Base):
     stato = Column(String(20), nullable=False, default="Da iniziare")
     motivo_blocco = Column(Text, nullable=True)  # "Perché?" quando Bloccato/In ritardo
     profilo_richiesto = Column(String(60), nullable=True)
-    predecessore = Column(String(10), nullable=True, default="")
+    # Step 3.1 (25/05/2026): rimossa colonna `predecessore` String singola.
+    # Le dipendenze tra task vivono ora nella tabella `dipendenza_task`
+    # (modello-grafo: dipendenze multiple e tipizzate FS/SS/FF/SF).
+    # Per leggerle: usare le relationship `dipendenze_entranti` (questo task
+    # è successore → i suoi predecessori sono lì) e `dipendenze_uscenti`
+    # (questo task è predecessore → lista dei suoi successori).
+    # Vedi alembic e5f6a7b8c9d0.
     ordine = Column(SmallInteger, nullable=True)
     note = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -345,6 +362,83 @@ class Task(Base):
     assegnazioni = relationship("Assegnazione", back_populates="task", cascade="all, delete-orphan")
     consuntivi = relationship("Consuntivo", back_populates="task")
     dipendente_id = Column(String(10), ForeignKey("dipendenti.id"), nullable=True)
+
+    # Dipendenze entranti: righe di DipendenzaTask in cui questo task è
+    # successore (cioè i suoi predecessori). Dipendenze uscenti: dove è
+    # predecessore (cioè i suoi successori). Cascade delete: rimuovendo il
+    # task spariscono anche le sue dipendenze, allineato alla FK ON DELETE
+    # CASCADE definita in alembic e5f6a7b8c9d0.
+    dipendenze_entranti = relationship(
+        "DipendenzaTask",
+        foreign_keys="DipendenzaTask.task_successore_id",
+        back_populates="successore",
+        cascade="all, delete-orphan",
+    )
+    dipendenze_uscenti = relationship(
+        "DipendenzaTask",
+        foreign_keys="DipendenzaTask.task_predecessore_id",
+        back_populates="predecessore",
+        cascade="all, delete-orphan",
+    )
+
+
+class DipendenzaTask(Base):
+    """Dipendenza tra task (modello-grafo).
+
+    Step 3.1 (25/05/2026, alembic e5f6a7b8c9d0): sostituisce la vecchia colonna
+    `Task.predecessore` (stringa singola). Permette dipendenze MULTIPLE e
+    tipizzate FS/SS/FF/SF — vedi TIPI_DIPENDENZA in cima al modulo.
+
+      - task_predecessore_id: il task da cui dipende
+      - task_successore_id:   il task che dipende
+      - tipo_dipendenza:      'FS' (default), 'SS', 'FF', 'SF'
+
+    Vincoli (a livello DB e modello — vedi migration alembic e5f6a7b8c9d0):
+      UNIQUE (task_predecessore_id, task_successore_id) → uq_dipendenza_task
+      CHECK  (task_predecessore_id != task_successore_id) → ck_dipendenza_task_no_self
+      CHECK  (tipo_dipendenza IN TIPI_DIPENDENZA)         → ck_dipendenza_task_tipo
+    """
+    __tablename__ = "dipendenza_task"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    task_predecessore_id = Column(
+        String(10),
+        ForeignKey("task.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    task_successore_id = Column(
+        String(10),
+        ForeignKey("task.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    tipo_dipendenza = Column(String(2), nullable=False, default="FS")
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "task_predecessore_id", "task_successore_id",
+            name="uq_dipendenza_task",
+        ),
+        CheckConstraint(
+            "task_predecessore_id <> task_successore_id",
+            name="ck_dipendenza_task_no_self",
+        ),
+        CheckConstraint(
+            "tipo_dipendenza IN (" + ", ".join(f"'{t}'" for t in TIPI_DIPENDENZA) + ")",
+            name="ck_dipendenza_task_tipo",
+        ),
+    )
+
+    predecessore = relationship(
+        "Task",
+        foreign_keys=[task_predecessore_id],
+        back_populates="dipendenze_uscenti",
+    )
+    successore = relationship(
+        "Task",
+        foreign_keys=[task_successore_id],
+        back_populates="dipendenze_entranti",
+    )
 
 
 # ══════════════════════════════════════════════════════════════════════

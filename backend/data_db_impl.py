@@ -58,21 +58,51 @@ def get_progetto(pid):
     })
 
 def get_tasks_progetto(pid):
+    """Tasks di un progetto come DataFrame pandas.
+
+    ⚠ DEBITO NOTO — DataFrame come tipo di ritorno è residuo storico della
+    migrazione DataFrame→Postgres (vedi HANDOFF_postgres_migration.md §6-ter,
+    "ULTIMO PASSO: rimuovere TUTTE le _reload() + i DataFrame in cache"). È
+    stato MANTENUTO di proposito anche dalla Migration #1 (Step 3.1, 25/05/2026)
+    per limitare la superficie di cambio: la conversione del campo predecessore
+    → dipendenze NON è il momento giusto per rimuovere anche il DataFrame.
+    Da rimuovere nel Blocco 4 (ritiro helper-DataFrame, dopo le 3 migration
+    Alembic): a quel punto questa funzione tornerà direttamente una lista di
+    dict (o oggetti Task ORM), e i chiamanti smetteranno di usare pandas.
+
+    Step 3.1 (25/05/2026): la colonna `dipendenze` contiene liste di dict
+    `{task_predecessore_id, tipo_dipendenza}` — non scalari. Pandas accetta
+    liste come valori di colonna ma non le normalizza: la normalizzazione
+    (esplodere in righe figlie o esporre come array nested) è anch'essa
+    rimandata al Blocco 4.
+    """
     session = get_session()
-    from sqlalchemy.orm import joinedload
-    rows = session.query(Task).options(joinedload(Task.fase_rel)).filter(
-        Task.progetto_id == pid
-    ).all()
+    from sqlalchemy.orm import joinedload, selectinload
+    # Step 3.1 (25/05/2026): `predecessore` stringa singola → `dipendenze`
+    # lista (modello-grafo, vedi alembic e5f6a7b8c9d0). selectinload sulle
+    # dipendenze entranti = 1 query in più, evita N+1 sulla lista.
+    rows = session.query(Task).options(
+        joinedload(Task.fase_rel),
+        selectinload(Task.dipendenze_entranti),
+    ).filter(Task.progetto_id == pid).all()
     data = [{"id": r.id, "progetto_id": r.progetto_id, "nome": r.nome,
              "fase_id": r.fase_id,
              "fase": r.fase_rel.nome if r.fase_rel else "",
              "ore_stimate": r.ore_stimate or 0,
              "data_inizio": _to_dt(r.data_inizio), "data_fine": _to_dt(r.data_fine),
              "stato": r.stato, "profilo_richiesto": r.profilo_richiesto or "",
-             "dipendente_id": r.dipendente_id or "", "predecessore": r.predecessore or ""} for r in rows]
+             "dipendente_id": r.dipendente_id or "",
+             "dipendenze": [
+                 {"task_predecessore_id": d.task_predecessore_id,
+                  "tipo_dipendenza": d.tipo_dipendenza}
+                 for d in r.dipendenze_entranti
+             ]} for r in rows]
     session.close()
-    df = pd.DataFrame(data) if data else pd.DataFrame(columns=["id","progetto_id","nome","fase_id","fase","ore_stimate","data_inizio","data_fine","stato","profilo_richiesto","dipendente_id","predecessore"])
-    return df.fillna({"predecessore": ""})
+    return pd.DataFrame(data) if data else pd.DataFrame(columns=[
+        "id", "progetto_id", "nome", "fase_id", "fase", "ore_stimate",
+        "data_inizio", "data_fine", "stato", "profilo_richiesto",
+        "dipendente_id", "dipendenze",
+    ])
 
 def get_consuntivi_task(tid):
     session = get_session()
@@ -254,15 +284,44 @@ def _next_progetto_id():
 
 def aggiungi_task(progetto_id, nome, fase, ore_stimate, data_inizio, data_fine,
                   stato="Da iniziare", profilo_richiesto="", dipendente_id="",
-                  predecessore=""):
+                  dipendenze=None):
     """Crea un task. Step 2.1 D1: il parametro `fase` (stringa) viene risolto
     a `fase_id` cercando la `Fase` del progetto col nome corrispondente.
 
+    Step 3.1 (25/05/2026): il vecchio parametro `predecessore` (stringa singola)
+    è sostituito da `dipendenze`: lista di dict
+    `{task_predecessore_id, tipo_dipendenza}`. Le righe corrispondenti vengono
+    create nella tabella `dipendenza_task` dopo l'INSERT del task.
+
+    Parametri:
+      dipendenze: lista (opzionale) di dict con chiavi:
+        - task_predecessore_id (str, obbligatorio): id del task predecessore
+        - tipo_dipendenza (str, opzionale, default 'FS'): uno di TIPI_DIPENDENZA
+
     Errori:
-      ValueError se la stringa `fase` non matcha nessuna Fase del progetto.
-      Il chiamante (router) deve catturarla e convertirla in HTTP 4xx.
+      ValueError se:
+        - la stringa `fase` non matcha nessuna Fase del progetto;
+        - una delle dipendenze punta a un task inesistente (FK orfana);
+        - una delle dipendenze ha task_predecessore_id == new_id (self-loop);
+        - tipo_dipendenza non è in TIPI_DIPENDENZA;
+        - la lista `dipendenze` contiene predecessori duplicati.
+      Il chiamante (router) deve catturarle e convertirle in HTTP 4xx.
+
+    Timing degli id e sequenza transazionale:
+      `new_id` è generato applicativamente (`_next_task_id()` → "T###"), quindi
+      è noto PRIMA dell'add — non serve aspettare il DB. La sequenza è:
+        1. genera new_id (applicativo);
+        2. valida `dipendenze` (predecessori esistenti, no self-loop, no
+           duplicati, tipo ammesso) — errori chiari, niente FK violation grezza;
+        3. session.add(task);
+        4. session.flush() ← rende il task visibile alle FK delle
+           DipendenzaTask successive (anche se SQLAlchemy ordina gli INSERT
+           correttamente, il flush rende la sequenza esplicita);
+        5. per ogni d in dipendenze: session.add(DipendenzaTask(...));
+        6. eventuale assegnazione dipendente;
+        7. session.commit() → INSERT cumulativo, transazione singola.
     """
-    from models import Fase  # import locale per evitare cicli
+    from models import Fase, DipendenzaTask, TIPI_DIPENDENZA  # import locale per evitare cicli
 
     new_id = _next_task_id()
     session = get_session()
@@ -279,15 +338,72 @@ def aggiungi_task(progetto_id, nome, fase, ore_stimate, data_inizio, data_fine,
             f"Le fasi vanno create prima dei task."
         )
 
+    # Step 3.1: valida le dipendenze a monte — errori applicativi chiari,
+    # non FK/CHECK/UNIQUE violation grezze del DB.
+    dipendenze = dipendenze or []
+    if dipendenze:
+        pred_ids = [d["task_predecessore_id"] for d in dipendenze]
+
+        # Self-loop
+        if new_id in pred_ids:
+            session.close()
+            raise ValueError(
+                f"Dipendenza self-loop rifiutata: il task in creazione "
+                f"({new_id}) non può essere predecessore di se stesso."
+            )
+
+        # Duplicati nella lista
+        if len(set(pred_ids)) != len(pred_ids):
+            session.close()
+            raise ValueError(
+                f"Predecessori duplicati nella lista dipendenze: "
+                f"{[p for p in pred_ids if pred_ids.count(p) > 1]}. "
+                f"Ogni (predecessore, successore) deve essere unico."
+            )
+
+        # Tipi dipendenza ammessi
+        for d in dipendenze:
+            tipo = d.get("tipo_dipendenza", "FS")
+            if tipo not in TIPI_DIPENDENZA:
+                session.close()
+                raise ValueError(
+                    f"Tipo dipendenza '{tipo}' non ammesso. "
+                    f"Valori accettati: {TIPI_DIPENDENZA}."
+                )
+
+        # Predecessori esistenti (FK orfani) — una sola query
+        esistenti = {r[0] for r in session.query(Task.id).filter(
+            Task.id.in_(pred_ids)
+        ).all()}
+        orfani = [p for p in pred_ids if p not in esistenti]
+        if orfani:
+            session.close()
+            raise ValueError(
+                f"Predecessori inesistenti: {orfani}. "
+                f"Creare i task predecessori prima, o rimuoverli dalla lista."
+            )
+
     task = Task(
         id=new_id, progetto_id=progetto_id, nome=nome, fase_id=fase_row.id,
         ore_stimate=ore_stimate,
         data_inizio=data_inizio.date() if isinstance(data_inizio, datetime) else data_inizio,
         data_fine=data_fine.date() if isinstance(data_fine, datetime) else data_fine,
         stato=stato, profilo_richiesto=profilo_richiesto,
-        dipendente_id=dipendente_id, predecessore=predecessore,
+        dipendente_id=dipendente_id,
     )
     session.add(task)
+    # Flush esplicito: il task diventa visibile alle FK delle DipendenzaTask
+    # successive. Vedi docstring "Timing degli id e sequenza transazionale".
+    session.flush()
+
+    # Step 3.1: crea le righe DipendenzaTask (validate sopra)
+    for d in dipendenze:
+        session.add(DipendenzaTask(
+            task_predecessore_id=d["task_predecessore_id"],
+            task_successore_id=new_id,
+            tipo_dipendenza=d.get("tipo_dipendenza", "FS"),
+        ))
+
     if dipendente_id:
         existing_assegn = session.query(Assegnazione).filter(
             Assegnazione.task_id == new_id,
