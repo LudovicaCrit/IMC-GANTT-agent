@@ -110,6 +110,7 @@ Il prefisso URL esplicita la separazione architetturale:
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
+from sqlalchemy.orm import selectinload
 
 from deps import require_manager
 from models import Utente, Dipendente, Progetto, Task, get_session
@@ -180,13 +181,13 @@ def _carica_dati_per_engine():
     - Dipendenti: solo attivi (filtro Dipendente.attivo == True).
     - Progetti: tutti.
     - Task: tutti (la cascata cerca successori su tutto il grafo, quindi un
-      pre-filtro su `stato` spezzerebbe il legame `predecessore` con i task
+      pre-filtro su `stato` spezzerebbe i legami di dipendenza con i task
       Sospeso/Annullato; il motore ha già la sua logica interna sugli stati).
 
     I dict contengono SOLO i campi che il motore consuma (vedi docstring di
-    simula_scenario in scenario_engine.py). I campi nullable nel modello che
-    il motore confronta con stringhe (`predecessore`, `dipendente_id`) sono
-    normalizzati a "" come faceva il loader DataFrame; `ore_stimate` a 0.
+    simula_scenario in scenario_engine.py). `dipendente_id` (nullable) è
+    normalizzato a "" come faceva il loader DataFrame; `ore_stimate` a 0; le
+    dipendenze entranti diventano la lista `dipendenze` (vuota se nessuna).
 
     Ritorna: (tasks, dipendenti, progetti) — nell'ordine posizionale in cui
     simula_scenario li accetta.
@@ -206,11 +207,22 @@ def _carica_dati_per_engine():
         tasks = [
             {"id": t.id, "nome": t.nome, "progetto_id": t.progetto_id,
              "dipendente_id": t.dipendente_id or "",
-             "predecessore": t.predecessore or "",
+             # Step 3.1 (Gruppo B, 28/05): CERNIERA A→B attraversata. Il motore
+             # ora consuma la LISTA completa delle dipendenze entranti, tipizzate
+             # (FS/SS/FF/SF), letta dalla tabella-grafo `dipendenza_task` via la
+             # relationship `dipendenze_entranti` (caricata con selectinload).
+             # Niente più predecessore-stringa singolo: l'indice successori e il
+             # rilevamento cascata nel motore iterano su questa lista.
+             "dipendenze": [
+                 {"pred": d.task_predecessore_id, "tipo": d.tipo_dipendenza}
+                 for d in t.dipendenze_entranti
+             ],
              "data_inizio": t.data_inizio, "data_fine": t.data_fine,
              "ore_stimate": t.ore_stimate or 0,
              "stato": t.stato}
-            for t in session.query(Task).all()
+            for t in session.query(Task).options(
+                selectinload(Task.dipendenze_entranti)
+            ).all()
         ]
     finally:
         session.close()

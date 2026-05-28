@@ -16,7 +16,10 @@ Tre funzioni principali:
 
 from datetime import datetime, timedelta, date
 from copy import deepcopy
+import logging
 import math
+
+logger = logging.getLogger(__name__)
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -78,23 +81,27 @@ def propaga_cascata(tasks, task_ids_modificati):
     a tutti i task che dipendono da essi, ricorsivamente.
 
     I task sono dict con almeno:
-      id, predecessore, data_inizio, data_fine, ore_stimate, stato
+      id, dipendenze, data_inizio, data_fine, ore_stimate, stato
 
-    Il campo 'predecessore' è un singolo ID task (es. "T045").
-    Il tipo di dipendenza è assunto FS (Fine → Inizio) per i task
-    esistenti nel db. In futuro si può estendere con un campo tipo_dipendenza.
+    Il campo 'dipendenze' è una lista di dict {"pred": <id>, "tipo": <FS|SS|FF|SF>}
+    (può essere vuota): un task può avere PIÙ predecessori. Oggi è implementata
+    SOLO la logica temporale FS (Fine → Inizio); i tipi SS/FF/SF vengono trattati
+    come FS e loggano un warning informativo (vedi branching-point nella cascata).
 
     Modifica i task IN PLACE e restituisce il set di tutti gli ID modificati
     (inclusi quelli propagati).
     """
-    # Costruisci indice: predecessore → lista di task successori
-    successori = {}  # { id_predecessore: [task_successore, ...] }
+    # Costruisci indice: predecessore → lista di (successore, tipo_dipendenza).
+    # Step 3.1 (Gruppo B): un successore può avere PIÙ predecessori, quindi
+    # iteriamo sulla lista `dipendenze` di ogni task (non più un campo stringa).
+    successori = {}  # { id_predecessore: [(id_successore, tipo_dipendenza), ...] }
     for t in tasks.values():
-        pred = t.get("predecessore", "")
-        if pred and pred in tasks:
-            if pred not in successori:
-                successori[pred] = []
-            successori[pred].append(t["id"])
+        for dip in t.get("dipendenze", []):
+            pred = dip.get("pred", "")
+            if pred and pred in tasks:
+                successori.setdefault(pred, []).append(
+                    (t["id"], dip.get("tipo", "FS"))
+                )
 
     tutti_modificati = set(task_ids_modificati)
     coda = list(task_ids_modificati)
@@ -107,7 +114,7 @@ def propaga_cascata(tasks, task_ids_modificati):
         if not pred_fine:
             continue
 
-        for succ_id in successori.get(pred_id, []):
+        for succ_id, tipo_dip in successori.get(pred_id, []):
             succ = tasks[succ_id]
 
             # Salta task completati — non li spostiamo
@@ -123,6 +130,19 @@ def propaga_cascata(tasks, task_ids_modificati):
             # Calcola durata originale in giorni lavorativi
             durata_lav = _giorni_lavorativi(succ_inizio_old, succ_fine_old)
 
+            # ── Branching-point per tipo di dipendenza ──────────────────────
+            # Oggi è implementata SOLO la logica temporale FS (Finish-to-Start).
+            # I tipi SS/FF/SF non hanno ancora un ramo proprio: vengono trattati
+            # come FS e segnalati con un warning informativo.
+            # TODO Gruppo C: implementare qui i rami SS/FF/SF (vedi
+            # TIPI_DIPENDENZA in models.py). Quando arriveranno, basterà
+            # aggiungere il ramo e aggiornare l'asserzione del test-ponte.
+            if tipo_dip != "FS":
+                logger.warning(
+                    "dipendenza %s %s→%s trattata come FS — logica non-FS "
+                    "non ancora implementata",
+                    tipo_dip, pred_id, succ_id,
+                )
             # FS: il successore inizia il giorno lavorativo dopo la fine del predecessore
             nuovo_inizio = _aggiungi_giorni_lavorativi(pred_fine, 1)
 
@@ -154,7 +174,7 @@ def simula_scenario(tasks_list, dipendenti_list, progetti_list, modifiche, data_
 
     Parametri:
       tasks_list:      list[dict] dei task. Ogni dict ha almeno:
-                       id, nome, predecessore, data_inizio, data_fine,
+                       id, nome, dipendenze, data_inizio, data_fine,
                        ore_stimate, stato, dipendente_id, progetto_id.
       dipendenti_list: list[dict] dei dipendenti. Ogni dict ha almeno:
                        id, nome, profilo, ore_sett.
@@ -527,9 +547,13 @@ def genera_conseguenze(tasks_prima, tasks_dopo, task_modificati,
         # È uno slittamento diretto o a cascata?
         # Se il task era nelle modifiche primarie, è diretto
         # (ma non possiamo saperlo qui — il chiamante potrebbe passarlo)
-        # Per ora distinguiamo: se ha un predecessore che è stato modificato, è cascata
-        pred_id = dopo.get("predecessore", "")
-        e_cascata = pred_id and pred_id in task_modificati
+        # Per ora distinguiamo: è a cascata se UNO QUALSIASI dei suoi
+        # predecessori è stato modificato.
+        pred_modificati = [
+            dip.get("pred", "") for dip in dopo.get("dipendenze", [])
+            if dip.get("pred", "") and dip.get("pred", "") in task_modificati
+        ]
+        e_cascata = bool(pred_modificati)
 
         testo = (
             f"{dopo['nome']} ({nome_progetto}, assegnato a {nome_persona}): "
@@ -537,8 +561,11 @@ def genera_conseguenze(tasks_prima, tasks_dopo, task_modificati,
             f"(fine: {fine_prima.strftime('%d/%m')} → {fine_dopo.strftime('%d/%m')})"
         )
         if e_cascata:
-            pred_nome = tasks_dopo.get(pred_id, {}).get("nome", "")
-            testo += f" — a cascata da '{pred_nome}'"
+            nomi_pred = [
+                tasks_dopo.get(pid, {}).get("nome", "") for pid in pred_modificati
+            ]
+            nomi_pred = [n for n in nomi_pred if n]
+            testo += f" — a cascata da '{', '.join(nomi_pred)}'"
 
         conseguenze.append({
             "tipo": "task_slittato",

@@ -117,7 +117,7 @@ migrazione §6-ter). `gantt_strutturato` era già nativamente su SQLAlchemy.
 from datetime import datetime
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Response
-from sqlalchemy.orm import joinedload
+from sqlalchemy.orm import joinedload, selectinload
 from sqlalchemy import func
 
 from deps import require_manager
@@ -125,6 +125,32 @@ from models import (
     Utente, Progetto, Fase, Task, Consuntivo, Dipendente, get_session,
     STATI_PROGETTO_ATTIVI,
 )
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Step 3.1 (Gruppo A, 28/05/2026): la colonna `Task.predecessore` non esiste
+# più — le dipendenze vivono nella tabella-grafo `dipendenza_task`
+# (relationship `Task.dipendenze_entranti`). Finché il GANTT/agent espongono
+# UN solo predecessore (iso-comportamento col vecchio campo stringa), questa
+# helper restituisce l'id del predecessore "principale" del task: la prima
+# dipendenza entrante di tipo FS, o in mancanza la prima entrante in assoluto.
+# Restituisce "" se il task non ha predecessori.
+#
+# STRADA 2 (Code): quando il motore/payload passeranno a dipendenze MULTIPLE
+# tipizzate, questa helper va sostituita dall'esposizione dell'intera lista
+# `dipendenze_entranti` (id + tipo_dipendenza). Vedi HANDOFF Gruppo A→B.
+# ─────────────────────────────────────────────────────────────────────────
+def _predecessore_principale(task: Task) -> str:
+    """Id del predecessore principale del task (Strada 1, singolo).
+
+    Richiede che `task.dipendenze_entranti` sia caricata (selectinload).
+    """
+    entranti = task.dipendenze_entranti or []
+    if not entranti:
+        return ""
+    fs = [d for d in entranti if d.tipo_dipendenza == "FS"]
+    scelta = fs[0] if fs else entranti[0]
+    return scelta.task_predecessore_id or ""
 from data import get_dipendente
 from data_db_impl import _to_dt
 
@@ -145,7 +171,10 @@ def dati_gantt(
     """Restituisce i dati formattati per il componente GANTT del frontend."""
     session = get_session()
     q = session.query(Task).options(
-        joinedload(Task.progetto)
+        joinedload(Task.progetto),
+        # Step 3.1 (Gruppo A): le dipendenze ora sono in dipendenza_task;
+        # le carico qui per leggere il predecessore principale senza N+1.
+        selectinload(Task.dipendenze_entranti),
     ).filter(Task.stato != "Eliminato")
     if progetto_id:
         q = q.filter(Task.progetto_id == progetto_id)
@@ -162,7 +191,10 @@ def dati_gantt(
         ore_per_task = {tid: float(ore) for tid, ore in rows}
 
     # Nomi predecessori in UNA query (sostituisce il lookup _TASKS()[...id == pred])
-    pred_ids = [t.predecessore for t in tasks if t.predecessore]
+    # Step 3.1 (Gruppo A): il predecessore "principale" viene dalla tabella-grafo
+    # via _predecessore_principale (prima dip. entrante FS), non più da t.predecessore.
+    pred_per_task = {t.id: _predecessore_principale(t) for t in tasks}
+    pred_ids = [p for p in pred_per_task.values() if p]
     nomi_pred = {}
     if pred_ids:
         pred_rows = session.query(Task.id, Task.nome).filter(Task.id.in_(pred_ids)).all()
@@ -183,7 +215,7 @@ def dati_gantt(
         else:
             progress = 0
 
-        pred = t.predecessore or ""
+        pred = pred_per_task.get(t.id, "")
         result.append({
             "id": t.id,
             "name": t.nome,
@@ -265,6 +297,7 @@ def gantt_strutturato(
         # ── 1. Query progetti con filtro stato ────────────────────────
         q = session.query(Progetto).options(
             joinedload(Progetto.fasi).joinedload(Fase.task)
+                .selectinload(Task.dipendenze_entranti)
         )
         if progetto_id:
             q = q.filter(Progetto.id == progetto_id)
@@ -324,7 +357,9 @@ def gantt_strutturato(
                         "dipendente_id": t.dipendente_id or "",
                         "dipendente_nome": nomi_dip.get(t.dipendente_id, ""),
                         "profilo_richiesto": t.profilo_richiesto or "",
-                        "predecessore": t.predecessore or "",
+                        # Step 3.1 (Gruppo A): predecessore principale dalla
+                        # tabella-grafo, non più dal campo stringa rimosso.
+                        "predecessore": _predecessore_principale(t),
                     })
 
                 ore_vendute_fase = float(f.ore_vendute or 0)

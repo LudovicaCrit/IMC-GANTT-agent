@@ -9,6 +9,8 @@ Poi testa il cambia_focus: se la persona su "Sviluppo" si concentra al 100%
 su un altro progetto per 2 settimane, lo sviluppo slitta.
 """
 
+import logging
+
 from datetime import date, datetime
 from scenario_engine import (
     simula_scenario, _giorni_lavorativi, _aggiungi_giorni_lavorativi,
@@ -35,25 +37,25 @@ def test_cascata_semplice():
             "id": "T001", "nome": "Analisi", "progetto_id": "P001",
             "data_inizio": date(2026, 3, 2), "data_fine": date(2026, 3, 13),  # 10 gg lav
             "ore_stimate": 80, "stato": "In corso", "dipendente_id": "D001",
-            "predecessore": "",
+            "dipendenze": [],
         },
         "T002": {
             "id": "T002", "nome": "Design", "progetto_id": "P001",
             "data_inizio": date(2026, 3, 16), "data_fine": date(2026, 3, 27),  # 10 gg lav
             "ore_stimate": 60, "stato": "Da iniziare", "dipendente_id": "D002",
-            "predecessore": "T001",
+            "dipendenze": [{"pred": "T001", "tipo": "FS"}],
         },
         "T003": {
             "id": "T003", "nome": "Sviluppo", "progetto_id": "P001",
             "data_inizio": date(2026, 3, 30), "data_fine": date(2026, 4, 24),  # 20 gg lav
             "ore_stimate": 160, "stato": "Da iniziare", "dipendente_id": "D001",
-            "predecessore": "T002",
+            "dipendenze": [{"pred": "T002", "tipo": "FS"}],
         },
         "T004": {
             "id": "T004", "nome": "Testing", "progetto_id": "P001",
             "data_inizio": date(2026, 4, 27), "data_fine": date(2026, 5, 8),  # 10 gg lav
             "ore_stimate": 80, "stato": "Da iniziare", "dipendente_id": "D003",
-            "predecessore": "T003",
+            "dipendenze": [{"pred": "T003", "tipo": "FS"}],
         },
     }
 
@@ -85,17 +87,17 @@ def test_simula_cambia_focus():
          "fase": "Sviluppo", "ore_stimate": 160,
          "data_inizio": datetime(2026, 3, 2), "data_fine": datetime(2026, 4, 10),
          "stato": "In corso", "profilo_richiesto": "Tecnico Senior",
-         "dipendente_id": "D001", "predecessore": ""},
+         "dipendente_id": "D001", "dipendenze": []},
         {"id": "T011", "progetto_id": "P002", "nome": "Catalogo prodotti",
          "fase": "Sviluppo", "ore_stimate": 120,
          "data_inizio": datetime(2026, 3, 9), "data_fine": datetime(2026, 4, 3),
          "stato": "In corso", "profilo_richiesto": "Tecnico Senior",
-         "dipendente_id": "D001", "predecessore": ""},
+         "dipendente_id": "D001", "dipendenze": []},
         {"id": "T012", "progetto_id": "P002", "nome": "Testing catalogo",
          "fase": "Testing", "ore_stimate": 60,
          "data_inizio": datetime(2026, 4, 6), "data_fine": datetime(2026, 4, 17),
          "stato": "Da iniziare", "profilo_richiesto": "Tecnico Mid",
-         "dipendente_id": "D002", "predecessore": "T011"},
+         "dipendente_id": "D002", "dipendenze": [{"pred": "T011", "tipo": "FS"}]},
     ]
 
     dip_data = [
@@ -153,7 +155,7 @@ def test_scadenza_bucata():
          "fase": "Sviluppo", "ore_stimate": 200,
          "data_inizio": datetime(2026, 3, 1), "data_fine": datetime(2026, 4, 15),
          "stato": "In corso", "profilo_richiesto": "Tecnico Senior",
-         "dipendente_id": "D001", "predecessore": ""},
+         "dipendente_id": "D001", "dipendenze": []},
     ]
 
     dip_data = [
@@ -186,6 +188,113 @@ def test_scadenza_bucata():
     print("✅ Test scadenza bucata OK")
 
 
+# ══════════════════════════════════════════════════════════════════════
+# DIPENDENZE NON-FS — comportamento-ponte (Gruppo B)
+# ══════════════════════════════════════════════════════════════════════
+# Oggi il motore implementa SOLO la logica temporale FS. I tipi SS/FF/SF
+# vengono trattati come FS e loggano un warning informativo. Questi test
+# costruiscono task e dipendenze IN MEMORIA (no seed) e asseriscono il
+# comportamento-ponte + il CONTENUTO del warning. Sono SEMPRE attivi (mai
+# skip): quando arriverà la logica SS/FF/SF (Gruppo C) basterà cambiare
+# l'asserzione sulla data attesa, non la struttura del test.
+
+class _CatturaWarning(logging.Handler):
+    """Handler minimale che accumula i record di log emessi dal motore.
+
+    Indipendente da `caplog`: funziona sia sotto pytest sia col runner __main__.
+    """
+    def __init__(self):
+        super().__init__()
+        self.records = []
+
+    def emit(self, record):
+        self.records.append(record)
+
+
+def _propaga_con_log(tasks, modificati):
+    """Esegue propaga_cascata catturando i warning del logger 'scenario_engine'.
+
+    Ritorna (insieme_modificati, lista_messaggi_warning_formattati).
+    """
+    handler = _CatturaWarning()
+    handler.setLevel(logging.WARNING)
+    eng_logger = logging.getLogger("scenario_engine")
+    livello_orig, propaga_orig = eng_logger.level, eng_logger.propagate
+    eng_logger.addHandler(handler)
+    eng_logger.setLevel(logging.WARNING)
+    eng_logger.propagate = False  # evita rumore su stderr durante i test
+    try:
+        risultato = propaga_cascata(tasks, modificati)
+    finally:
+        eng_logger.removeHandler(handler)
+        eng_logger.setLevel(livello_orig)
+        eng_logger.propagate = propaga_orig
+    messaggi = [r.getMessage() for r in handler.records
+                if r.levelno == logging.WARNING]
+    return risultato, messaggi
+
+
+def _coppia_pred_succ(tipo):
+    """Catena di 2 task (T100→T101) con dipendenza di tipo `tipo`.
+
+    Stesse date di test_cascata_semplice, così la regola FS dà inizio
+    successore = 30/03 quando il predecessore finisce il 27/03.
+    """
+    return {
+        "T100": {
+            "id": "T100", "nome": "Predecessore", "progetto_id": "P001",
+            "data_inizio": date(2026, 3, 2), "data_fine": date(2026, 3, 13),
+            "ore_stimate": 80, "stato": "In corso", "dipendente_id": "D001",
+            "dipendenze": [],
+        },
+        "T101": {
+            "id": "T101", "nome": "Successore", "progetto_id": "P001",
+            "data_inizio": date(2026, 3, 16), "data_fine": date(2026, 3, 27),
+            "ore_stimate": 60, "stato": "Da iniziare", "dipendente_id": "D002",
+            "dipendenze": [{"pred": "T100", "tipo": tipo}],
+        },
+    }
+
+
+def test_dipendenza_non_fs_trattata_come_fs():
+    """SS/FF/SF → trattati come FS (ponte) + warning che cita tipo e i due id."""
+    for tipo in ("SS", "FF", "SF"):
+        tasks = _coppia_pred_succ(tipo)
+        # Sposta in avanti la fine del predecessore (come test_cascata_semplice)
+        tasks["T100"]["data_fine"] = date(2026, 3, 27)
+
+        modificati, warnings = _propaga_con_log(tasks, {"T100"})
+
+        # Ponte: il successore slitta ESATTAMENTE come farebbe una dip. FS.
+        # 👉 Gruppo C: qui cambierà solo la data attesa per ciascun tipo.
+        assert "T101" in modificati, \
+            f"[{tipo}] il successore dovrebbe slittare (trattato come FS)"
+        assert tasks["T101"]["data_inizio"] == date(2026, 3, 30), \
+            f"[{tipo}] inizio atteso 30/03 (regola FS), ottenuto {tasks['T101']['data_inizio']}"
+
+        # Il warning deve esistere e citare il tipo e i DUE id corretti.
+        rilevanti = [m for m in warnings
+                     if tipo in m and "T100" in m and "T101" in m]
+        assert rilevanti, \
+            f"[{tipo}] atteso un warning che cita {tipo}, T100 e T101; ottenuti: {warnings}"
+        print(f"  [{tipo}] ponte FS OK + warning: {rilevanti[0]}")
+
+    print("✅ Test dipendenze non-FS (ponte FS + warning) OK")
+
+
+def test_dipendenza_fs_non_logga_warning():
+    """Controprova: una dipendenza FS slitta ma NON emette alcun warning."""
+    tasks = _coppia_pred_succ("FS")
+    tasks["T100"]["data_fine"] = date(2026, 3, 27)
+
+    modificati, warnings = _propaga_con_log(tasks, {"T100"})
+
+    assert "T101" in modificati, "FS: il successore dovrebbe slittare"
+    assert warnings == [], f"FS non deve loggare warning, ottenuti: {warnings}"
+
+    print("✅ Test dipendenza FS senza warning OK")
+
+
 if __name__ == "__main__":
     print("=" * 60)
     print("TEST SCENARIO ENGINE")
@@ -197,6 +306,10 @@ if __name__ == "__main__":
     test_simula_cambia_focus()
     print()
     test_scadenza_bucata()
+    print()
+    test_dipendenza_non_fs_trattata_come_fs()
+    print()
+    test_dipendenza_fs_non_logga_warning()
     print()
     print("=" * 60)
     print("TUTTI I TEST PASSATI ✅")

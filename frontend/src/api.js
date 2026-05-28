@@ -248,7 +248,9 @@ export async function deleteFase(faseId) {
 
 export async function createTask(data) {
   // Body: { progetto_id, nome, fase_id?, fase?, ore_stimate?, data_inizio?, data_fine?,
-  //         profilo_richiesto?, dipendente_id?, predecessore?, stato? }
+  //         profilo_richiesto?, dipendente_id?, dipendenze?, stato? }
+  // Step 3.1 (Gruppo A): `dipendenze` = [{task_predecessore_id, tipo_dipendenza}].
+  // Sostituisce il vecchio `predecessore` stringa singola (rimosso lato backend).
   return apiFetch(`${API_BASE}/tasks`, { method: 'POST', body: data });
 }
 

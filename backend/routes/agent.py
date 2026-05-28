@@ -159,7 +159,7 @@ lettura in /chat resta residua perché alimenta costruisci_contesto
 import json as json_mod
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy.orm import joinedload
+from sqlalchemy.orm import joinedload, selectinload
 
 from deps import get_current_user, require_manager
 from models import Utente, Dipendente, Progetto, Task, get_session
@@ -447,7 +447,12 @@ def analisi_gantt(
     # Caricamento aggregato: 3 query invece di N+M filter su DataFrame
     session = get_session()
     dipendenti = session.query(Dipendente).filter(Dipendente.attivo == True).all()
-    tasks_rows = session.query(Task).options(joinedload(Task.progetto)).filter(
+    tasks_rows = session.query(Task).options(
+        joinedload(Task.progetto),
+        # Step 3.1 (Gruppo A): predecessore ora dalla tabella-grafo; caricato
+        # qui perché la sessione viene chiusa subito dopo (evita N+1 / DetachedError).
+        selectinload(Task.dipendenze_entranti),
+    ).filter(
         Task.stato.in_(["In corso", "Da iniziare"])
     ).all()
     progetti_rows = session.query(Progetto).filter(
@@ -484,7 +489,17 @@ def analisi_gantt(
                     "data_fine": t.data_fine.strftime("%Y-%m-%d") if t.data_fine else None,
                     "stato": t.stato,
                     "profilo_richiesto": t.profilo_richiesto or "",
-                    "predecessore": t.predecessore if t.predecessore else None,
+                    # Step 3.1 (Gruppo A): predecessore principale dalla
+                    # tabella-grafo (prima dip. entrante FS). Semantica invariata:
+                    # None quando il task non ha predecessori.
+                    "predecessore": (
+                        next(
+                            (d.task_predecessore_id for d in t.dipendenze_entranti
+                             if d.tipo_dipendenza == "FS"),
+                            next((d.task_predecessore_id for d in t.dipendenze_entranti), None),
+                        )
+                        if t.dipendenze_entranti else None
+                    ),
                 }
                 for t in tasks_per_dip.get(d.id, [])
             ],

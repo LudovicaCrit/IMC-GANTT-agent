@@ -97,7 +97,7 @@ from sqlalchemy import func, case
 
 from deps import require_manager
 from models import (
-    get_session, Utente, Progetto, Fase, Task, Assegnazione,
+    get_session, Utente, Progetto, Fase, Task, Assegnazione, DipendenzaTask,
     STATI_PROGETTO, STATI_PROGETTO_ATTIVI,
 )
 from data import ore_consuntivate_progetto, tasso_compilazione_progetto
@@ -473,7 +473,6 @@ def crea_progetto_completo(req: ProgettoCompletoCreate, _: Utente = Depends(requ
                 data_inizio=di, data_fine=df,
                 stato="Da iniziare",
                 dipendente_id=t.dipendente_id or None,
-                predecessore=None,
             )
             session.add(task)
 
@@ -651,7 +650,6 @@ def completa_progetto(progetto_id: str, req: ProgettoCompletoCreate,
                 data_inizio=di, data_fine=df,
                 stato="Da iniziare",
                 dipendente_id=t.dipendente_id or None,
-                predecessore=None,
             )
             session.add(task)
 
@@ -767,6 +765,12 @@ def aggiungi_task_multipli(progetto_id: str, req: StaffingRequest,
         # ── 3. Inserisco i task (tutte le validazioni sono passate) ──────
         ids_task = genera_id_task_multipli(len(req.task), session=session)
         creati = []
+        # Step 3.1 (Gruppo A, 28/05): `predecessore` non è più una colonna del
+        # Task. Se lo StaffingRequest porta un predecessore, lo registriamo come
+        # riga in `dipendenza_task` (tipo 'FS', il default storico). Raccolgo le
+        # coppie qui e le inserisco DOPO un flush, così anche un predecessore che
+        # è un task dello stesso batch esiste già e la FK è soddisfatta.
+        dipendenze_da_creare = []  # (predecessore_id, successore_id)
         for idx_t, t in enumerate(req.task):
             task_id = ids_task[idx_t]
             task = Task(
@@ -775,15 +779,36 @@ def aggiungi_task_multipli(progetto_id: str, req: StaffingRequest,
                 data_inizio=t.data_inizio, data_fine=t.data_fine,
                 stato="Da iniziare",
                 dipendente_id=t.dipendente_id or None,
-                predecessore=t.predecessore or None,
             )
             session.add(task)
+            if t.predecessore:
+                dipendenze_da_creare.append((t.predecessore, task_id))
             if t.dipendente_id:
                 session.add(Assegnazione(
                     task_id=task_id, dipendente_id=t.dipendente_id,
                     ore_assegnate=t.ore_stimate, ruolo="responsabile",
                 ))
             creati.append({"id": task_id, "nome": t.nome, "fase_id": t.fase_id})
+
+        # Tutti i task del batch sono ora pending: flush per materializzarli e
+        # poter referenziare la FK (anche predecessori interni al batch).
+        if dipendenze_da_creare:
+            session.flush()
+            for pred_id, succ_id in dipendenze_da_creare:
+                # Difesa: il predecessore deve esistere (nel batch o già in DB).
+                # Se non esiste, l'INSERT violerebbe la FK → meglio 422 chiaro
+                # che un 500 opaco al commit.
+                esiste = session.query(Task.id).filter(Task.id == pred_id).first()
+                if not esiste:
+                    raise HTTPException(
+                        status_code=422,
+                        detail=f"Predecessore '{pred_id}' inesistente per un task da creare.",
+                    )
+                session.add(DipendenzaTask(
+                    task_predecessore_id=pred_id,
+                    task_successore_id=succ_id,
+                    tipo_dipendenza="FS",
+                ))
 
         # ── 4. Commit unico ──────────────────────────────────────────────
         session.commit()

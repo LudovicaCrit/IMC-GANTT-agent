@@ -687,10 +687,21 @@ function ModaleTask({ mode, task, progettoId, faseId, faseNome, faseDataInizio, 
           data_fine: form.data_fine || null,
           profilo_richiesto: form.profilo_richiesto || '',
           dipendente_id: form.dipendente_id || '',
-          predecessore: form.predecessore || '',
+          // Step 3.1 (Gruppo A, 28/05): il backend POST /api/tasks accetta
+          // `dipendenze: [{task_predecessore_id, tipo_dipendenza}]`, non più
+          // il campo `predecessore` stringa. Strada 1: un solo predecessore,
+          // tipo FS. Lista vuota se nessuno.
+          dipendenze: form.predecessore
+            ? [{ task_predecessore_id: form.predecessore, tipo_dipendenza: 'FS' }]
+            : [],
           stato: form.stato,
         })
       } else {
+        // Step 3.1 (Gruppo A): il PATCH /api/tasks/{id} NON gestisce le
+        // dipendenze (rimosse dal DTO lato backend il 25/05). Non inviamo
+        // `predecessore`: il backend lo ignorerebbe e l'utente crederebbe di
+        // averlo modificato. La modifica delle dipendenze su task esistenti
+        // arriverà con la Strada 2 (editor dipendenze dedicato).
         await onSalva({
           nome: form.nome.trim(),
           ore_stimate: Number(form.ore_stimate) || 0,
@@ -698,7 +709,6 @@ function ModaleTask({ mode, task, progettoId, faseId, faseNome, faseDataInizio, 
           data_fine: form.data_fine || null,
           profilo_richiesto: form.profilo_richiesto || '',
           dipendente_id: form.dipendente_id || '',
-          predecessore: form.predecessore || '',
           stato: form.stato,
         })
       }
@@ -757,7 +767,21 @@ function ModaleTask({ mode, task, progettoId, faseId, faseNome, faseDataInizio, 
           escludiTaskId={mode === 'modifica' ? task?.id : null}
         />
         <FormInput label="Profilo richiesto" value={form.profilo_richiesto} onChange={v => setForm({...form, profilo_richiesto: v})} placeholder="es. Tecnico Senior" />
-        <FormSelect label="Predecessore (task)" value={form.predecessore} onChange={v => setForm({...form, predecessore: v})} options={predOptions} />
+        {mode === 'nuovo' ? (
+          <FormSelect label="Predecessore (task)" value={form.predecessore} onChange={v => setForm({...form, predecessore: v})} options={predOptions} />
+        ) : (
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Predecessore (task)</label>
+            <div className="px-3 py-2 bg-gray-50 border border-gray-200 rounded text-sm text-gray-700">
+              {form.predecessore
+                ? (predOptions.find(o => o.value === form.predecessore)?.label || form.predecessore)
+                : '— Nessuno —'}
+            </div>
+            <p className="text-xs text-gray-500 mt-1">
+              Le dipendenze di un task esistente non si modificano da qui (arriverà un editor dedicato).
+            </p>
+          </div>
+        )}
         {errore && <p className="text-sm text-red-400">{errore}</p>}
       </div>
       <div className="flex gap-2 mt-5 justify-end">
