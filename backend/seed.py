@@ -6,8 +6,9 @@ Eseguire UNA VOLTA per inizializzare il db.
 
 from models import (
     create_tables, get_session,
-    Dipendente, Progetto, Task, Assegnazione, Consuntivo, Segnalazione,
-    Ruolo, Competenza, DipendentiCompetenze, FaseStandard, Fase, Utente,
+    Dipendente, Progetto, Task, DipendenzaTask, Assegnazione, Consuntivo,
+    Segnalazione, Ruolo, Competenza, DipendentiCompetenze, FaseStandard,
+    Fase, Utente,
 )
 from data import DIPENDENTI, PROGETTI, TASKS, CONSUNTIVI
 from auth import hash_password
@@ -176,7 +177,7 @@ def seed():
                 ore_vendute=float(ore_totali),
                 ore_pianificate=float(ore_totali),
                 stato="In corso" if any(tasks_fase["stato"] == "In corso") else
-                      "Completato" if all(tasks_fase["stato"] == "Completato") else "Da iniziare",
+                      "Completata" if all(tasks_fase["stato"] == "Completato") else "Da iniziare",
             )
             session.add(fase)
             session.flush()  # per avere l'id
@@ -198,7 +199,6 @@ def seed():
             progetto_id=pid,
             fase_id=fase_obj.id if fase_obj else None,
             nome=row["nome"],
-            fase=row["fase"],
             ore_stimate=int(row["ore_stimate"]),
             ore_rimanenti=float(row["ore_stimate"]),  # all'inizio rimanenti = stimate
             data_inizio=row["data_inizio"].date() if hasattr(row["data_inizio"], "date") else row["data_inizio"],
@@ -206,9 +206,27 @@ def seed():
             stato=row["stato"],
             profilo_richiesto=row["profilo_richiesto"],
             dipendente_id=row["dipendente_id"],
-            predecessore=row["predecessore"] if row["predecessore"] else "",
         ))
     print(f"  ✓ {len(TASKS)} task (con fase_id)")
+    session.flush()  # persiste i task: la FK di dipendenza_task li richiede già presenti
+
+    # ══════════════════════════════════════════════════════════════
+    # 8-bis. DIPENDENZE TRA TASK (grafo tipizzato — Step 3.1)
+    # ══════════════════════════════════════════════════════════════
+    # La vecchia colonna Task.predecessore (stringa singola, sempre FS) è ora
+    # una riga in dipendenza_task. Iso-comportamento: ogni predecessore non
+    # vuoto diventa UNA dipendenza di tipo "FS" pred→succ.
+    n_dip = 0
+    for _, row in TASKS.iterrows():
+        pred = row["predecessore"]
+        if pred:
+            session.add(DipendenzaTask(
+                task_predecessore_id=pred,
+                task_successore_id=row["id"],
+                tipo_dipendenza="FS",
+            ))
+            n_dip += 1
+    print(f"  ✓ {n_dip} dipendenze task (tutte FS)")
 
     # ══════════════════════════════════════════════════════════════
     # 9. ASSEGNAZIONI

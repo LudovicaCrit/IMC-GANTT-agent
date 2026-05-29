@@ -176,7 +176,7 @@ PROGETTI = pd.DataFrame([
         "id": "P007",
         "nome": "Framework ESG Reporting",
         "cliente": "A2A",
-        "stato": "Vinto - Da pianificare",
+        "stato": "Bozza",
         "tipologia": "ordinario",
         "data_inizio": datetime(2026, 5, 1),
         "data_fine": datetime(2026, 11, 30),
