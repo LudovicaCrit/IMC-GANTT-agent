@@ -64,6 +64,17 @@ def _aggiungi_giorni_lavorativi(data_partenza, n_giorni_lav):
     return d
 
 
+def _sottrai_giorni_lavorativi(data_partenza, n_giorni_lav):
+    """Sottrae N giorni lavorativi a una data (salta weekend all'indietro)."""
+    d = _to_date(data_partenza)
+    sottratti = 0
+    while sottratti < n_giorni_lav:
+        d -= timedelta(days=1)
+        if d.weekday() < 5:
+            sottratti += 1
+    return d
+
+
 def _lunedi_settimana(d):
     """Restituisce il lunedì della settimana contenente d."""
     d = _to_date(d)
@@ -109,6 +120,7 @@ def propaga_cascata(tasks, task_ids_modificati):
     while coda:
         pred_id = coda.pop(0)
         pred = tasks[pred_id]
+        pred_inizio = _to_date(pred["data_inizio"])
         pred_fine = _to_date(pred["data_fine"])
 
         if not pred_fine:
@@ -130,29 +142,59 @@ def propaga_cascata(tasks, task_ids_modificati):
             # Calcola durata originale in giorni lavorativi
             durata_lav = _giorni_lavorativi(succ_inizio_old, succ_fine_old)
 
-            # ── Branching-point per tipo di dipendenza ──────────────────────
-            # Oggi è implementata SOLO la logica temporale FS (Finish-to-Start).
-            # I tipi SS/FF/SF non hanno ancora un ramo proprio: vengono trattati
-            # come FS e segnalati con un warning informativo.
-            # TODO Gruppo C: implementare qui i rami SS/FF/SF (vedi
-            # TIPI_DIPENDENZA in models.py). Quando arriveranno, basterà
-            # aggiungere il ramo e aggiornare l'asserzione del test-ponte.
-            if tipo_dip != "FS":
+            # ── Logica temporale per tipo di dipendenza ─────────────────────
+            # Tutti i tipi conservano la durata lavorativa del successore e la
+            # cascata propaga SOLO in avanti: se il riposizionamento non
+            # spinge il successore più avanti di dov'è, si salta. La verifica
+            # "non all'indietro" usa l'estremo ancorato dal tipo (inizio per
+            # FS/SS, fine per FF/SF); a durata costante le due sono equivalenti.
+            if tipo_dip == "FS":
+                # Finish-to-Start: inizia il giorno lavorativo dopo la fine del pred.
+                nuovo_inizio = _aggiungi_giorni_lavorativi(pred_fine, 1)
+                if nuovo_inizio <= succ_inizio_old:
+                    continue
+                nuova_fine = _aggiungi_giorni_lavorativi(nuovo_inizio, durata_lav - 1)
+
+            elif tipo_dip == "SS":
+                # Start-to-Start: inizia quando inizia il predecessore.
+                if not pred_inizio:
+                    continue
+                nuovo_inizio = pred_inizio
+                if nuovo_inizio <= succ_inizio_old:
+                    continue
+                nuova_fine = _aggiungi_giorni_lavorativi(nuovo_inizio, durata_lav - 1)
+
+            elif tipo_dip == "FF":
+                # Finish-to-Finish: finisce quando finisce il predecessore.
+                nuova_fine = pred_fine
+                if nuova_fine <= succ_fine_old:
+                    continue
+                nuovo_inizio = _sottrai_giorni_lavorativi(nuova_fine, durata_lav - 1)
+
+            elif tipo_dip == "SF":
+                # Start-to-Finish: il successore finisce il giorno lavorativo
+                # PRIMA che il predecessore inizi (simmetrico al gap "+1 giorno
+                # lavorativo" di FS: i due task non condividono la giornata-confine).
+                if not pred_inizio:
+                    continue
+                nuova_fine = _sottrai_giorni_lavorativi(pred_inizio, 1)
+                if nuova_fine <= succ_fine_old:
+                    continue
+                nuovo_inizio = _sottrai_giorni_lavorativi(nuova_fine, durata_lav - 1)
+
+            else:
+                # Rete di sicurezza: i 4 tipi validi (TIPI_DIPENDENZA in
+                # models.py) sono coperti sopra. Un tipo non riconosciuto non
+                # dovrebbe arrivare qui (CheckConstraint sul DB), ma se accade
+                # lo trattiamo come FS e lo segnaliamo invece di crashare.
                 logger.warning(
-                    "dipendenza %s %s→%s trattata come FS — logica non-FS "
-                    "non ancora implementata",
+                    "dipendenza %s %s→%s di tipo non riconosciuto — trattata come FS",
                     tipo_dip, pred_id, succ_id,
                 )
-            # FS: il successore inizia il giorno lavorativo dopo la fine del predecessore
-            nuovo_inizio = _aggiungi_giorni_lavorativi(pred_fine, 1)
-
-            # Il successore non può iniziare prima di quando iniziava
-            # (la cascata sposta solo in avanti, non indietro)
-            if nuovo_inizio <= succ_inizio_old:
-                continue
-
-            # Nuova fine: mantieni la stessa durata lavorativa
-            nuova_fine = _aggiungi_giorni_lavorativi(nuovo_inizio, durata_lav - 1)
+                nuovo_inizio = _aggiungi_giorni_lavorativi(pred_fine, 1)
+                if nuovo_inizio <= succ_inizio_old:
+                    continue
+                nuova_fine = _aggiungi_giorni_lavorativi(nuovo_inizio, durata_lav - 1)
 
             succ["data_inizio"] = nuovo_inizio
             succ["data_fine"] = nuova_fine

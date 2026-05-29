@@ -189,14 +189,14 @@ def test_scadenza_bucata():
 
 
 # ══════════════════════════════════════════════════════════════════════
-# DIPENDENZE NON-FS — comportamento-ponte (Gruppo B)
+# DIPENDENZE SS/FF/SF — logica temporale (Gruppo C)
 # ══════════════════════════════════════════════════════════════════════
-# Oggi il motore implementa SOLO la logica temporale FS. I tipi SS/FF/SF
-# vengono trattati come FS e loggano un warning informativo. Questi test
-# costruiscono task e dipendenze IN MEMORIA (no seed) e asseriscono il
-# comportamento-ponte + il CONTENUTO del warning. Sono SEMPRE attivi (mai
-# skip): quando arriverà la logica SS/FF/SF (Gruppo C) basterà cambiare
-# l'asserzione sulla data attesa, non la struttura del test.
+# Il motore implementa i quattro tipi con rami distinti, tutti a durata
+# conservata e con propagazione solo in avanti. Questi test costruiscono
+# task e dipendenze IN MEMORIA (no seed): uno per tipo (SS/FF/SF) verifica
+# l'ancoraggio della data e l'ASSENZA di warning, più una controprova FS
+# (test_dipendenza_fs_non_logga_warning) e una cascata multi-tipo dove vince
+# il vincolo più in avanti. Sono SEMPRE attivi (mai skip).
 
 class _CatturaWarning(logging.Handler):
     """Handler minimale che accumula i record di log emessi dal motore.
@@ -256,30 +256,151 @@ def _coppia_pred_succ(tipo):
     }
 
 
-def test_dipendenza_non_fs_trattata_come_fs():
-    """SS/FF/SF → trattati come FS (ponte) + warning che cita tipo e i due id."""
-    for tipo in ("SS", "FF", "SF"):
-        tasks = _coppia_pred_succ(tipo)
-        # Sposta in avanti la fine del predecessore (come test_cascata_semplice)
-        tasks["T100"]["data_fine"] = date(2026, 3, 27)
+def test_dipendenza_ss_inizia_con_predecessore():
+    """SS: il successore inizia alla STESSA data d'inizio del predecessore.
 
-        modificati, warnings = _propaga_con_log(tasks, {"T100"})
+    Durata conservata, nessun warning. Sposto il predecessore in avanti
+    (inizio lun 6/4) così la regola SS spinge il successore dal 16/3 al 6/4 —
+    NON al 7/4 come farebbe FS (+1 giorno lavorativo).
+    """
+    tasks = _coppia_pred_succ("SS")
+    # Predecessore coerente spostato in avanti: inizio lun 6/4, fine ven 17/4.
+    tasks["T100"]["data_inizio"] = date(2026, 4, 6)
+    tasks["T100"]["data_fine"] = date(2026, 4, 17)
 
-        # Ponte: il successore slitta ESATTAMENTE come farebbe una dip. FS.
-        # 👉 Gruppo C: qui cambierà solo la data attesa per ciascun tipo.
-        assert "T101" in modificati, \
-            f"[{tipo}] il successore dovrebbe slittare (trattato come FS)"
-        assert tasks["T101"]["data_inizio"] == date(2026, 3, 30), \
-            f"[{tipo}] inizio atteso 30/03 (regola FS), ottenuto {tasks['T101']['data_inizio']}"
+    durata_old = _giorni_lavorativi(
+        tasks["T101"]["data_inizio"], tasks["T101"]["data_fine"]
+    )
 
-        # Il warning deve esistere e citare il tipo e i DUE id corretti.
-        rilevanti = [m for m in warnings
-                     if tipo in m and "T100" in m and "T101" in m]
-        assert rilevanti, \
-            f"[{tipo}] atteso un warning che cita {tipo}, T100 e T101; ottenuti: {warnings}"
-        print(f"  [{tipo}] ponte FS OK + warning: {rilevanti[0]}")
+    modificati, warnings = _propaga_con_log(tasks, {"T100"})
 
-    print("✅ Test dipendenze non-FS (ponte FS + warning) OK")
+    assert "T101" in modificati, "SS: il successore dovrebbe slittare"
+    # Ancoraggio SS: inizio successore == inizio predecessore.
+    assert tasks["T101"]["data_inizio"] == date(2026, 4, 6), \
+        f"SS: inizio atteso 06/04 (= inizio pred), ottenuto {tasks['T101']['data_inizio']}"
+    assert tasks["T101"]["data_fine"] == date(2026, 4, 17), \
+        f"SS: fine attesa 17/04 (durata conservata), ottenuto {tasks['T101']['data_fine']}"
+    assert _giorni_lavorativi(
+        tasks["T101"]["data_inizio"], tasks["T101"]["data_fine"]
+    ) == durata_old, "SS: la durata lavorativa del successore deve restare invariata"
+    assert warnings == [], f"SS non deve loggare warning, ottenuti: {warnings}"
+
+    print("✅ Test SS (inizio col predecessore) OK")
+
+
+def test_dipendenza_ff_finisce_con_predecessore():
+    """FF: il successore finisce alla STESSA data di fine del predecessore.
+
+    Durata conservata, nessun warning. Come test_cascata_semplice muovo solo
+    la fine del predecessore (al ven 24/4): il successore finisce il 24/4 e
+    l'inizio si ricava all'indietro a durata costante (lun 13/4).
+    """
+    tasks = _coppia_pred_succ("FF")
+    tasks["T100"]["data_fine"] = date(2026, 4, 24)
+
+    durata_old = _giorni_lavorativi(
+        tasks["T101"]["data_inizio"], tasks["T101"]["data_fine"]
+    )
+
+    modificati, warnings = _propaga_con_log(tasks, {"T100"})
+
+    assert "T101" in modificati, "FF: il successore dovrebbe slittare"
+    # Ancoraggio FF: fine successore == fine predecessore.
+    assert tasks["T101"]["data_fine"] == date(2026, 4, 24), \
+        f"FF: fine attesa 24/04 (= fine pred), ottenuto {tasks['T101']['data_fine']}"
+    assert tasks["T101"]["data_inizio"] == date(2026, 4, 13), \
+        f"FF: inizio atteso 13/04 (ricavato all'indietro), ottenuto {tasks['T101']['data_inizio']}"
+    assert _giorni_lavorativi(
+        tasks["T101"]["data_inizio"], tasks["T101"]["data_fine"]
+    ) == durata_old, "FF: la durata lavorativa del successore deve restare invariata"
+    assert warnings == [], f"FF non deve loggare warning, ottenuti: {warnings}"
+
+    print("✅ Test FF (fine col predecessore) OK")
+
+
+def test_dipendenza_sf_finisce_quando_predecessore_inizia():
+    """SF: il successore finisce il giorno lavorativo PRIMA che il pred inizi.
+
+    Convenzione coerente col gap "+1 giorno lavorativo" di FS: i due task non
+    condividono la giornata-confine. Durata conservata, nessun warning. Sposto
+    l'inizio del predecessore a lun 4/5 → il successore finisce ven 1/5 e
+    l'inizio si ricava all'indietro (lun 20/4).
+    """
+    tasks = _coppia_pred_succ("SF")
+    # Predecessore coerente spostato in avanti: inizio lun 4/5, fine ven 15/5.
+    tasks["T100"]["data_inizio"] = date(2026, 5, 4)
+    tasks["T100"]["data_fine"] = date(2026, 5, 15)
+
+    durata_old = _giorni_lavorativi(
+        tasks["T101"]["data_inizio"], tasks["T101"]["data_fine"]
+    )
+
+    modificati, warnings = _propaga_con_log(tasks, {"T100"})
+
+    assert "T101" in modificati, "SF: il successore dovrebbe slittare"
+    # Ancoraggio SF: fine successore == inizio pred − 1 giorno lavorativo.
+    assert tasks["T101"]["data_fine"] == date(2026, 5, 1), \
+        f"SF: fine attesa 01/05 (ven prima del lun d'inizio pred), ottenuto {tasks['T101']['data_fine']}"
+    assert tasks["T101"]["data_inizio"] == date(2026, 4, 20), \
+        f"SF: inizio atteso 20/04 (ricavato all'indietro), ottenuto {tasks['T101']['data_inizio']}"
+    assert _giorni_lavorativi(
+        tasks["T101"]["data_inizio"], tasks["T101"]["data_fine"]
+    ) == durata_old, "SF: la durata lavorativa del successore deve restare invariata"
+    assert warnings == [], f"SF non deve loggare warning, ottenuti: {warnings}"
+
+    print("✅ Test SF (fine quando inizia il predecessore) OK")
+
+
+def test_cascata_multi_tipo_vince_il_piu_restrittivo():
+    """Successore con DUE predecessori di tipi diversi (FS + SS).
+
+    Il successore si sposta secondo il vincolo PIÙ in avanti tra i due. Qui il
+    ramo FS (inizio 13/4 = fine pred 10/4 + 1 gg lav) è più restrittivo del
+    ramo SS (inizio 30/3 = inizio pred): deve vincere FS, a prescindere
+    dall'ordine con cui i due predecessori escono dalla coda.
+    """
+    tasks = {
+        "T200": {  # predecessore FS — conta la sua FINE (10/4)
+            "id": "T200", "nome": "Pred FS", "progetto_id": "P001",
+            "data_inizio": date(2026, 3, 30), "data_fine": date(2026, 4, 10),
+            "ore_stimate": 80, "stato": "In corso", "dipendente_id": "D001",
+            "dipendenze": [],
+        },
+        "T201": {  # predecessore SS — conta il suo INIZIO (30/3)
+            "id": "T201", "nome": "Pred SS", "progetto_id": "P001",
+            "data_inizio": date(2026, 3, 30), "data_fine": date(2026, 4, 10),
+            "ore_stimate": 80, "stato": "In corso", "dipendente_id": "D002",
+            "dipendenze": [],
+        },
+        "T202": {  # successore: dipende da entrambi, con tipi diversi
+            "id": "T202", "nome": "Successore", "progetto_id": "P001",
+            "data_inizio": date(2026, 3, 16), "data_fine": date(2026, 3, 27),
+            "ore_stimate": 60, "stato": "Da iniziare", "dipendente_id": "D003",
+            "dipendenze": [
+                {"pred": "T200", "tipo": "FS"},
+                {"pred": "T201", "tipo": "SS"},
+            ],
+        },
+    }
+    durata_old = _giorni_lavorativi(
+        tasks["T202"]["data_inizio"], tasks["T202"]["data_fine"]
+    )
+
+    # Entrambi i predecessori sono "modificati": scattano entrambi i rami.
+    modificati, warnings = _propaga_con_log(tasks, {"T200", "T201"})
+
+    assert "T202" in modificati, "Multi-tipo: il successore dovrebbe slittare"
+    # Vince il vincolo più in avanti: FS (13/4), non SS (30/3).
+    assert tasks["T202"]["data_inizio"] == date(2026, 4, 13), \
+        f"Multi-tipo: inizio atteso 13/04 (vincolo FS, più restrittivo), ottenuto {tasks['T202']['data_inizio']}"
+    assert tasks["T202"]["data_inizio"] != date(2026, 3, 30), \
+        "Multi-tipo: il vincolo SS (30/03) NON deve prevalere su quello FS (13/04)"
+    assert _giorni_lavorativi(
+        tasks["T202"]["data_inizio"], tasks["T202"]["data_fine"]
+    ) == durata_old, "Multi-tipo: la durata lavorativa del successore deve restare invariata"
+    assert warnings == [], f"Multi-tipo (FS+SS) non deve loggare warning, ottenuti: {warnings}"
+
+    print("✅ Test cascata multi-tipo (vince il più restrittivo) OK")
 
 
 def test_dipendenza_fs_non_logga_warning():
@@ -307,7 +428,13 @@ if __name__ == "__main__":
     print()
     test_scadenza_bucata()
     print()
-    test_dipendenza_non_fs_trattata_come_fs()
+    test_dipendenza_ss_inizia_con_predecessore()
+    print()
+    test_dipendenza_ff_finisce_con_predecessore()
+    print()
+    test_dipendenza_sf_finisce_quando_predecessore_inizia()
+    print()
+    test_cascata_multi_tipo_vince_il_piu_restrittivo()
     print()
     test_dipendenza_fs_non_logga_warning()
     print()
