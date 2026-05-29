@@ -35,3 +35,4 @@ frontend/tasks.md
 # Script di diagnostica una-tantum (per debug locale, non per repo)
 backend/diagnostico_*.py
 backup_*.sql
+*.bak
