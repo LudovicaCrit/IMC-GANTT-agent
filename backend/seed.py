@@ -228,6 +228,32 @@ def seed():
             n_dip += 1
     print(f"  ✓ {n_dip} dipendenze task (tutte FS)")
 
+    # 8-bis (cont.) — DIPENDENZE NON-FS (Step 3.1 redesign, 03/06/2026)
+    # Set realistico di SS/FF distribuite sui progetti: parallelismi (SS) e
+    # co-chiusure (FF) che un PM riconosce. Date allineate nel seed.
+    dipendenze_non_fs = [
+        # --- SS: task che PARTONO insieme ---
+        ("T005", "T006", "SS"),  # P001: coordinamento e gestione partono all'avvio
+        ("T012", "T020", "SS"),  # P002: preparazione ambienti test in parallelo allo sviluppo GRC
+        ("T024", "T025", "SS"),  # P003: i due sviluppi Duferco partono insieme (15/04)
+        ("T032", "T034", "SS"),  # P004: configurazione framework in parallelo a identificazione rischi
+        ("T041", "T042", "SS"),  # P005: sviluppo BPM in parallelo a mappatura processi
+        # --- FF: task che FINISCONO insieme ---
+        ("T003", "T004", "FF"),  # P001: testing chiude con l'implementazione
+        ("T012", "T014", "FF"),  # P002: integrazione e piattaforma GRC chiudono insieme (31/07)
+        ("T024", "T026", "FF"),  # P003: testing chiude con lo sviluppo del classificatore
+        ("T042", "T043", "FF"),  # P005: collaudo ProcessBook chiude con lo sviluppo
+    ]
+    n_nonfs = 0
+    for pred_id, succ_id, tipo in dipendenze_non_fs:
+        session.add(DipendenzaTask(
+            task_predecessore_id=pred_id,
+            task_successore_id=succ_id,
+            tipo_dipendenza=tipo,
+        ))
+        n_nonfs += 1
+    print(f"  ✓ {n_nonfs} dipendenze task non-FS (SS/FF)")
+
     # ══════════════════════════════════════════════════════════════
     # 9. ASSEGNAZIONI
     # ══════════════════════════════════════════════════════════════

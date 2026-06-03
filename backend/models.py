@@ -215,7 +215,11 @@ class Progetto(Base):
     # di cui solo PM ha ore vendute. Le ore "a sentimento" (Monitoraggio/Proposal/prevendita)
     # si consuntivano come "Attività commerciale" sotto Attività Interne.
     # Era "tipo" con default "progetto" inutilizzato; rinominato per chiarezza.
-    tipologia = Column(String(20), nullable=False, default="ordinario")  # "ordinario" | "bando"
+    # CHECK constraint sui valori ammessi: vedi alembic f6a7b8c9d0e1 (Step 3.2,
+    # 03/06/2026) — ck_progetti_tipologia. Valore "interna" aggiunto per le
+    # attività interne non fatturabili (ex contenitore-unico P010, ora
+    # spacchettato in N progetti distinti: mansioni continuative, corsi, innovazione).
+    tipologia = Column(String(20), nullable=False, default="ordinario")  # "ordinario" | "bando" | "interna"
     priorita = Column(String(10), nullable=False, default="media")
     ritardabilita = Column(String(10), nullable=True, default="media")
     data_inizio = Column(Date, nullable=True)
