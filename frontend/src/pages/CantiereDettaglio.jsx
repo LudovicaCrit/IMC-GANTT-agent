@@ -52,6 +52,7 @@ import {
   deleteFase,
   createTask,
   updateTask,
+  sostituisciDipendenzeTask,
   deleteTask,
 } from '../api'
 
@@ -298,7 +299,18 @@ export default function CantiereDettaglioPage() {
 
   const aggiungiTask = async (dati) => { await createTask(dati); setModificato(true); await ricarica() }
 
-  const aggiornaTask = async (taskId, dati) => { await updateTask(taskId, dati); setModificato(true); await ricarica() }
+  const aggiornaTask = async (taskId, dati) => {
+    // Separo le dipendenze dai campi: i campi vanno in PATCH, le dipendenze
+    // nell'endpoint dedicato PUT (Step 3.1 Gruppo B). Due chiamate, una sola
+    // azione utente.
+    const { dipendenze, ...campi } = dati
+    await updateTask(taskId, campi)
+    if (dipendenze !== undefined) {
+      await sostituisciDipendenzeTask(taskId, dipendenze)
+    }
+    setModificato(true)
+    await ricarica()
+  }
 
   const eliminaTask = async (task) => {
     if (!confirm(`Eliminare il task "${task.nome}"? Verrà marcato come Eliminato (soft delete).`)) return

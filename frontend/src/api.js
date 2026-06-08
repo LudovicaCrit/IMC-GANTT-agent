@@ -265,6 +265,16 @@ export async function updateTask(taskId, data) {
   return apiFetch(`${API_BASE}/tasks/${taskId}`, { method: 'PATCH', body: data });
 }
 
+// Step 3.1 (Gruppo B): sostituisce l'INTERA lista di dipendenze entranti di un
+// task esistente. Body: { dipendenze: [{task_predecessore_id, tipo_dipendenza}] }.
+// Lista vuota → rimuove tutte le dipendenze. Ritorna { task_id, dipendenze }.
+export async function sostituisciDipendenzeTask(taskId, dipendenze) {
+  return apiFetch(`${API_BASE}/tasks/${taskId}/dipendenze`, {
+    method: 'PUT',
+    body: { dipendenze },
+  });
+}
+
 export async function deleteTask(taskId) {
   // Soft delete: stato → "Eliminato" (endpoint legacy /elimina).
   return apiFetch(`${API_BASE}/tasks/${taskId}/elimina`, { method: 'PATCH' });

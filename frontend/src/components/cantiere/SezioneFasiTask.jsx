@@ -142,6 +142,7 @@ export default function SezioneFasiTask({
           dipendenti={dipendenti}
           ruoli={ruoli}
           tutteLeTaskDelProgetto={progetto.fasi.flatMap(f => f.tasks)}
+          taskFase={(progetto.fasi.find(f => f.id === modaleNuovoTask.faseId)?.tasks) || []}
           onClose={() => setModaleNuovoTask(null)}
           onSalva={async (dati) => {
             await onAggiungiTask(dati)
@@ -160,6 +161,7 @@ export default function SezioneFasiTask({
           dipendenti={dipendenti}
           ruoli={ruoli}
           tutteLeTaskDelProgetto={progetto.fasi.flatMap(f => f.tasks)}
+          taskFase={(progetto.fasi.find(f => f.id === modaleEditTask.fase_id)?.tasks) || []}
           onClose={() => setModaleEditTask(null)}
           onSalva={async (dati) => {
             await onAggiornaTask(modaleEditTask.id, dati)
@@ -636,7 +638,7 @@ function ModaleNuovaFase({ progettoId, ordineSuggerito, onClose, onSalva }) {
 // ModaleTask — creazione/modifica task con PannelloSaturazione integrato
 // ═════════════════════════════════════════════════════════════════════════
 
-function ModaleTask({ mode, task, progettoId, faseId, faseNome, faseDataInizio, faseDataFine, dipendenti, ruoli = [], tutteLeTaskDelProgetto, onClose, onSalva }) {
+function ModaleTask({ mode, task, progettoId, faseId, faseNome, faseDataInizio, faseDataFine, dipendenti, ruoli = [], tutteLeTaskDelProgetto, taskFase = [], onClose, onSalva }) {
   const [form, setForm] = useState(() => mode === 'modifica' ? {
     nome: task.nome || '',
     ore_stimate: task.ore_stimate || 0,
@@ -645,12 +647,17 @@ function ModaleTask({ mode, task, progettoId, faseId, faseNome, faseDataInizio, 
     profilo_richiesto: task.profilo_richiesto || '',
     dipendente_id: task.dipendente_id || '',
     predecessore: task.predecessore || '',
+    // dipendenze esistenti (sola lettura in modifica finché non c'è l'editor dedicato)
+    dipendenze: task.dipendenze || [],
     stato: task.stato || 'Da iniziare',
   } : {
     nome: '', ore_stimate: 0,
     data_inizio: '', data_fine: '',
     profilo_richiesto: '', dipendente_id: '',
-    predecessore: '', stato: 'Da iniziare',
+    predecessore: '',
+    // In creazione: lista di dipendenze tipizzate [{task_predecessore_id, tipo_dipendenza}]
+    dipendenze: [],
+    stato: 'Da iniziare',
   })
   const [salvando, setSalvando] = useState(false)
   const [errore, setErrore] = useState(null)
@@ -690,21 +697,19 @@ function ModaleTask({ mode, task, progettoId, faseId, faseNome, faseDataInizio, 
           data_fine: form.data_fine || null,
           profilo_richiesto: form.profilo_richiesto || '',
           dipendente_id: form.dipendente_id || '',
-          // Step 3.1 (Gruppo A, 28/05): il backend POST /api/tasks accetta
-          // `dipendenze: [{task_predecessore_id, tipo_dipendenza}]`, non più
-          // il campo `predecessore` stringa. Strada 1: un solo predecessore,
-          // tipo FS. Lista vuota se nessuno.
-          dipendenze: form.predecessore
-            ? [{ task_predecessore_id: form.predecessore, tipo_dipendenza: 'FS' }]
-            : [],
+          // Step 3.1 + Pezzo 2 (08/06): il backend POST /api/tasks accetta
+          // `dipendenze: [{task_predecessore_id, tipo_dipendenza}]` (lista
+          // tipizzata, FS/SS/FF/SF). Invio la lista costruita nel form,
+          // scartando righe senza predecessore selezionato.
+          dipendenze: (form.dipendenze || [])
+            .filter(d => d.task_predecessore_id)
+            .map(d => ({ task_predecessore_id: d.task_predecessore_id, tipo_dipendenza: d.tipo_dipendenza || 'FS' })),
           stato: form.stato,
         })
       } else {
-        // Step 3.1 (Gruppo A): il PATCH /api/tasks/{id} NON gestisce le
-        // dipendenze (rimosse dal DTO lato backend il 25/05). Non inviamo
-        // `predecessore`: il backend lo ignorerebbe e l'utente crederebbe di
-        // averlo modificato. La modifica delle dipendenze su task esistenti
-        // arriverà con la Strada 2 (editor dipendenze dedicato).
+        // Step 3.1 (Gruppo B, 08/06): la modifica delle dipendenze ora è
+        // supportata. Passo `dipendenze` a onSalva; il padre (aggiornaTask)
+        // fa PATCH dei campi + PUT /tasks/{id}/dipendenze.
         await onSalva({
           nome: form.nome.trim(),
           ore_stimate: Number(form.ore_stimate) || 0,
@@ -713,6 +718,9 @@ function ModaleTask({ mode, task, progettoId, faseId, faseNome, faseDataInizio, 
           profilo_richiesto: form.profilo_richiesto || '',
           dipendente_id: form.dipendente_id || '',
           stato: form.stato,
+          dipendenze: (form.dipendenze || [])
+            .filter(d => d.task_predecessore_id)
+            .map(d => ({ task_predecessore_id: d.task_predecessore_id, tipo_dipendenza: d.tipo_dipendenza || 'FS' })),
         })
       }
     } catch (e) { setErrore(e.message || 'Errore') }
@@ -734,6 +742,21 @@ function ModaleTask({ mode, task, progettoId, faseId, faseNome, faseDataInizio, 
     ...ruoli.map(r => ({ value: r.nome, label: r.nome })),
     ...profiloExtra,
   ]
+
+  // ── Dipendenze multiple (Step 3.1 Gruppo B) ──────────────────────────
+  const TIPI_DIP = [
+    { value: 'FS', label: 'FS · dopo (fine→inizio)' },
+    { value: 'SS', label: 'SS · iniziano insieme' },
+    { value: 'FF', label: 'FF · finiscono insieme' },
+    { value: 'SF', label: 'SF · inizio→fine' },
+  ]
+  const aggiungiDip = () => setForm(f => ({ ...f, dipendenze: [...(f.dipendenze || []), { task_predecessore_id: '', tipo_dipendenza: 'FS' }] }))
+  const rimuoviDip = (i) => setForm(f => ({ ...f, dipendenze: (f.dipendenze || []).filter((_, idx) => idx !== i) }))
+  const cambiaDip = (i, campo, val) => setForm(f => ({ ...f, dipendenze: (f.dipendenze || []).map((d, idx) => idx === i ? { ...d, [campo]: val } : d) }))
+  const nomeTask = (id) => tutteLeTaskDelProgetto.find(t => t.id === id)?.nome || ''
+  // Cascata di contesto: i task della stessa fase con le loro dipendenze.
+  const taskDellaFase = taskFase || []
+  const labelTipo = (tp) => (TIPI_DIP.find(x => x.value === tp)?.value || tp)
 
   return (
     <ModaleWrapper titolo={mode === 'nuovo' ? `Nuovo task in fase "${faseNome}"` : `Modifica task ${task.id}`} onClose={onClose} salvando={salvando}>
@@ -782,21 +805,66 @@ function ModaleTask({ mode, task, progettoId, faseId, faseNome, faseDataInizio, 
           escludiTaskId={mode === 'modifica' ? task?.id : null}
         />
         <FormSelect label="Profilo richiesto" value={form.profilo_richiesto} onChange={v => setForm({...form, profilo_richiesto: v})} options={profiloOptions} />
-        {mode === 'nuovo' ? (
-          <FormSelect label="Predecessore (task)" value={form.predecessore} onChange={v => setForm({...form, predecessore: v})} options={predOptions} />
-        ) : (
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Predecessore (task)</label>
-            <div className="px-3 py-2 bg-gray-50 border border-gray-200 rounded text-sm text-gray-700">
-              {form.predecessore
-                ? (predOptions.find(o => o.value === form.predecessore)?.label || form.predecessore)
-                : '— Nessuno —'}
-            </div>
-            <p className="text-xs text-gray-500 mt-1">
-              Le dipendenze di un task esistente non si modificano da qui (arriverà un editor dedicato).
-            </p>
+        {/* Editor dipendenze multiple tipizzate (Step 3.1 Gruppo B) */}
+        <div>
+          <div className="flex items-center justify-between mb-1">
+            <label className="block text-sm font-medium text-gray-300">Dipendenze (da quali task dipende)</label>
+            <span className="text-xs text-gray-500">{(form.dipendenze || []).length} {(form.dipendenze || []).length === 1 ? 'dipendenza' : 'dipendenze'}</span>
           </div>
-        )}
+          <div className="space-y-2">
+            {(form.dipendenze || []).map((d, i) => (
+              <div key={i} className="grid grid-cols-[1fr_150px_36px] gap-2 items-center">
+                <select
+                  value={d.task_predecessore_id}
+                  onChange={e => cambiaDip(i, 'task_predecessore_id', e.target.value)}
+                  className="bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-200"
+                >
+                  <option value="">— scegli task —</option>
+                  {taskAltri.map(t => (
+                    <option key={t.id} value={t.id}>{t.id} — {t.nome}</option>
+                  ))}
+                </select>
+                <select
+                  value={d.tipo_dipendenza}
+                  onChange={e => cambiaDip(i, 'tipo_dipendenza', e.target.value)}
+                  className="bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-200"
+                >
+                  {TIPI_DIP.map(tp => <option key={tp.value} value={tp.value}>{tp.label}</option>)}
+                </select>
+                <button
+                  type="button"
+                  onClick={() => rimuoviDip(i)}
+                  title="Rimuovi dipendenza"
+                  className="px-2 py-1.5 bg-gray-800 hover:bg-red-900/40 border border-gray-700 rounded text-sm text-gray-400"
+                >🗑</button>
+              </div>
+            ))}
+          </div>
+          <button
+            type="button"
+            onClick={aggiungiDip}
+            className="mt-2 text-sm text-blue-400 hover:text-blue-300"
+          >+ Aggiungi dipendenza</button>
+
+          {/* Cascata di contesto: task della fase e loro dipendenze */}
+          {taskDellaFase.length > 0 && (
+            <div className="mt-3 bg-gray-800/50 rounded p-3">
+              <div className="text-xs font-medium text-gray-400 mb-2">Cascata della fase (contesto)</div>
+              <div className="text-xs font-mono text-gray-300 space-y-1">
+                {taskDellaFase.map(t => (
+                  <div key={t.id}>
+                    <span className={t.id === task?.id ? 'text-blue-300' : ''}>{t.id}</span>
+                    <span className="text-gray-500"> {t.nome}</span>
+                    {(t.dipendenze || []).map((dep, k) => (
+                      <span key={k} className="text-gray-500"> · {labelTipo(dep.tipo_dipendenza)}←{dep.task_predecessore_id}</span>
+                    ))}
+                    {t.id === task?.id && <span className="ml-1 text-blue-400">(questo task)</span>}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
         {errore && <p className="text-sm text-red-400">{errore}</p>}
       </div>
       <div className="flex gap-2 mt-5 justify-end">
