@@ -102,6 +102,7 @@ from models import Utente, Task, get_session
 from data import (
     get_dipendente,
     aggiungi_task, modifica_task, cambia_stato_progetto,
+    sostituisci_dipendenze,
 )
 from data_db_impl import _to_dt
 from utils import get_oggi
@@ -374,6 +375,42 @@ def crea_task_singolo(req: NuovoTaskSingolo, _: Utente = Depends(require_manager
         raise HTTPException(status_code=422, detail=str(e))
 
     return {"id": new_id, "nome": req.nome, "fase_id": fase_id}
+
+
+class SostituisciDipendenzeRequest(BaseModel):
+    """Body per PUT /api/tasks/{task_id}/dipendenze (Step 3.1 Gruppo B).
+
+    Sostituisce l'INTERA lista di dipendenze entranti del task (approccio
+    "replace", più prevedibile di add/remove singoli). Lista vuota → rimuove
+    tutte le dipendenze entranti del task. Riusa `DipendenzaInput`.
+    """
+    dipendenze: list[DipendenzaInput] = []
+
+
+@router.put("/{task_id}/dipendenze")
+def sostituisci_dipendenze_task(
+    task_id: str,
+    req: SostituisciDipendenzeRequest,
+    _: Utente = Depends(require_manager),
+):
+    """Sostituisce le dipendenze entranti di un task esistente (replace).
+
+    Step 3.1 (Gruppo B): colma il debito annunciato in ModificaTaskSingolo —
+    le dipendenze, impostabili finora solo alla creazione (POST), ora si
+    modificano qui su un task già esistente.
+
+    La validazione vive in `data.sostituisci_dipendenze` (task esistente,
+    predecessori esistenti, no self-loop, no duplicati/coppia UNIQUE, tipo
+    ammesso): ogni violazione → ValueError → HTTP 400 con messaggio chiaro,
+    senza far emergere FK/UNIQUE grezzi. Restituisce la lista aggiornata.
+    """
+    try:
+        dipendenze = sostituisci_dipendenze(
+            task_id, [d.model_dump() for d in req.dipendenze]
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"task_id": task_id, "dipendenze": dipendenze}
 
 
 @router.patch("/{task_id}")

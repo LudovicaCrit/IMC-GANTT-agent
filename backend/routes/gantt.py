@@ -359,7 +359,19 @@ def gantt_strutturato(
                         "profilo_richiesto": t.profilo_richiesto or "",
                         # Step 3.1 (Gruppo A): predecessore principale dalla
                         # tabella-grafo, non più dal campo stringa rimosso.
+                        # Mantenuto come fallback per i consumatori in transizione.
                         "predecessore": _predecessore_principale(t),
+                        # Step 3.1 (Gruppo B): lista completa delle dipendenze
+                        # entranti tipizzate (FS/SS/FF/SF). Il frontend del
+                        # Cantiere la usa per mostrare la cascata della fase e
+                        # popolare il form dipendenze multiple in modifica.
+                        # selectinload(Task.dipendenze_entranti) è già caricato
+                        # nella query sopra (no N+1).
+                        "dipendenze": [
+                            {"task_predecessore_id": d.task_predecessore_id,
+                             "tipo_dipendenza": d.tipo_dipendenza}
+                            for d in (t.dipendenze_entranti or [])
+                        ],
                     })
 
                 ore_vendute_fase = float(f.ore_vendute or 0)

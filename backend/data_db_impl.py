@@ -419,6 +419,122 @@ def aggiungi_task(progetto_id, nome, fase, ore_stimate, data_inizio, data_fine,
     return new_id
 
 
+def sostituisci_dipendenze(task_id, dipendenze):
+    """Step 3.1 (Gruppo B): SOSTITUISCE l'intera lista di dipendenze entranti
+    di un task esistente (approccio "replace").
+
+    Mentre `aggiungi_task` imposta le dipendenze SOLO alla creazione, questo
+    helper le modifica su un task già esistente: cancella tutte le righe
+    `dipendenza_task` con `task_successore_id == task_id` e ricrea quelle
+    passate. È il backend dell'endpoint PUT /api/tasks/{task_id}/dipendenze.
+
+    Args:
+      task_id: id del task SUCCESSORE (quello le cui dipendenze si modificano).
+      dipendenze: lista di dict con chiavi:
+        - task_predecessore_id (str, obbligatorio): id del task predecessore;
+        - tipo_dipendenza (str, opzionale, default 'FS'): uno di TIPI_DIPENDENZA.
+        Lista vuota → rimuove tutte le dipendenze entranti del task.
+
+    Validazione (stesse regole di `aggiungi_task`, errori applicativi chiari
+    invece di FK/UNIQUE/CHECK grezzi del DB):
+      - il task_id deve esistere;
+      - ogni task_predecessore_id deve esistere (no FK orfana);
+      - no self-loop (predecessore == task_id);
+      - no predecessori duplicati nella lista. NB: il vincolo UNIQUE è su
+        (task_predecessore_id, task_successore_id), quindi — avendo qui un
+        unico successore — due righe sullo stesso predecessore con tipi diversi
+        (es. SS+FF sulla stessa coppia) NON sono ammesse: vengono rifiutate qui
+        come duplicati (debito noto Step 3.1);
+      - tipo_dipendenza ∈ TIPI_DIPENDENZA (default 'FS' se assente).
+
+    Raises:
+      ValueError: per ognuna delle violazioni sopra (il router → HTTP 400).
+
+    Returns:
+      list[dict]: la lista aggiornata delle dipendenze entranti del task,
+        nel formato {task_predecessore_id, tipo_dipendenza}.
+    """
+    from models import DipendenzaTask, TIPI_DIPENDENZA  # import locale per evitare cicli
+
+    dipendenze = dipendenze or []
+    session = get_session()
+
+    # Il task successore deve esistere.
+    if not session.query(Task.id).filter(Task.id == task_id).first():
+        session.close()
+        raise ValueError(f"Task '{task_id}' inesistente.")
+
+    if dipendenze:
+        pred_ids = [d["task_predecessore_id"] for d in dipendenze]
+
+        # Self-loop
+        if task_id in pred_ids:
+            session.close()
+            raise ValueError(
+                f"Dipendenza self-loop rifiutata: il task "
+                f"({task_id}) non può essere predecessore di se stesso."
+            )
+
+        # Duplicati nella lista (copre anche il vincolo UNIQUE sulla coppia:
+        # stesso predecessore con tipi diversi = stessa coppia ordinata).
+        if len(set(pred_ids)) != len(pred_ids):
+            session.close()
+            raise ValueError(
+                f"Predecessori duplicati nella lista dipendenze: "
+                f"{sorted({p for p in pred_ids if pred_ids.count(p) > 1})}. "
+                f"Ogni (predecessore, successore) deve essere unico: non è "
+                f"ammesso lo stesso predecessore con tipi diversi sulla stessa "
+                f"coppia."
+            )
+
+        # Tipi dipendenza ammessi
+        for d in dipendenze:
+            tipo = d.get("tipo_dipendenza", "FS")
+            if tipo not in TIPI_DIPENDENZA:
+                session.close()
+                raise ValueError(
+                    f"Tipo dipendenza '{tipo}' non ammesso. "
+                    f"Valori accettati: {TIPI_DIPENDENZA}."
+                )
+
+        # Predecessori esistenti (FK orfani) — una sola query
+        esistenti = {r[0] for r in session.query(Task.id).filter(
+            Task.id.in_(pred_ids)
+        ).all()}
+        orfani = [p for p in pred_ids if p not in esistenti]
+        if orfani:
+            session.close()
+            raise ValueError(
+                f"Predecessori inesistenti: {orfani}. "
+                f"Creare i task predecessori prima, o rimuoverli dalla lista."
+            )
+
+    # Transazione: cancella le entranti correnti, ricrea dalla lista.
+    try:
+        session.query(DipendenzaTask).filter(
+            DipendenzaTask.task_successore_id == task_id
+        ).delete(synchronize_session=False)
+
+        for d in dipendenze:
+            session.add(DipendenzaTask(
+                task_predecessore_id=d["task_predecessore_id"],
+                task_successore_id=task_id,
+                tipo_dipendenza=d.get("tipo_dipendenza", "FS"),
+            ))
+        session.commit()
+
+        righe = session.query(DipendenzaTask).filter(
+            DipendenzaTask.task_successore_id == task_id
+        ).all()
+        return [
+            {"task_predecessore_id": r.task_predecessore_id,
+             "tipo_dipendenza": r.tipo_dipendenza}
+            for r in righe
+        ]
+    finally:
+        session.close()
+
+
 def modifica_task(task_id, **kwargs):
     session = get_session()
     task = session.query(Task).filter(Task.id == task_id).first()
