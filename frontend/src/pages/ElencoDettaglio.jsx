@@ -238,8 +238,8 @@ export default function ElencoDettaglioPage() {
           </div>
         </div>
         <button
-          onClick={() => navigate('/cantiere')}
-          title="Apri il Cantiere per modificare progetti o aggiungere task"
+          onClick={() => navigate(`/cantiere/${progettoId}`)}
+          title="Apri la scheda di questo progetto in Cantiere per modificarlo"
           className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-sm font-semibold transition-colors"
         >
           ✏ Modifica in Cantiere

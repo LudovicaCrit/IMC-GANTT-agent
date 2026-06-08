@@ -137,6 +137,12 @@ export async function fetchDipendenti() {
   return apiFetch(`${API_BASE}/dipendenti`);
 }
 
+// Ruoli definiti in Configurazione — usati per popolare la tendina
+// "Profilo richiesto" del task (logica a mattoncini: si sceglie, non si scrive).
+export async function fetchRuoli() {
+  return apiFetch(`${API_BASE}/config/ruoli`);
+}
+
 export async function fetchDipendente(id) {
   return apiFetch(`${API_BASE}/dipendenti/${id}`);
 }

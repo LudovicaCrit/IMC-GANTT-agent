@@ -105,11 +105,18 @@ export default function CantierePage() {
     caricaCantiere()
   }, [caricaCantiere])
 
-  // Categorizzazione per sezione
-  const bozze = useMemo(() => data.filter(p => p.stato === 'Bozza'), [data])
-  const attiviSospesi = useMemo(
-    () => data.filter(p => p.stato === 'In esecuzione' || p.stato === 'Sospeso'),
+  // Categorizzazione per sezione.
+  // Le attività interne (tipologia 'interna') NON compaiono in Cantiere: hanno
+  // la loro pagina dedicata "Attività Interne". Cantiere è per progetti-cliente
+  // (ordinario) e bandi. Distinzione introdotta con Migration #2 (03/06/2026).
+  const progettiCantiere = useMemo(
+    () => data.filter(p => p.tipologia !== 'interna'),
     [data]
+  )
+  const bozze = useMemo(() => progettiCantiere.filter(p => p.stato === 'Bozza'), [progettiCantiere])
+  const attiviSospesi = useMemo(
+    () => progettiCantiere.filter(p => p.stato === 'In esecuzione' || p.stato === 'Sospeso'),
+    [progettiCantiere]
   )
 
   return (
@@ -305,6 +312,18 @@ function CardCantiere({ progetto, ctaLabel, ctaDisabled, ctaTooltip, onCta, navi
               </>
             )}
           </div>
+
+          {/* Bottone "Modifica" → scheda editabile del progetto (/cantiere/:id).
+              Solo per progetti non-bozza: le bozze usano "Riprendi → Wizard". */}
+          {progetto.stato !== 'Bozza' && (
+            <button
+              onClick={() => navigate(`/cantiere/${progetto.id}`)}
+              title="Apri la scheda completa per modificare fasi, task, anagrafica"
+              className="px-3 py-1.5 rounded text-sm font-medium flex-shrink-0 border border-blue-500 text-blue-300 hover:bg-blue-600 hover:text-white transition-colors"
+            >
+              ✏ Modifica
+            </button>
+          )}
 
           {/* CTA contestuale */}
           <button

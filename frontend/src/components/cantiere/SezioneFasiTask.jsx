@@ -48,6 +48,7 @@ import { giorniLavorativi} from '../../utils/festivita'
 export default function SezioneFasiTask({
   progetto,
   dipendenti,
+  ruoli = [],
   onAggiornaFase,
   onEliminaFase,
   onAggiungiFase,
@@ -139,6 +140,7 @@ export default function SezioneFasiTask({
           faseDataInizio={modaleNuovoTask.faseDataInizio}
           faseDataFine={modaleNuovoTask.faseDataFine}
           dipendenti={dipendenti}
+          ruoli={ruoli}
           tutteLeTaskDelProgetto={progetto.fasi.flatMap(f => f.tasks)}
           onClose={() => setModaleNuovoTask(null)}
           onSalva={async (dati) => {
@@ -156,6 +158,7 @@ export default function SezioneFasiTask({
           faseDataInizio={modaleEditTask._faseDataInizio}
           faseDataFine={modaleEditTask._faseDataFine}
           dipendenti={dipendenti}
+          ruoli={ruoli}
           tutteLeTaskDelProgetto={progetto.fasi.flatMap(f => f.tasks)}
           onClose={() => setModaleEditTask(null)}
           onSalva={async (dati) => {
@@ -633,7 +636,7 @@ function ModaleNuovaFase({ progettoId, ordineSuggerito, onClose, onSalva }) {
 // ModaleTask — creazione/modifica task con PannelloSaturazione integrato
 // ═════════════════════════════════════════════════════════════════════════
 
-function ModaleTask({ mode, task, progettoId, faseId, faseNome, faseDataInizio, faseDataFine, dipendenti, tutteLeTaskDelProgetto, onClose, onSalva }) {
+function ModaleTask({ mode, task, progettoId, faseId, faseNome, faseDataInizio, faseDataFine, dipendenti, ruoli = [], tutteLeTaskDelProgetto, onClose, onSalva }) {
   const [form, setForm] = useState(() => mode === 'modifica' ? {
     nome: task.nome || '',
     ore_stimate: task.ore_stimate || 0,
@@ -719,6 +722,18 @@ function ModaleTask({ mode, task, progettoId, faseId, faseNome, faseDataInizio, 
   const dipOptions = [{ value: '', label: '— Nessuno —' }, ...dipendenti.map(d => ({ value: d.id, label: d.nome }))]
   const taskAltri = tutteLeTaskDelProgetto.filter(t => mode === 'nuovo' || t.id !== task?.id)
   const predOptions = [{ value: '', label: '— Nessuno —' }, ...taskAltri.map(t => ({ value: t.id, label: `${t.id} — ${t.nome}` }))]
+  // Opzioni "Profilo richiesto" dai ruoli di Configurazione (logica a mattoncini).
+  // Se il task ha già un profilo non presente tra i ruoli (dato storico), lo
+  // aggiungo in coda così non sparisce dal select in modifica.
+  const ruoliNomi = ruoli.map(r => r.nome)
+  const profiloExtra = form.profilo_richiesto && !ruoliNomi.includes(form.profilo_richiesto)
+    ? [{ value: form.profilo_richiesto, label: `${form.profilo_richiesto} (non in elenco)` }]
+    : []
+  const profiloOptions = [
+    { value: '', label: '— Nessuno —' },
+    ...ruoli.map(r => ({ value: r.nome, label: r.nome })),
+    ...profiloExtra,
+  ]
 
   return (
     <ModaleWrapper titolo={mode === 'nuovo' ? `Nuovo task in fase "${faseNome}"` : `Modifica task ${task.id}`} onClose={onClose} salvando={salvando}>
@@ -766,7 +781,7 @@ function ModaleTask({ mode, task, progettoId, faseId, faseNome, faseDataInizio, 
           dataFine={form.data_fine}
           escludiTaskId={mode === 'modifica' ? task?.id : null}
         />
-        <FormInput label="Profilo richiesto" value={form.profilo_richiesto} onChange={v => setForm({...form, profilo_richiesto: v})} placeholder="es. Tecnico Senior" />
+        <FormSelect label="Profilo richiesto" value={form.profilo_richiesto} onChange={v => setForm({...form, profilo_richiesto: v})} options={profiloOptions} />
         {mode === 'nuovo' ? (
           <FormSelect label="Predecessore (task)" value={form.predecessore} onChange={v => setForm({...form, predecessore: v})} options={predOptions} />
         ) : (

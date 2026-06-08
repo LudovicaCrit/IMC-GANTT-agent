@@ -44,6 +44,7 @@ import { useParams, useNavigate, Link } from 'react-router-dom'
 import {
   fetchGanttStrutturato,
   fetchDipendenti,
+  fetchRuoli,
   updateProgetto,
   deleteProgetto,
   createFase,
@@ -201,15 +202,23 @@ export default function CantiereDettaglioPage() {
   const navigate = useNavigate()
   const [progetto, setProgetto] = useState(null)
   const [dipendenti, setDipendenti] = useState([])
+  const [ruoli, setRuoli] = useState([])
   const [loading, setLoading] = useState(true)
   const [errore, setErrore] = useState(null)
   const [tab, setTab] = useState('design')
+  // Traccia se l'utente ha modificato qualcosa: decide dove tornare indietro.
+  // Nessuna modifica -> /cantiere (lista). Con modifiche -> /gantt (vede il risultato).
+  const [modificato, setModificato] = useState(false)
+
+  // Destinazione del "torna indietro" coerente con il flusso del DESIGN_Cantiere.
+  const tornaIndietro = () => navigate(modificato ? '/gantt' : '/cantiere')
 
   const ricarica = useCallback(async () => {
     try {
-      const [data, dips] = await Promise.all([
+      const [data, dips, rls] = await Promise.all([
         fetchGanttStrutturato({ progettoId }),
         fetchDipendenti(),
+        fetchRuoli(),
       ])
       if (!data || data.length === 0) {
         setErrore('Progetto non trovato')
@@ -217,6 +226,7 @@ export default function CantiereDettaglioPage() {
       } else {
         setProgetto(data[0])
         setDipendenti(dips || [])
+        setRuoli(rls || [])
         setErrore(null)
       }
     } catch (e) {
@@ -235,6 +245,7 @@ export default function CantiereDettaglioPage() {
 
   const salvaAnagrafica = async (dati) => {
     await updateProgetto(progettoId, dati)
+    setModificato(true)
     await ricarica()
   }
 
@@ -263,6 +274,7 @@ export default function CantiereDettaglioPage() {
   const aggiornaFase = async (faseId, dati, cascade = false) => {
     try {
       const res = await updateFase(faseId, dati, cascade)
+      setModificato(true)
       await ricarica()
       // Toast post-cascata: avvisa l'utente di quanti task sono stati toccati
       if (cascade && res?.task_aggiornati?.length > 0) {
@@ -276,21 +288,21 @@ export default function CantiereDettaglioPage() {
   
   const eliminaFase = async (fase) => {
     if (!confirm(`Eliminare la fase "${fase.nome}"? Non sarà possibile se ha task agganciati.`)) return
-    try { await deleteFase(fase.id); await ricarica() }
+    try { await deleteFase(fase.id); setModificato(true); await ricarica() }
     catch (e) { alert(e.message || 'Errore') }
   }
 
-  const aggiungiFase = async (dati) => { await createFase(dati); await ricarica() }
+  const aggiungiFase = async (dati) => { await createFase(dati); setModificato(true); await ricarica() }
 
   // ── Azioni task ────────────────────────────────────────────────────────
 
-  const aggiungiTask = async (dati) => { await createTask(dati); await ricarica() }
+  const aggiungiTask = async (dati) => { await createTask(dati); setModificato(true); await ricarica() }
 
-  const aggiornaTask = async (taskId, dati) => { await updateTask(taskId, dati); await ricarica() }
+  const aggiornaTask = async (taskId, dati) => { await updateTask(taskId, dati); setModificato(true); await ricarica() }
 
   const eliminaTask = async (task) => {
     if (!confirm(`Eliminare il task "${task.nome}"? Verrà marcato come Eliminato (soft delete).`)) return
-    try { await deleteTask(task.id); await ricarica() }
+    try { await deleteTask(task.id); setModificato(true); await ricarica() }
     catch (e) { alert(e.message || 'Errore') }
   }
 
@@ -312,9 +324,15 @@ export default function CantiereDettaglioPage() {
 
   return (
     <div className="max-w-5xl">
-      {/* Breadcrumb */}
+      {/* Breadcrumb — destinazione dipende da se ci sono state modifiche */}
       <div className="mb-4">
-        <Link to="/gantt" className="text-sm text-blue-400 hover:text-blue-300">← Torna a GANTT</Link>
+        <button
+          onClick={tornaIndietro}
+          className="text-sm text-blue-400 hover:text-blue-300"
+          title={modificato ? 'Vedi le modifiche nel GANTT' : 'Torna alla lista Cantiere'}
+        >
+          {modificato ? '← Vedi modifiche nel GANTT' : '← Torna a Cantiere'}
+        </button>
       </div>
 
       {/* Header */}
@@ -350,6 +368,7 @@ export default function CantiereDettaglioPage() {
           <SezioneFasiTask
             progetto={progetto}
             dipendenti={dipendenti}
+            ruoli={ruoli}
             onAggiornaFase={aggiornaFase}
             onEliminaFase={eliminaFase}
             onAggiungiFase={aggiungiFase}
