@@ -3,7 +3,6 @@ Data layer — implementazione database.
 Stessa interfaccia pubblica di data_legacy.py.
 """
 
-import pandas as pd
 from datetime import datetime, timedelta, date
 from models import (
     get_session, Dipendente, Progetto, Task, Assegnazione,
@@ -27,7 +26,7 @@ def _to_dt(d):
 
 def get_dipendente(did):
     if not did or did == "":
-        return pd.Series({"id": "", "nome": "Non assegnato", "profilo": "-", "ore_sett": 40, "costo_ora": 0, "competenze": []})
+        return {"id": "", "nome": "Non assegnato", "profilo": "-", "ore_sett": 40, "costo_ora": 0, "competenze": []}
     session = get_session()
     r = session.query(Dipendente).filter(
         Dipendente.id == did,
@@ -35,46 +34,38 @@ def get_dipendente(did):
     ).first()
     session.close()
     if r is None:
-        return pd.Series({"id": did, "nome": f"Sconosciuto ({did})", "profilo": "-", "ore_sett": 40, "costo_ora": 0, "competenze": []})
-    return pd.Series({
+        return {"id": did, "nome": f"Sconosciuto ({did})", "profilo": "-", "ore_sett": 40, "costo_ora": 0, "competenze": []}
+    return {
         "id": r.id, "nome": r.nome, "profilo": r.profilo,
         "ore_sett": r.ore_sett, "costo_ora": r.costo_ora or 0,
         "competenze": r.competenze or [],
-    })
+    }
 
 def get_progetto(pid):
     if not pid or pid == "":
-        return pd.Series({"id": "", "nome": "Sconosciuto", "cliente": "", "stato": ""})
+        return {"id": "", "nome": "Sconosciuto", "cliente": "", "stato": ""}
     session = get_session()
     r = session.query(Progetto).filter(Progetto.id == pid).first()
     session.close()
     if r is None:
-        return pd.Series({"id": pid, "nome": f"Sconosciuto ({pid})", "cliente": "", "stato": ""})
-    return pd.Series({
+        return {"id": pid, "nome": f"Sconosciuto ({pid})", "cliente": "", "stato": ""}
+    return {
         "id": r.id, "nome": r.nome, "cliente": r.cliente, "stato": r.stato,
         "data_inizio": _to_dt(r.data_inizio), "data_fine": _to_dt(r.data_fine),
         "budget_ore": r.budget_ore or 0, "valore_contratto": r.valore_contratto or 0,
         "descrizione": r.descrizione or "", "fase_corrente": r.fase_corrente or "",
-    })
+    }
 
 def get_tasks_progetto(pid):
-    """Tasks di un progetto come DataFrame pandas.
+    """Tasks di un progetto come lista di dict (uno per task).
 
-    ⚠ DEBITO NOTO — DataFrame come tipo di ritorno è residuo storico della
-    migrazione DataFrame→Postgres (vedi HANDOFF_postgres_migration.md §6-ter,
-    "ULTIMO PASSO: rimuovere TUTTE le _reload() + i DataFrame in cache"). È
-    stato MANTENUTO di proposito anche dalla Migration #1 (Step 3.1, 25/05/2026)
-    per limitare la superficie di cambio: la conversione del campo predecessore
-    → dipendenze NON è il momento giusto per rimuovere anche il DataFrame.
-    Da rimuovere nel Blocco 4 (ritiro helper-DataFrame, dopo le 3 migration
-    Alembic): a quel punto questa funzione tornerà direttamente una lista di
-    dict (o oggetti Task ORM), e i chiamanti smetteranno di usare pandas.
+    Blocco 4 (ritiro helper-DataFrame): questa funzione tornava un DataFrame
+    pandas, residuo storico della migrazione DataFrame→Postgres. Ora restituisce
+    direttamente la lista di dict `data` (e `[]` se il progetto non ha task).
 
-    Step 3.1 (25/05/2026): la colonna `dipendenze` contiene liste di dict
-    `{task_predecessore_id, tipo_dipendenza}` — non scalari. Pandas accetta
-    liste come valori di colonna ma non le normalizza: la normalizzazione
-    (esplodere in righe figlie o esporre come array nested) è anch'essa
-    rimandata al Blocco 4.
+    Ogni task espone `dipendenze`: lista di dict
+    `{task_predecessore_id, tipo_dipendenza}` (modello-grafo Step 3.1,
+    25/05/2026) — già nella forma nested corretta, niente normalizzazione.
     """
     session = get_session()
     from sqlalchemy.orm import joinedload, selectinload
@@ -98,31 +89,7 @@ def get_tasks_progetto(pid):
                  for d in r.dipendenze_entranti
              ]} for r in rows]
     session.close()
-    return pd.DataFrame(data) if data else pd.DataFrame(columns=[
-        "id", "progetto_id", "nome", "fase_id", "fase", "ore_stimate",
-        "data_inizio", "data_fine", "stato", "profilo_richiesto",
-        "dipendente_id", "dipendenze",
-    ])
-
-def get_consuntivi_task(tid):
-    session = get_session()
-    rows = session.query(Consuntivo).filter(Consuntivo.task_id == tid).all()
-    data = [{"task_id": r.task_id, "dipendente_id": r.dipendente_id,
-             "settimana": _to_dt(r.settimana), "ore_dichiarate": r.ore_dichiarate,
-             "compilato": r.compilato, "data_compilazione": r.data_compilazione,
-             "nota": r.nota or ""} for r in rows]
-    session.close()
-    return pd.DataFrame(data) if data else pd.DataFrame(columns=["task_id","dipendente_id","settimana","ore_dichiarate","compilato","data_compilazione","nota"])
-
-def get_consuntivi_dipendente(did):
-    session = get_session()
-    rows = session.query(Consuntivo).filter(Consuntivo.dipendente_id == did).all()
-    data = [{"task_id": r.task_id, "dipendente_id": r.dipendente_id,
-             "settimana": _to_dt(r.settimana), "ore_dichiarate": r.ore_dichiarate,
-             "compilato": r.compilato, "data_compilazione": r.data_compilazione,
-             "nota": r.nota or ""} for r in rows]
-    session.close()
-    return pd.DataFrame(data) if data else pd.DataFrame(columns=["task_id","dipendente_id","settimana","ore_dichiarate","compilato","data_compilazione","nota"])
+    return data
 
 def ore_consuntivate_progetto(pid):
     from sqlalchemy import func
