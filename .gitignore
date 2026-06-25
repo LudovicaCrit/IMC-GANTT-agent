@@ -36,3 +36,4 @@ frontend/tasks.md
 backend/diagnostico_*.py
 backup_*.sql
 *.bak
+backend/cookies.txt

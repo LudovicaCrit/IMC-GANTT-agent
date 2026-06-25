@@ -102,6 +102,144 @@ def ore_consuntivate_progetto(pid):
     session.close()
     return total or 0
 
+def progetti_attivi_visibili(current_user):
+    """Id dei progetti ATTIVI visibili a `current_user` (filtro self-or-manager).
+
+    Confina nello strato dati la conoscenza del DB del filtro di visibilità,
+    così lo stesso filtro è riusabile identico dalla Home management, dalla Home
+    dipendente e dalla Consuntivazione (coerente col Blocco 4 e con la futura
+    conversione ORM).
+
+    Attivi = Progetto.stato in STATI_PROGETTO_ATTIVI.
+    Identità:
+      - manager → tutti gli attivi;
+      - altrimenti → solo quelli con Progetto.pm_id == current_user.dipendente_id.
+
+    NB: il confronto è con `dipendente_id` (FK a dipendenti), NON con
+    `current_user.id` (PK di utenti, dominio diverso): sbagliarlo darebbe un
+    filtro che non matcha mai, silenziosamente.
+
+    Ritorna list[str] (gli id progetto sono String(10)).
+    """
+    from models import STATI_PROGETTO_ATTIVI
+
+    session = get_session()
+    try:
+        q = session.query(Progetto.id).filter(
+            Progetto.stato.in_(STATI_PROGETTO_ATTIVI)
+        )
+        if current_user.ruolo_app != "manager":
+            q = q.filter(Progetto.pm_id == current_user.dipendente_id)
+        return [pid for (pid,) in q.all()]
+    finally:
+        session.close()
+
+
+def criticita_sforamento_progetti(progetti_ids):
+    """Criticità di sforamento ore (consumate vs vendute) per i progetti dati.
+
+    Home management — vista PM/manager. Restituisce SOLO i progetti che hanno
+    almeno una criticità; i progetti sani non compaiono. `progetti_ids` è già
+    la lista filtrata a monte (attivi + filtro identità); qui non si filtra per
+    stato né per identità, si calcola e basta.
+
+    DIREZIONE — "superamento_ore" confronta ore_consumate vs ore_vendute (budget
+    commerciale, contratto col cliente). Il confronto con ore_pianificate (piano
+    interno del PM) è una criticità di tipo DIVERSO, prevista in futuro come
+    tipo: "superamento_pianificato", da affiancare a questa SENZA ridisegnare il
+    payload (tipo è una stringa-enum, non un booleano). NON implementarlo ora.
+
+    Calcolo unico (vincolante): un solo metodo di aggregazione applicato sia
+    alle fasi sia al totale. ore_consumate di fase = SUM(Consuntivo.ore_dichiarate)
+    sui task della fase (stesso pattern di routes/fasi.py:lista_fasi_progetto,
+    concentrato qui). Il totale di progetto è la SOMMA delle ore_consumate di
+    fase appena calcolate — NON una query separata, NON ore_consuntivate_progetto.
+    Così fase e progetto sono coerenti per costruzione: il progetto sfora se e
+    solo se la somma delle sue fasi sfora.
+
+    ore_vendute di fase NULL/0: la fase non genera criticità di fase (nessun
+    budget, niente /0), MA le sue ore_consumate entrano comunque nel totale di
+    progetto (sottostimare il consumo nasconderebbe una criticità). Progetto con
+    somma_vendute 0/NULL: saltato (non calcolabile, non è errore).
+    """
+    from sqlalchemy import func
+    from models import Fase
+
+    if not progetti_ids:
+        return []
+
+    session = get_session()
+    try:
+        progetti = (
+            session.query(Progetto)
+            .filter(Progetto.id.in_(progetti_ids))
+            .all()
+        )
+        out = []
+        for p in progetti:
+            fasi = (
+                session.query(Fase)
+                .filter(Fase.progetto_id == p.id)
+                .order_by(Fase.ordine)
+                .all()
+            )
+            criticita = []
+            somma_consumate = 0.0
+            somma_vendute = 0.0
+            for f in fasi:
+                # Stessa aggregazione di routes/fasi.py: SUM(ore_dichiarate)
+                # sui consuntivi dei task agganciati a questa fase.
+                ore_consumate = float(
+                    session.query(
+                        func.coalesce(func.sum(Consuntivo.ore_dichiarate), 0.0)
+                    ).join(Task, Consuntivo.task_id == Task.id)
+                    .filter(Task.fase_id == f.id)
+                    .scalar() or 0.0
+                )
+                # Contributo al totale: SEMPRE, anche se la fase non ha budget.
+                somma_consumate += ore_consumate
+                ore_vendute = f.ore_vendute
+                if ore_vendute:  # non None e non 0 → fase con budget
+                    somma_vendute += ore_vendute
+                    if ore_consumate > ore_vendute:
+                        criticita.append({
+                            "tipo": "superamento_ore",
+                            "livello": "fase",
+                            "fase_id": f.id,
+                            "fase_nome": f.nome,
+                            "dimensione_pct": round(ore_consumate / ore_vendute, 2),
+                            "ore_consumate": ore_consumate,
+                            "ore_vendute": float(ore_vendute),
+                            "focus": f"fase-{f.id}",
+                        })
+
+            # Progetto senza budget complessivo: non calcolabile, si salta.
+            if not somma_vendute:
+                continue
+            if somma_consumate > somma_vendute:
+                criticita.append({
+                    "tipo": "superamento_ore",
+                    "livello": "progetto",
+                    "fase_id": None,
+                    "fase_nome": None,
+                    "dimensione_pct": round(somma_consumate / somma_vendute, 2),
+                    "ore_consumate": somma_consumate,
+                    "ore_vendute": somma_vendute,
+                    "focus": None,
+                })
+
+            if criticita:
+                out.append({
+                    "progetto_id": p.id,
+                    "progetto_nome": p.nome,
+                    "pm_id": p.pm_id,
+                    "criticita": criticita,
+                })
+        return out
+    finally:
+        session.close()
+
+
 def tasso_compilazione_progetto(pid):
     session = get_session()
     base = session.query(Consuntivo).join(
