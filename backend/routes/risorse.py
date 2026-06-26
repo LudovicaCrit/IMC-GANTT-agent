@@ -245,7 +245,9 @@ def saturazione_periodo(
                     and t_inizio <= lun_w_dt + timedelta(days=4)
                     and t_fine >= lun_w_dt):
                 weeks_task = max(1, (t_fine - t_inizio).days / 7)
-                ore_task_in_w = (task_da_escludere.ore_stimate or 0) / weeks_task
+                # Migrazione #3 passo 2 (#2): piano corrente, coerente con
+                # carico_settimanale_dipendente (#1) da cui viene carico_w.
+                ore_task_in_w = (task_da_escludere.ore_pianificate or 0) / weeks_task
                 carico_w = max(0, carico_w - ore_task_in_w)
 
         sat_pct = round(carico_w / ore_sett_dip * 100) if ore_sett_dip > 0 else 0
@@ -310,14 +312,15 @@ def suggerisci_bilanciamento(_: Utente = Depends(require_manager)):
             # Calcola ore settimanali per questo task
             t_inizio = _to_dt(t.data_inizio)
             t_fine = _to_dt(t.data_fine)
-            ore_stimate = t.ore_stimate or 0
+            ore_stimate = t.ore_stimate or 0            # display (stima storica, gruppo B)
+            ore_pianificate = t.ore_pianificate or 0    # piano corrente (carico, #2)
             # Task senza date: non distribuibile sulla settimana, ore_sett=0.
             # Resta visibile in task_list ma non contribuisce alla saturazione
             # né alle proposte di redistribuzione (sort by ore_sett a valle).
             if t_inizio is not None and t_fine is not None:
                 durata_giorni = max(1, (t_fine - t_inizio).days)
                 durata_sett = max(1, durata_giorni / 7)
-                ore_sett_task = round(ore_stimate / durata_sett, 1)
+                ore_sett_task = round(ore_pianificate / durata_sett, 1)
             else:
                 ore_sett_task = 0
 

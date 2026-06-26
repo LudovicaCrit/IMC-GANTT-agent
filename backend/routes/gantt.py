@@ -205,13 +205,16 @@ def dati_gantt(
     for t in tasks:
         dip = get_dipendente(t.dipendente_id)
         ore_cons = ore_per_task.get(t.id, 0.0)
-        ore_stimate = int(t.ore_stimate) if t.ore_stimate else 0
+        ore_stimate = int(t.ore_stimate) if t.ore_stimate else 0  # display (stima storica, gruppo B)
+        ore_pianificate = int(t.ore_pianificate) if t.ore_pianificate else 0  # piano corrente (#3)
 
-        # Progress calcolato su ore consuntivate / ore stimate
+        # Progress calcolato su ore consuntivate / ore PIANIFICATE (piano corrente).
+        # Migrazione #3 passo 2 (#3). Post-backfill pianificate == stimate → oracolo
+        # progress invariato.
         if t.stato == "Completato":
             progress = 100
-        elif ore_stimate > 0 and ore_cons > 0:
-            progress = min(99, round(ore_cons / ore_stimate * 100))
+        elif ore_pianificate > 0 and ore_cons > 0:
+            progress = min(99, round(ore_cons / ore_pianificate * 100))
         else:
             progress = 0
 

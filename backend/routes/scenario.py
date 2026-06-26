@@ -219,6 +219,9 @@ def _carica_dati_per_engine():
              ],
              "data_inizio": t.data_inizio, "data_fine": t.data_fine,
              "ore_stimate": t.ore_stimate or 0,
+             # ore_pianificate (piano corrente) in aggiunta a ore_stimate (stima
+             # storica). Additivo: il motore (carico) passerà a questa chiave (#4).
+             "ore_pianificate": t.ore_pianificate or 0,
              "stato": t.stato}
             for t in session.query(Task).options(
                 selectinload(Task.dipendenze_entranti)
@@ -369,10 +372,14 @@ def scenario_conferma(req: ConfermaRequest, _: Utente = Depends(require_manager)
         if nuova_fine and vecchia_fine and nuova_fine != vecchia_fine:
             kwargs["data_fine"] = dt.combine(nuova_fine, dt.min.time())
 
-        nuove_ore = task_dopo.get("ore_stimate")
-        vecchie_ore = task_prima.get("ore_stimate")
+        # Migrazione #3 (write-path scenario): la conferma persiste il PIANO
+        # CORRENTE. Il motore cambia ore_pianificate (non ore_stimate), quindi il
+        # diff e la scrittura vanno su ore_pianificate. ore_stimate (stima
+        # congelata) NON va toccata: resta memoria storica.
+        nuove_ore = task_dopo.get("ore_pianificate")
+        vecchie_ore = task_prima.get("ore_pianificate")
         if nuove_ore and vecchie_ore and nuove_ore != vecchie_ore:
-            kwargs["ore_stimate"] = nuove_ore
+            kwargs["ore_pianificate"] = nuove_ore
 
         if kwargs:
             ok = modifica_task(tid, **kwargs)

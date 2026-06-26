@@ -282,7 +282,11 @@ def simula_scenario(tasks_list, dipendenti_list, progetti_list, modifiche, data_
             if "nuovo_inizio" in mod and mod["nuovo_inizio"]:
                 task["data_inizio"] = _to_date(mod["nuovo_inizio"])
             if "nuove_ore" in mod and mod["nuove_ore"]:
-                task["ore_stimate"] = mod["nuove_ore"]
+                # La simulazione cambia il PIANO CORRENTE, non la stima storica.
+                # Migrazione #3 (write-path scenario): scrive ore_pianificate, che
+                # è ciò che il carico (l.~474) ora legge. ore_stimate resta la
+                # stima congelata e NON va toccata qui.
+                task["ore_pianificate"] = mod["nuove_ore"]
 
             task_ids_modificati.add(tid)
 
@@ -468,10 +472,14 @@ def _carico_settimana(tasks_dict, dipendente_id, lunedi, venerdi):
         if t_fine < lunedi or t_inizio > venerdi:
             continue
 
-        # Ore settimanali = ore_stimate / durata in settimane
+        # Ore settimanali = ore_pianificate (piano corrente) / durata in settimane.
+        # Migrazione #3 passo 2 (#4): il carico simulato usa il PIANO CORRENTE,
+        # non la stima storica. La chiave arriva dal feed dello scenario
+        # (routes/scenario.py, #5'). Post-backfill pianificate == stimate → oracolo
+        # carico invariato.
         durata_giorni = max(1, (t_fine - t_inizio).days)
         durata_settimane = max(1, durata_giorni / 7)
-        ore_sett = t.get("ore_stimate", 0) / durata_settimane
+        ore_sett = t.get("ore_pianificate", 0) / durata_settimane
 
         ore_totale += ore_sett
         dettaglio.append({
