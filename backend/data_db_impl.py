@@ -113,7 +113,12 @@ def progetti_attivi_visibili(current_user):
     Attivi = Progetto.stato in STATI_PROGETTO_ATTIVI.
     Identità:
       - manager → tutti gli attivi;
-      - altrimenti → solo quelli con Progetto.pm_id == current_user.dipendente_id.
+      - altrimenti → UNIONE (senza duplicati) di:
+          a) progetti attivi di cui è PM (Progetto.pm_id == dipendente_id);
+          b) progetti attivi con almeno un task assegnato a lui
+             (Assegnazione.dipendente_id == dipendente_id), anche se il PM è
+             un altro. Così un membro vede i progetti su cui lavora, non solo
+             quelli che dirige.
 
     NB: il confronto è con `dipendente_id` (FK a dipendenti), NON con
     `current_user.id` (PK di utenti, dominio diverso): sbagliarlo darebbe un
@@ -125,12 +130,31 @@ def progetti_attivi_visibili(current_user):
 
     session = get_session()
     try:
-        q = session.query(Progetto.id).filter(
-            Progetto.stato.in_(STATI_PROGETTO_ATTIVI)
+        if current_user.ruolo_app == "manager":
+            q = session.query(Progetto.id).filter(
+                Progetto.stato.in_(STATI_PROGETTO_ATTIVI)
+            )
+            return [pid for (pid,) in q.all()]
+
+        did = current_user.dipendente_id
+        # a) progetti attivi di cui è PM
+        pm_q = session.query(Progetto.id).filter(
+            Progetto.stato.in_(STATI_PROGETTO_ATTIVI),
+            Progetto.pm_id == did,
         )
-        if current_user.ruolo_app != "manager":
-            q = q.filter(Progetto.pm_id == current_user.dipendente_id)
-        return [pid for (pid,) in q.all()]
+        # b) progetti attivi con almeno un task assegnato a lui
+        membro_q = (
+            session.query(Progetto.id)
+            .join(Task, Task.progetto_id == Progetto.id)
+            .join(Assegnazione, Assegnazione.task_id == Task.id)
+            .filter(
+                Progetto.stato.in_(STATI_PROGETTO_ATTIVI),
+                Assegnazione.dipendente_id == did,
+            )
+        )
+        # Unione senza duplicati (un progetto può matchare entrambi i rami).
+        ids = {pid for (pid,) in pm_q.all()} | {pid for (pid,) in membro_q.all()}
+        return list(ids)
     finally:
         session.close()
 
