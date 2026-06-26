@@ -17,7 +17,9 @@ load_dotenv()
 from sqlalchemy import (
     create_engine, Column, Integer, String, Float, Boolean, Text, Date,
     DateTime, ForeignKey, UniqueConstraint, CheckConstraint, JSON, SmallInteger,
+    func,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 
 # ── Configurazione ──
@@ -598,6 +600,31 @@ class Spesa(Base):
     progetto_id = Column(String(10), ForeignKey("progetti.id"), nullable=True)
     nota = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+# ══════════════════════════════════════════════════════════════════════
+# SAL — snapshot storico del GANTT (DESIGN_SAL.md)
+# ══════════════════════════════════════════════════════════════════════
+
+class SalSnapshot(Base):
+    """Fotografia IMMUTABILE e AUTOCONTENUTA dello stato completo di un progetto
+    in un istante (DESIGN_SAL §3). Lo stato (progetto + fasi + task + ore + date
+    + dipendenze tipizzate) è serializzato in JSONB; le colonne sono i metadati.
+
+    Durabilità (vedi migration c9d0e1f2a3b4):
+      - progetto_id FK senza CASCADE: la storia non si cancella col progetto.
+      - consolidato_da è l'id dipendente come stringa SENZA FK: lo snapshot
+        resta leggibile anche se quella persona viene rimossa (coerente con i
+        nomi denormalizzati dentro il JSONB).
+    """
+    __tablename__ = "sal_snapshot"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    progetto_id = Column(String(10), ForeignKey("progetti.id"), nullable=False)
+    data_snapshot = Column(DateTime, nullable=False, server_default=func.now())
+    consolidato_da = Column(String(10), nullable=True)  # id dipendente, no FK (durabilità)
+    nota = Column(Text, nullable=True)
+    stato = Column(JSONB, nullable=False)  # stato completo serializzato
 
 
 # ══════════════════════════════════════════════════════════════════════

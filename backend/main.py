@@ -22,6 +22,7 @@ from routes.agent import router as agent_router
 from routes.scenario import router as scenario_router
 from routes.fasi import router as fasi_router
 from routes.home import router as home_router
+from routes.sal import router as sal_router
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
@@ -50,6 +51,7 @@ app.include_router(agent_router)
 app.include_router(scenario_router)
 app.include_router(fasi_router)
 app.include_router(home_router)
+app.include_router(sal_router)
 
 # CORS per permettere al frontend React di chiamare il backend
 app.add_middleware(

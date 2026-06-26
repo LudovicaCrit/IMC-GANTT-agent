@@ -826,3 +826,239 @@ def salva_consuntivo(dipendente_id, settimana, ore_per_task, stati_per_task,
     session.close()
 
     return True
+
+# ══════════════════════════════════════════════════════════════════════
+# SAL — snapshot storico del GANTT (DESIGN_SAL.md)
+# ══════════════════════════════════════════════════════════════════════
+
+def _iso(d):
+    """date/datetime → stringa ISO, None → None."""
+    return d.isoformat() if d is not None else None
+
+
+def _nome_dip(session, did):
+    """Nome del dipendente per id, None se assente. Usa la sessione data."""
+    if not did:
+        return None
+    row = session.query(Dipendente.nome).filter(Dipendente.id == did).first()
+    return row[0] if row else None
+
+
+def _serializza_stato_progetto(pid):
+    """Serializza lo stato completo del progetto nel formato SAL concordato.
+
+    Formato (DESIGN_SAL, confermato 26/06/2026):
+      {schema_version, progetto:{...}, fasi:[{..., task:[...]}]}
+    - nomi denormalizzati (pm, dipendente, azienda) → snapshot autocontenuto;
+    - le tre ore sui task (stimate/pianificate/consumate) + ore di fase
+      (vendute/pianificate/consumate);
+    - ore_consumate calcolata QUI da SUM(Consuntivo.ore_dichiarate), NON dalla
+      colonna denormalizzata (stale): rende la foto veritiera. Fase = somma dei
+      consumi dei suoi task (coerenza fase↔task per costruzione).
+    Solleva ValueError se il progetto non esiste.
+    """
+    from sqlalchemy import func
+    from models import Fase, Azienda, DipendenzaTask
+
+    session = get_session()
+    try:
+        p = session.query(Progetto).filter(Progetto.id == pid).first()
+        if p is None:
+            raise ValueError(f"Progetto '{pid}' non trovato")
+
+        azienda_nome = None
+        if p.azienda_id is not None:
+            az = session.query(Azienda.nome).filter(Azienda.id == p.azienda_id).first()
+            azienda_nome = az[0] if az else None
+
+        progetto = {
+            "id": p.id, "nome": p.nome, "cliente": p.cliente,
+            "stato": p.stato, "tipologia": p.tipologia,
+            "priorita": p.priorita, "ritardabilita": p.ritardabilita,
+            "data_inizio": _iso(p.data_inizio), "data_fine": _iso(p.data_fine),
+            "fase_corrente": p.fase_corrente, "sede": p.sede,
+            "pm_id": p.pm_id, "pm_nome": _nome_dip(session, p.pm_id),
+            "azienda_id": p.azienda_id, "azienda_nome": azienda_nome, "area": p.area,
+            "scadenza_bando": _iso(p.scadenza_bando),
+            # contesto economico (analisi "ore vs venduto")
+            "budget_ore": p.budget_ore, "giornate_vendute": p.giornate_vendute,
+            "valore_contratto": p.valore_contratto,
+            # narrativa per IA-Archivio (il "perché")
+            "descrizione": p.descrizione, "motivo_sospensione": p.motivo_sospensione,
+            "lezioni_apprese": p.lezioni_apprese,
+        }
+
+        # ore_consumate reali: SUM(Consuntivo.ore_dichiarate) per task del progetto.
+        cons_per_task = dict(
+            session.query(
+                Consuntivo.task_id,
+                func.coalesce(func.sum(Consuntivo.ore_dichiarate), 0.0),
+            )
+            .join(Task, Consuntivo.task_id == Task.id)
+            .filter(Task.progetto_id == pid)
+            .group_by(Consuntivo.task_id)
+            .all()
+        )
+
+        fasi = (
+            session.query(Fase)
+            .filter(Fase.progetto_id == pid)
+            .order_by(Fase.ordine)
+            .all()
+        )
+        fasi_out = []
+        for f in fasi:
+            tasks = (
+                session.query(Task)
+                .filter(Task.fase_id == f.id)
+                .order_by(Task.ordine, Task.id)
+                .all()
+            )
+            task_out = []
+            fase_consumate = 0.0
+            for t in tasks:
+                t_cons = float(cons_per_task.get(t.id, 0.0))
+                fase_consumate += t_cons
+                deps = (
+                    session.query(DipendenzaTask)
+                    .filter(DipendenzaTask.task_successore_id == t.id)
+                    .all()
+                )
+                task_out.append({
+                    "id": t.id, "nome": t.nome, "stato": t.stato,
+                    "data_inizio": _iso(t.data_inizio), "data_fine": _iso(t.data_fine),
+                    "ore_stimate": t.ore_stimate,
+                    "ore_pianificate": t.ore_pianificate,
+                    "ore_consumate": t_cons,
+                    "profilo_richiesto": t.profilo_richiesto,
+                    "dipendente_id": t.dipendente_id,
+                    "dipendente_nome": _nome_dip(session, t.dipendente_id),
+                    "motivo_blocco": t.motivo_blocco, "note": t.note,
+                    "dipendenze": [
+                        {"task_predecessore_id": d.task_predecessore_id,
+                         "tipo_dipendenza": d.tipo_dipendenza}
+                        for d in deps
+                    ],
+                })
+            fasi_out.append({
+                "id": f.id, "nome": f.nome, "ordine": f.ordine,
+                "data_inizio": _iso(f.data_inizio), "data_fine": _iso(f.data_fine),
+                "stato": f.stato,
+                "ore_vendute": f.ore_vendute, "ore_pianificate": f.ore_pianificate,
+                "ore_consumate": round(fase_consumate, 1),
+                "task": task_out,
+            })
+
+        return {"schema_version": 1, "progetto": progetto, "fasi": fasi_out}
+    finally:
+        session.close()
+
+
+def get_progetto_meta(pid):
+    """Metadati minimi per autorizzazione/esistenza: {id, nome, pm_id} o None."""
+    session = get_session()
+    try:
+        p = session.query(Progetto.id, Progetto.nome, Progetto.pm_id).filter(
+            Progetto.id == pid
+        ).first()
+        if p is None:
+            return None
+        return {"id": p[0], "nome": p[1], "pm_id": p[2]}
+    finally:
+        session.close()
+
+
+def crea_snapshot(progetto_id, consolidato_da=None, nota=None):
+    """Crea uno snapshot SAL serializzando lo stato corrente del progetto.
+
+    Ritorna i metadati dello snapshot creato (non l'intero JSON).
+    Solleva ValueError se il progetto non esiste (via serializzatore).
+    """
+    from models import SalSnapshot
+
+    stato = _serializza_stato_progetto(progetto_id)  # ValueError se inesistente
+
+    session = get_session()
+    try:
+        snap = SalSnapshot(
+            progetto_id=progetto_id,
+            consolidato_da=consolidato_da,
+            nota=nota,
+            stato=stato,
+        )
+        session.add(snap)
+        session.commit()
+        session.refresh(snap)  # per data_snapshot (server_default now())
+        return {
+            "id": snap.id,
+            "progetto_id": snap.progetto_id,
+            "data_snapshot": _iso(snap.data_snapshot),
+            "consolidato_da": snap.consolidato_da,
+            "nota": snap.nota,
+        }
+    finally:
+        session.close()
+
+
+def lista_snapshot_progetto(pid):
+    """Storico SINTETICO degli snapshot di un progetto (NO JSON stato).
+
+    Ritorna lista di {id, data_snapshot, consolidato_da, consolidato_da_nome,
+    nota} ordinata per data desc (il più recente prima). Il JSON `stato`
+    completo si legge solo nel dettaglio (get_snapshot).
+    """
+    from models import SalSnapshot
+    session = get_session()
+    try:
+        rows = (
+            session.query(
+                SalSnapshot.id, SalSnapshot.data_snapshot,
+                SalSnapshot.consolidato_da, SalSnapshot.nota,
+            )
+            .filter(SalSnapshot.progetto_id == pid)
+            .order_by(SalSnapshot.data_snapshot.desc(), SalSnapshot.id.desc())
+            .all()
+        )
+        return [{
+            "id": r[0],
+            "data_snapshot": _iso(r[1]),
+            "consolidato_da": r[2],
+            "consolidato_da_nome": _nome_dip(session, r[2]),
+            "nota": r[3],
+        } for r in rows]
+    finally:
+        session.close()
+
+
+def get_snapshot_progetto_id(snap_id):
+    """progetto_id di uno snapshot (per l'auth a monte), None se inesistente."""
+    from models import SalSnapshot
+    session = get_session()
+    try:
+        r = session.query(SalSnapshot.progetto_id).filter(
+            SalSnapshot.id == snap_id
+        ).first()
+        return r[0] if r else None
+    finally:
+        session.close()
+
+
+def get_snapshot(snap_id):
+    """Snapshot COMPLETO (incluso JSON `stato`) o None se inesistente."""
+    from models import SalSnapshot
+    session = get_session()
+    try:
+        s = session.query(SalSnapshot).filter(SalSnapshot.id == snap_id).first()
+        if s is None:
+            return None
+        return {
+            "id": s.id,
+            "progetto_id": s.progetto_id,
+            "data_snapshot": _iso(s.data_snapshot),
+            "consolidato_da": s.consolidato_da,
+            "consolidato_da_nome": _nome_dip(session, s.consolidato_da),
+            "nota": s.nota,
+            "stato": s.stato,
+        }
+    finally:
+        session.close()
