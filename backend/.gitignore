@@ -2,3 +2,4 @@
 imcgroup.db
 __pycache__/
 *.pyc
+_*.py
