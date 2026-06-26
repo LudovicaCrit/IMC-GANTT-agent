@@ -324,10 +324,12 @@ def carico_settimanale_dipendente(did, settimana):
 
     ore = 0
     for t in tasks_dip:
-        # Distribuzione uniforme: ore_stimate / durata in settimane.
+        # Distribuzione uniforme: ore_pianificate (piano corrente) / durata.
+        # Migrazione #3 passo 2 (#1): il carico usa il PIANO CORRENTE, non la
+        # stima storica. Post-backfill pianificate == stimate → oracolo invariato.
         # weeks = max(1, ...) per task brevi (< 1 settimana).
         weeks = max(1, (t.data_fine - t.data_inizio).days / 7)
-        ore += (t.ore_stimate or 0) / weeks
+        ore += (t.ore_pianificate or 0) / weeks
     return round(ore, 1)
 
 def get_progetti_dipendente(did):
