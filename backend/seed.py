@@ -233,6 +233,9 @@ def seed():
             fase_id=fase_obj.id if fase_obj else None,
             nome=row["nome"],
             ore_stimate=int(row["ore_stimate"]),
+            # piano corrente = stima iniziale al seed; poi diverge (prereq. SAL).
+            # Allineato alla migration b8c9d0e1f2a3: re-seed da zero → 0 NULL.
+            ore_pianificate=float(row["ore_stimate"]),
             ore_rimanenti=float(row["ore_stimate"]),  # all'inizio rimanenti = stimate
             data_inizio=row["data_inizio"].date() if hasattr(row["data_inizio"], "date") else row["data_inizio"],
             data_fine=row["data_fine"].date() if hasattr(row["data_fine"], "date") else row["data_fine"],
