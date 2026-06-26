@@ -880,9 +880,9 @@ def _serializza_stato_progetto(pid):
             "pm_id": p.pm_id, "pm_nome": _nome_dip(session, p.pm_id),
             "azienda_id": p.azienda_id, "azienda_nome": azienda_nome, "area": p.area,
             "scadenza_bando": _iso(p.scadenza_bando),
-            # contesto economico (analisi "ore vs venduto")
-            "budget_ore": p.budget_ore, "giornate_vendute": p.giornate_vendute,
-            "valore_contratto": p.valore_contratto,
+            # NB: i campi ECONOMICI (budget_ore, valore_contratto, giornate_vendute)
+            # NON stanno nel SAL: il SAL fotografa SOLO la struttura del GANTT.
+            # L'economia ha il suo archivio separato (Bollettino economico).
             # narrativa per IA-Archivio (il "perché")
             "descrizione": p.descrizione, "motivo_sospensione": p.motivo_sospensione,
             "lezioni_apprese": p.lezioni_apprese,
@@ -949,7 +949,9 @@ def _serializza_stato_progetto(pid):
                 "task": task_out,
             })
 
-        return {"schema_version": 1, "progetto": progetto, "fasi": fasi_out}
+        # schema_version 2: rimossi i campi economici dal blocco progetto
+        # (SAL puro strutturale; economia → Bollettino economico).
+        return {"schema_version": 2, "progetto": progetto, "fasi": fasi_out}
     finally:
         session.close()
 
@@ -1059,6 +1061,359 @@ def get_snapshot(snap_id):
             "consolidato_da_nome": _nome_dip(session, s.consolidato_da),
             "nota": s.nota,
             "stato": s.stato,
+        }
+    finally:
+        session.close()
+
+
+# ══════════════════════════════════════════════════════════════════════
+# ECONOMIA — marginalità per progetto + erosione + aggregato per azienda
+# ══════════════════════════════════════════════════════════════════════
+
+def _pct(margine, valore):
+    """margine/valore in %, 0 se valore non positivo."""
+    return round(margine / valore * 100, 1) if valore and valore > 0 else 0.0
+
+
+def margini_economia():
+    """Marginalità economica (versione B — erosione da sovraccarico).
+
+    Solo progetti COMMERCIALI/BANDI: gli interni (tipologia 'interna') sono
+    esclusi per TIPOLOGIA (non per id: il vecchio filtro `id != 'P010'` era un
+    hack morto che, dopo il redesign seed, non escludeva più gli interni e per
+    giunta tagliava fuori il nuovo P010/Maida).
+
+    Per ogni progetto, tre margini = valore_contratto − costo su tre basi-ore:
+      - VENDUTO   (contratto): costo da Fase.ore_vendute ripartite sui task in
+        proporzione a ore_pianificate, al costo_ora dell'assegnatario (Opzione B).
+        Fallback (→ costo_stimato=True): fase senza ore_pianificate → split
+        uniforme; task/fase senza assegnatario → tariffa media di progetto.
+      - PIANIFICATO (piano PM): Σ task (ore_pianificate × costo_ora[assegnatario]).
+      - CONSUMATO  (reale): Σ consuntivi (ore_dichiarate × costo_ora[chi ha loggato]).
+        Identico al precedente `margine_attuale` (oracolo invariato).
+
+    Due erosioni (euro e punti percentuali):
+      - commerciale = margine_venduto − margine_consumato  (sforiamo il contratto?)
+      - operativa   = margine_pianificato − margine_consumato (sforiamo il piano?)
+
+    Output a due livelli: {"progetti": [...], "totali_per_azienda": [...]}.
+    Coerenza: i totali di azienda sono la SOMMA dei valori (arrotondati) dei
+    progetti del ramo → Σ per-progetto == totale per costruzione.
+    """
+    from models import Fase, Azienda
+
+    session = get_session()
+    try:
+        # mappe di supporto (una query ciascuna)
+        dip = {
+            d.id: {"nome": d.nome, "profilo": d.profilo, "costo_ora": float(d.costo_ora or 0)}
+            for d in session.query(Dipendente).all()
+        }
+        azienda_nome = {a.id: a.nome for a in session.query(Azienda).all()}
+
+        def rate(did):
+            return dip.get(did, {}).get("costo_ora", 0.0) if did else 0.0
+
+        progetti = (
+            session.query(Progetto)
+            .filter(Progetto.tipologia != "interna")  # esclusione per tipologia
+            .all()
+        )
+
+        per_progetto = []
+        for p in progetti:
+            tasks = session.query(Task).filter(Task.progetto_id == p.id).all()
+            fasi = session.query(Fase).filter(Fase.progetto_id == p.id).all()
+            fallback = False
+
+            # --- tariffa media di progetto (pesata sulle ore pianificate) ---
+            num = sum((t.ore_pianificate or 0) * rate(t.dipendente_id)
+                      for t in tasks if rate(t.dipendente_id))
+            den = sum((t.ore_pianificate or 0)
+                      for t in tasks if rate(t.dipendente_id))
+            if den > 0:
+                avg_rate = num / den
+            else:
+                rates = [rate(t.dipendente_id) for t in tasks if rate(t.dipendente_id)]
+                avg_rate = sum(rates) / len(rates) if rates else 0.0
+
+            # --- CONSUMATO (reale, dai consuntivi) — identico al vecchio calcolo ---
+            costo_consumato = 0.0
+            ore_consumate = 0.0
+            costi_per_persona = {}
+            cons = (session.query(Consuntivo).join(Task, Consuntivo.task_id == Task.id)
+                    .filter(Task.progetto_id == p.id).all())
+            for c in cons:
+                if c.ore_dichiarate <= 0:
+                    continue
+                r = rate(c.dipendente_id)
+                costo_consumato += c.ore_dichiarate * r
+                ore_consumate += c.ore_dichiarate
+                if c.dipendente_id not in costi_per_persona:
+                    info = dip.get(c.dipendente_id, {"nome": c.dipendente_id, "profilo": "-"})
+                    costi_per_persona[c.dipendente_id] = {
+                        "nome": info["nome"], "profilo": info["profilo"],
+                        "costo_ora": r, "ore": 0, "costo": 0,
+                    }
+                costi_per_persona[c.dipendente_id]["ore"] += c.ore_dichiarate
+                costi_per_persona[c.dipendente_id]["costo"] += c.ore_dichiarate * r
+
+            # --- PIANIFICATO (piano PM): ore_pianificate × rate assegnatario ---
+            costo_pianificato = 0.0
+            for t in tasks:
+                op = t.ore_pianificate or 0
+                if op <= 0:
+                    continue
+                r = rate(t.dipendente_id)
+                if not r:  # ore pianificate senza tariffa attribuibile
+                    r = avg_rate
+                    fallback = True
+                costo_pianificato += op * r
+
+            # --- VENDUTO (Opzione B): Fase.ore_vendute ripartite per ore_pianificate ---
+            costo_venduto = 0.0
+            tasks_per_fase = {}
+            for t in tasks:
+                tasks_per_fase.setdefault(t.fase_id, []).append(t)
+            for f in fasi:
+                ov = float(f.ore_vendute or 0)
+                if ov <= 0:
+                    continue
+                ftasks = tasks_per_fase.get(f.id, [])
+                if not ftasks:
+                    costo_venduto += ov * avg_rate
+                    fallback = True
+                    continue
+                sum_plan = sum((t.ore_pianificate or 0) for t in ftasks)
+                if sum_plan > 0:
+                    for t in ftasks:
+                        quota = ov * (t.ore_pianificate or 0) / sum_plan
+                        r = rate(t.dipendente_id)
+                        if not r:
+                            r = avg_rate
+                            fallback = True
+                        costo_venduto += quota * r
+                else:
+                    # nessuna ora pianificata nella fase → split uniforme
+                    fallback = True
+                    n = len(ftasks)
+                    for t in ftasks:
+                        r = rate(t.dipendente_id) or avg_rate
+                        costo_venduto += (ov / n) * r
+
+            valore = float(p.valore_contratto or 0)
+            m_venduto = round(valore - costo_venduto, 2)
+            m_pianificato = round(valore - costo_pianificato, 2)
+            m_consumato = round(valore - costo_consumato, 2)
+            pct_venduto = _pct(m_venduto, valore)
+            pct_pianificato = _pct(m_pianificato, valore)
+            pct_consumato = _pct(m_consumato, valore)
+
+            per_progetto.append({
+                "progetto_id": p.id, "nome": p.nome,
+                "cliente": p.cliente, "stato": p.stato, "tipologia": p.tipologia,
+                "azienda_id": p.azienda_id,
+                "azienda_nome": azienda_nome.get(p.azienda_id),
+                "valore_contratto": valore,
+                "ore_consuntivate": round(ore_consumate, 1),
+                # tre costi e tre margini
+                "costo_venduto": round(costo_venduto, 2),
+                "costo_pianificato": round(costo_pianificato, 2),
+                "costo_consumato": round(costo_consumato, 2),
+                "margine_venduto": m_venduto, "margine_venduto_pct": pct_venduto,
+                "margine_pianificato": m_pianificato, "margine_pianificato_pct": pct_pianificato,
+                "margine_consumato": m_consumato, "margine_consumato_pct": pct_consumato,
+                # due erosioni (euro e punti percentuali)
+                "erosione_commerciale_eur": round(m_venduto - m_consumato, 2),
+                "erosione_commerciale_pp": round(pct_venduto - pct_consumato, 1),
+                "erosione_operativa_eur": round(m_pianificato - m_consumato, 2),
+                "erosione_operativa_pp": round(pct_pianificato - pct_consumato, 1),
+                # trasparenza: margine approssimato per dati incompleti
+                "costo_stimato": fallback,
+                # compat con il payload precedente (oracolo: margine_attuale invariato)
+                "costo_effettivo": round(costo_consumato, 2),
+                "margine_attuale": m_consumato, "margine_pct": pct_consumato,
+                "dettaglio_persone": sorted(
+                    costi_per_persona.values(), key=lambda x: x["costo"], reverse=True
+                ),
+            })
+
+        # --- aggregato per azienda (somma dei valori arrotondati per coerenza) ---
+        tot = {}
+        for r in per_progetto:
+            k = r["azienda_id"]
+            if k not in tot:
+                tot[k] = {
+                    "azienda_id": k, "azienda_nome": r["azienda_nome"],
+                    "n_progetti": 0, "valore_contratto": 0.0,
+                    "costo_venduto": 0.0, "costo_pianificato": 0.0, "costo_consumato": 0.0,
+                    "costo_stimato": False,
+                }
+            a = tot[k]
+            a["n_progetti"] += 1
+            a["valore_contratto"] += r["valore_contratto"]
+            a["costo_venduto"] += r["costo_venduto"]
+            a["costo_pianificato"] += r["costo_pianificato"]
+            a["costo_consumato"] += r["costo_consumato"]
+            a["costo_stimato"] = a["costo_stimato"] or r["costo_stimato"]
+
+        totali_per_azienda = []
+        for a in tot.values():
+            val = round(a["valore_contratto"], 2)
+            mv = round(val - a["costo_venduto"], 2)
+            mp = round(val - a["costo_pianificato"], 2)
+            mc = round(val - a["costo_consumato"], 2)
+            pv, pp_, pc = _pct(mv, val), _pct(mp, val), _pct(mc, val)
+            totali_per_azienda.append({
+                "azienda_id": a["azienda_id"], "azienda_nome": a["azienda_nome"],
+                "n_progetti": a["n_progetti"], "valore_contratto": val,
+                "costo_venduto": round(a["costo_venduto"], 2),
+                "costo_pianificato": round(a["costo_pianificato"], 2),
+                "costo_consumato": round(a["costo_consumato"], 2),
+                "margine_venduto": mv, "margine_venduto_pct": pv,
+                "margine_pianificato": mp, "margine_pianificato_pct": pp_,
+                "margine_consumato": mc, "margine_consumato_pct": pc,
+                "erosione_commerciale_eur": round(mv - mc, 2),
+                "erosione_commerciale_pp": round(pv - pc, 1),
+                "erosione_operativa_eur": round(mp - mc, 2),
+                "erosione_operativa_pp": round(pp_ - pc, 1),
+                "costo_stimato": a["costo_stimato"],
+            })
+
+        per_progetto.sort(key=lambda x: x["margine_consumato_pct"])
+        totali_per_azienda.sort(key=lambda x: (x["azienda_nome"] or ""))
+        return {"progetti": per_progetto, "totali_per_azienda": totali_per_azienda}
+    finally:
+        session.close()
+
+
+# ══════════════════════════════════════════════════════════════════════
+# BOLLETTINO ECONOMICO — archivio storico della marginalità (DESIGN: separato dal SAL)
+# ══════════════════════════════════════════════════════════════════════
+
+def _serializza_economia_progetto(pid):
+    """Congela l'economia di UN progetto nel formato Bollettino.
+
+    Riusa margini_economia() (NON la tocca): ne filtra a valle la riga del
+    progetto, che contiene già margini calcolati (3 margini + 2 erosioni),
+    grezzi (valore, costi, costo_ora per persona in dettaglio_persone),
+    azienda denormalizzata e flag costo_stimato. La arricchisce con le ore
+    aggregate grezze (vendute/pianificate; le consumate ci sono già).
+    Solleva ValueError se il progetto non è in Economia (inesistente o interno).
+    """
+    from sqlalchemy import func
+    from models import Fase
+
+    eco = margini_economia()
+    riga = next((p for p in eco["progetti"] if p["progetto_id"] == pid), None)
+    if riga is None:
+        raise ValueError(
+            f"Progetto '{pid}' non presente in Economia (inesistente o interno)"
+        )
+
+    riga = dict(riga)  # copia: non mutare l'output condiviso
+    session = get_session()
+    try:
+        ore_vendute = float(
+            session.query(func.coalesce(func.sum(Fase.ore_vendute), 0.0))
+            .filter(Fase.progetto_id == pid).scalar() or 0.0
+        )
+        ore_pianificate = float(
+            session.query(func.coalesce(func.sum(Task.ore_pianificate), 0.0))
+            .filter(Task.progetto_id == pid).scalar() or 0.0
+        )
+    finally:
+        session.close()
+    riga["ore_vendute"] = round(ore_vendute, 1)
+    riga["ore_pianificate"] = round(ore_pianificate, 1)
+
+    return {"schema_version": 1, "progetto": riga}
+
+
+def crea_bollettino(progetto_id, consolidato_da=None, nota=None):
+    """Crea un Bollettino economico congelando l'economia corrente del progetto.
+    Ritorna i metadati (non l'intero JSON). ValueError se progetto non in Economia.
+    """
+    from models import BollettinoEconomico
+
+    stato = _serializza_economia_progetto(progetto_id)  # ValueError se assente
+
+    session = get_session()
+    try:
+        b = BollettinoEconomico(
+            progetto_id=progetto_id,
+            consolidato_da=consolidato_da,
+            nota=nota,
+            stato=stato,
+        )
+        session.add(b)
+        session.commit()
+        session.refresh(b)
+        return {
+            "id": b.id,
+            "progetto_id": b.progetto_id,
+            "data_snapshot": _iso(b.data_snapshot),
+            "consolidato_da": b.consolidato_da,
+            "nota": b.nota,
+        }
+    finally:
+        session.close()
+
+
+def lista_bollettini_progetto(pid):
+    """Storico SINTETICO dei bollettini di un progetto (NO JSON stato), data desc."""
+    from models import BollettinoEconomico
+    session = get_session()
+    try:
+        rows = (
+            session.query(
+                BollettinoEconomico.id, BollettinoEconomico.data_snapshot,
+                BollettinoEconomico.consolidato_da, BollettinoEconomico.nota,
+            )
+            .filter(BollettinoEconomico.progetto_id == pid)
+            .order_by(BollettinoEconomico.data_snapshot.desc(), BollettinoEconomico.id.desc())
+            .all()
+        )
+        return [{
+            "id": r[0],
+            "data_snapshot": _iso(r[1]),
+            "consolidato_da": r[2],
+            "consolidato_da_nome": _nome_dip(session, r[2]),
+            "nota": r[3],
+        } for r in rows]
+    finally:
+        session.close()
+
+
+def get_bollettino_progetto_id(bid):
+    """progetto_id di un bollettino (per l'auth a monte), None se inesistente."""
+    from models import BollettinoEconomico
+    session = get_session()
+    try:
+        r = session.query(BollettinoEconomico.progetto_id).filter(
+            BollettinoEconomico.id == bid
+        ).first()
+        return r[0] if r else None
+    finally:
+        session.close()
+
+
+def get_bollettino(bid):
+    """Bollettino COMPLETO (incluso JSON `stato`) o None se inesistente."""
+    from models import BollettinoEconomico
+    session = get_session()
+    try:
+        b = session.query(BollettinoEconomico).filter(BollettinoEconomico.id == bid).first()
+        if b is None:
+            return None
+        return {
+            "id": b.id,
+            "progetto_id": b.progetto_id,
+            "data_snapshot": _iso(b.data_snapshot),
+            "consolidato_da": b.consolidato_da,
+            "consolidato_da_nome": _nome_dip(session, b.consolidato_da),
+            "nota": b.nota,
+            "stato": b.stato,
         }
     finally:
         session.close()

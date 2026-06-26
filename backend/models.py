@@ -627,6 +627,25 @@ class SalSnapshot(Base):
     stato = Column(JSONB, nullable=False)  # stato completo serializzato
 
 
+class BollettinoEconomico(Base):
+    """Archivio storico della MARGINALITÀ di un progetto (Bollettino economico).
+
+    Separato dal SAL per decisione architetturale: il SAL fotografa la STRUTTURA
+    del GANTT, il Bollettino l'ECONOMIA. Stessa forma di sal_snapshot (immutabile,
+    autocontenuto, JSONB); il JSONB `stato` contiene i margini calcolati + i
+    grezzi che li producono (valore, costi, ore, costo_ora), con nomi
+    denormalizzati. Vedi migration d0e1f2a3b4c5.
+    """
+    __tablename__ = "bollettino_economico"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    progetto_id = Column(String(10), ForeignKey("progetti.id"), nullable=False)
+    data_snapshot = Column(DateTime, nullable=False, server_default=func.now())
+    consolidato_da = Column(String(10), nullable=True)  # id dipendente, no FK (durabilità)
+    nota = Column(Text, nullable=True)
+    stato = Column(JSONB, nullable=False)  # economia serializzata (margini + grezzi)
+
+
 # ══════════════════════════════════════════════════════════════════════
 # CREAZIONE TABELLE
 # ══════════════════════════════════════════════════════════════════════
