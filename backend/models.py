@@ -169,12 +169,34 @@ class Utente(Base):
 # ANAGRAFICA
 # ══════════════════════════════════════════════════════════════════════
 
+class Azienda(Base):
+    """Aziende operative del Gruppo IMC (struttura multi-azienda).
+
+    DESIGN_SEED_Innovation_Plaza §1 (26/06/2026). Nel seed modelliamo le 2
+    s.r.l. operative vive: IMC-Improve (commesse/progetti) e Innovation Plaza
+    (bandi). Struttura estensibile: un ramo futuro = una riga in più, non una
+    migration. Vedi migration alembic a7b8c9d0e1f2 (uq_azienda_nome).
+    """
+    __tablename__ = "azienda"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    nome = Column(String(100), nullable=False)
+
+    __table_args__ = (UniqueConstraint("nome", name="uq_azienda_nome"),)
+
+    dipendenti = relationship("Dipendente", back_populates="azienda_rel")
+    progetti = relationship("Progetto", back_populates="azienda_rel")
+
+
 class Dipendente(Base):
     __tablename__ = "dipendenti"
 
     id = Column(String(10), primary_key=True)
     nome = Column(String(100), nullable=False)
     profilo = Column(String(60), nullable=False)  # legacy, resta per compatibilità
+    # azienda_id: ogni persona appartiene a un'azienda del gruppo (obbligatorio).
+    # Vedi migration a7b8c9d0e1f2 + DESIGN_SEED_Innovation_Plaza §1-§2.
+    azienda_id = Column(Integer, ForeignKey("azienda.id"), nullable=False)
     ruolo_id = Column(Integer, ForeignKey("ruoli.id"), nullable=True)
     ore_sett = Column(SmallInteger, nullable=False, default=40)
     costo_ora = Column(Float, nullable=True)
@@ -187,6 +209,7 @@ class Dipendente(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
+    azienda_rel = relationship("Azienda", back_populates="dipendenti")
     ruolo_rel = relationship("Ruolo", back_populates="dipendenti")
     competenze_rel = relationship("DipendentiCompetenze", back_populates="dipendente")
     assegnazioni = relationship("Assegnazione", back_populates="dipendente")
@@ -234,6 +257,13 @@ class Progetto(Base):
     # Era "responsabile_id"; rinominato per coerenza con linguaggio Vincenzo/Francesco
     # e prep R2 (ABAC: solo il PM potrà modificare il proprio progetto).
     pm_id = Column(String(10), ForeignKey("dipendenti.id"), nullable=True)
+    # azienda_id: nullable. Obbligatoria per commerciali/bandi (garantita nel
+    # seed / futuro CHECK condizionato), NULL ammesso per gli interni (attività
+    # trasversale). Vedi migration a7b8c9d0e1f2 + DESIGN §1.
+    azienda_id = Column(Integer, ForeignKey("azienda.id"), nullable=True)
+    # area: valorizzata SOLO per i bandi Innovation ("PA" | "Imprese"), NULL
+    # altrove. Spezza Innovation tra le due aree (Ida=PA, Domenica=Imprese).
+    area = Column(String(20), nullable=True)
     scadenza_bando = Column(Date, nullable=True)
     motivo_sospensione = Column(Text, nullable=True)
     lezioni_apprese = Column(Text, nullable=True)
@@ -241,6 +271,7 @@ class Progetto(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
+    azienda_rel = relationship("Azienda", back_populates="progetti")
     fasi = relationship("Fase", back_populates="progetto", cascade="all, delete-orphan",
                         order_by="Fase.ordine")
     task = relationship("Task", back_populates="progetto", cascade="all, delete-orphan")

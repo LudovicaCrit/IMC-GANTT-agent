@@ -4,9 +4,11 @@ Ruoli, Competenze, FasiStandard, Fasi per progetto, Utenti.
 Eseguire UNA VOLTA per inizializzare il db.
 """
 
+import pandas as pd
+
 from models import (
     create_tables, get_session,
-    Dipendente, Progetto, Task, DipendenzaTask, Assegnazione, Consuntivo,
+    Azienda, Dipendente, Progetto, Task, DipendenzaTask, Assegnazione, Consuntivo,
     Segnalazione, Ruolo, Competenza, DipendentiCompetenze, FaseStandard,
     Fase, Utente,
 )
@@ -53,6 +55,11 @@ def seed():
         "controllo gestione", "documentazione",
         "ISO 27001", "ISO 9001", "DORA", "CSRD",
         "testing", "integrazione sistemi",
+        # Competenze funzionali del redesign Innovation Plaza (26/06/2026).
+        # Solo funzionali: le qualifiche-ruolo (Co-founder, Managing Director, ecc.)
+        # NON sono competenze. Servono per agganciare la M2M dipendenti_competenze
+        # delle persone Innovation (Ida/Domenica/Denise) e il match task↔persona.
+        "progettazione", "progettazione europea", "bandi pubblici", "PA", "imprese",
     ]
     competenze_obj = {}
     for nome in competenze_nomi:
@@ -61,6 +68,24 @@ def seed():
         session.flush()
         competenze_obj[nome] = c
     print(f"  ✓ {len(competenze_nomi)} competenze")
+
+    # ══════════════════════════════════════════════════════════════
+    # 2-bis. AZIENDE (struttura multi-azienda — DESIGN §1)
+    # ══════════════════════════════════════════════════════════════
+    # Devono esistere PRIMA di dipendenti e progetti (FK azienda_id). Le 2
+    # operative vive del Gruppo IMC; struttura estensibile (una riga = un ramo).
+    # Derivate dai dati referenziati, più le 2 canoniche, così un eventuale ramo
+    # nuovo nei dati non richiede di toccare qui.
+    nomi_azienda = {"IMC-Improve", "Innovation Plaza"}
+    nomi_azienda |= set(DIPENDENTI["azienda"].dropna().unique())
+    nomi_azienda |= set(PROGETTI["azienda"].dropna().unique())
+    azienda_obj = {}
+    for nome in sorted(nomi_azienda):
+        a = Azienda(nome=nome)
+        session.add(a)
+        session.flush()
+        azienda_obj[nome] = a
+    print(f"  ✓ {len(azienda_obj)} aziende")
 
     # ══════════════════════════════════════════════════════════════
     # 3. DIPENDENTI
@@ -72,6 +97,7 @@ def seed():
             id=row["id"],
             nome=row["nome"],
             profilo=row["profilo"],
+            azienda_id=azienda_obj[row["azienda"]].id,
             ruolo_id=ruolo.id if ruolo else None,
             ore_sett=int(row["ore_sett"]),
             costo_ora=float(row["costo_ora"]),
@@ -134,12 +160,19 @@ def seed():
     # 6. PROGETTI
     # ══════════════════════════════════════════════════════════════
     for _, row in PROGETTI.iterrows():
+        # azienda/area/pm sono nullable (interni: azienda/pm NULL; area solo bandi).
+        az_nome = row.get("azienda")
+        area = row.get("area")
+        pm_id = row.get("pm_id")
         session.add(Progetto(
             id=row["id"],
             nome=row["nome"],
             cliente=row["cliente"],
             stato=row["stato"],
             tipologia=row.get("tipologia", "ordinario"),
+            azienda_id=azienda_obj[az_nome].id if pd.notna(az_nome) else None,
+            area=area if pd.notna(area) else None,
+            pm_id=pm_id if pd.notna(pm_id) else None,
             data_inizio=row["data_inizio"].date() if hasattr(row["data_inizio"], "date") else row["data_inizio"],
             data_fine=row["data_fine"].date() if hasattr(row["data_fine"], "date") else row["data_fine"],
             budget_ore=int(row["budget_ore"]),

@@ -77,17 +77,38 @@ DIPENDENTI = pd.DataFrame([
     {"id": "D007", "nome": "Carolina Coccorese",     "profilo": "Senior Consultant",           "ore_sett": 40, "costo_ora": 48.0, "competenze": ["PM", "compliance", "coordinamento", "gestione progetti"]},
     {"id": "D008", "nome": "Fausto Garzillo",        "profilo": "Senior Consultant",           "ore_sett": 40, "costo_ora": 45.0, "competenze": ["GRC", "processi", "ARIS", "relazioni clienti"]},
     # Consultant
-    {"id": "D009", "nome": "Tetiana Matveichuk",     "profilo": "Consultant",                  "ore_sett": 40, "costo_ora": 35.0, "competenze": ["coordinamento", "relazioni clienti", "documentazione"]},
+    {"id": "D009", "nome": "Tetiana Matveichuk",     "profilo": "Consultant",                  "ore_sett": 40, "costo_ora": 35.0, "competenze": ["rendicontazione", "documentazione", "coordinamento", "relazioni clienti"]},
     {"id": "D010", "nome": "Nicola Coccorese",       "profilo": "Consultant",                  "ore_sett": 40, "costo_ora": 35.0, "competenze": ["GRC", "analisi", "relazioni clienti"]},
     {"id": "D011", "nome": "Ludovica Di Cianni",     "profilo": "Consultant",                  "ore_sett": 40, "costo_ora": 25.0, "competenze": ["IA", "python", "backend", "sviluppo"]},
     # Manager HR
     {"id": "D012", "nome": "Cosimo Pacifico",        "profilo": "Manager HR",                  "ore_sett": 40, "costo_ora": 40.0, "competenze": ["risorse umane", "formazione", "organizzazione", "contratti"]},
     # Responsabile amministrazione
-    {"id": "D013", "nome": "Francesco Carolla",      "profilo": "Responsabile amministrazione","ore_sett": 40, "costo_ora": 42.0, "competenze": ["amministrazione", "rendicontazione", "fatturazione", "controllo gestione"]},
+    # Francesco Carolla: qualifica organigramma "Managing Director" (Innovation Plaza),
+    # ma fa da PM/commerciale su progetti Improve (Maida/Tecnomat). Il profilo resta
+    # una delle 9 categorie chiuse → "Senior Consultant". Le qualifiche-ruolo NON
+    # stanno in competenze (che sono funzionali); un eventuale campo "ruolo
+    # organizzativo" è lavoro futuro, non esiste ora.
+    {"id": "D013", "nome": "Francesco Carolla",      "profilo": "Senior Consultant",           "ore_sett": 40, "costo_ora": 42.0, "competenze": ["bandi", "relazioni clienti", "PM", "gestione progetti", "controllo gestione"]},
     # Addetto amministrazione
     {"id": "D014", "nome": "Carolina Jori",          "profilo": "Addetto amministrazione",     "ore_sett": 20, "costo_ora": 28.0, "competenze": ["amministrazione", "documentazione", "archivio"]},
     {"id": "D015", "nome": "Daniele Tagliabue",      "profilo": "Addetto amministrazione",     "ore_sett": 40, "costo_ora": 30.0, "competenze": ["amministrazione", "rendicontazione", "fatturazione"]},
+    # ── Innovation Plaza (nuove persone, DESIGN §2). Profilo tra le 9 categorie;
+    #    le qualifiche organigramma (Co-founder, Resp. area, Progettazione Europea)
+    #    vivono nelle competenze, non nel profilo.
+    {"id": "D016", "nome": "Ida Carolla",            "profilo": "Senior Consultant",           "ore_sett": 40, "costo_ora": 50.0, "competenze": ["PA", "bandi pubblici", "bandi", "progettazione", "gestione progetti", "relazioni clienti"]},
+    {"id": "D017", "nome": "Domenica Suma",          "profilo": "Senior Consultant",           "ore_sett": 40, "costo_ora": 50.0, "competenze": ["imprese", "bandi", "progettazione", "gestione progetti", "relazioni clienti"]},
+    {"id": "D018", "nome": "Denise Greco",           "profilo": "Consultant",                  "ore_sett": 40, "costo_ora": 35.0, "competenze": ["progettazione europea", "bandi", "progettazione", "documentazione"]},
 ])
+
+# ── AZIENDA DI APPARTENENZA ─────────────────────────────────────────────
+# DESIGN_SEED_Innovation_Plaza §1-§2: ogni persona appartiene a un'azienda.
+# Innovation Plaza per Tetiana (D009), Francesco (D013) e le 3 nuove
+# (Ida D016 / Domenica D017 / Denise D018); IMC-Improve per tutti gli altri.
+# Nota: l'azienda della persona NON vincola su quali progetti può lavorare.
+_DIP_INNOVATION = {"D009", "D013", "D016", "D017", "D018"}
+DIPENDENTI["azienda"] = DIPENDENTI["id"].map(
+    lambda d: "Innovation Plaza" if d in _DIP_INNOVATION else "IMC-Improve"
+)
 
 # ── ANAGRAFICA PROGETTI ────────────────────────────────────────────────
 
@@ -384,7 +405,52 @@ PROGETTI = pd.DataFrame([
         "descrizione": "Attività interna non fatturabile (progetto di innovazione): progetto pm e pianificazione ia.",
         "fase_corrente": "Sviluppo",
     },
+
+    # ═══ NUOVI PROGETTI AIoT — azienda IMC-Improve, PM Francesco (D013) ═══
+    # DESIGN §3: materializzano la doppia veste di Francesco (appartiene a
+    # Innovation ma fa da PM su progetti Improve). Dataset sintetico plausibile.
+    {
+        "id": "P010", "nome": "AIoT Smart City Maida", "cliente": "Comune di Maida",
+        "stato": "In esecuzione", "tipologia": "ordinario",
+        "data_inizio": datetime(2026,2,1), "data_fine": datetime(2026,12,31),
+        "budget_ore": 1200, "valore_contratto": 120000.0,
+        "descrizione": "Progetto AIoT per il monitoraggio del territorio del Comune di Maida (ente pubblico): sensoristica diffusa e dashboard AI.",
+        "fase_corrente": "Design",
+    },
+    {
+        "id": "P011", "nome": "AIoT Industria 4.0 Tecnomat", "cliente": "Tecnomat S.p.A.",
+        "stato": "In esecuzione", "tipologia": "ordinario",
+        "data_inizio": datetime(2026,3,1), "data_fine": datetime(2026,11,30),
+        "budget_ore": 1000, "valore_contratto": 95000.0,
+        "descrizione": "Progetto AIoT industriale per Tecnomat (impresa): edge computing e manutenzione predittiva sulle linee produttive.",
+        "fase_corrente": "Analisi",
+    },
 ])
+
+# ── AZIENDA / AREA / PM PER PROGETTO ────────────────────────────────────
+# DESIGN_SEED_Innovation_Plaza §3.
+# pm_id: relazione PER-PROGETTO (non ruolo/attributo del dipendente). Solo i
+# progetti con responsabile assegnato; bozze (P007) e interni restano senza PM.
+_PM = {
+    "P001": "D005", "P002": "D007", "P003": "D002", "P004": "D006",
+    "P005": "D007", "P006": "D002",          # ordinari Improve
+    "P008": "D016", "P009": "D017",          # bandi Innovation (Ida / Domenica)
+    "P010": "D013", "P011": "D013",          # AIoT Improve, PM Francesco
+}
+# area: solo i bandi Innovation — "PA" (Ida) / "Imprese" (Domenica). NULL altrove.
+_AREA = {"P008": "PA", "P009": "Imprese"}
+
+def _azienda_progetto(row):
+    # interni → NULL (attività trasversale); bandi → Innovation; resto → Improve.
+    if row["tipologia"] == "interna":
+        return None
+    if row["id"] in ("P008", "P009"):
+        return "Innovation Plaza"
+    return "IMC-Improve"
+
+PROGETTI["pm_id"] = PROGETTI["id"].map(lambda p: _PM.get(p))
+PROGETTI["area"] = PROGETTI["id"].map(lambda p: _AREA.get(p))
+PROGETTI["azienda"] = PROGETTI.apply(_azienda_progetto, axis=1)
 
 # ── TASK ───────────────────────────────────────────────────────────────
 
@@ -438,13 +504,17 @@ TASKS = pd.DataFrame([
     {"id": "T047", "progetto_id": "P006", "nome": "Analisi requisiti AML", "fase": "Analisi", "ore_stimate": 100, "data_inizio": datetime(2025,7,1), "data_fine": datetime(2025,9,30), "stato": "Completato", "profilo_richiesto": "Manager IT", "dipendente_id": "D002", "predecessore": None},
     {"id": "T048", "progetto_id": "P006", "nome": "Sviluppo algoritmi AI AML", "fase": "Sviluppo", "ore_stimate": 300, "data_inizio": datetime(2025,10,1), "data_fine": datetime(2026,2,28), "stato": "Sospeso", "profilo_richiesto": "Manager IT", "dipendente_id": "D002", "predecessore": "T047"},
     {"id": "T049", "progetto_id": "P006", "nome": "Gestione progetto AML", "fase": "Gestione", "ore_stimate": 60, "data_inizio": datetime(2025,7,1), "data_fine": datetime(2026,3,31), "stato": "Sospeso", "profilo_richiesto": "PM", "dipendente_id": "D005", "predecessore": None},
-    {"id": "T050", "progetto_id": "P008", "nome": "Proposta tecnica Business Continuity", "fase": "Bando", "ore_stimate": 120, "data_inizio": datetime(2026,2,15), "data_fine": datetime(2026,4,10), "stato": "In corso", "profilo_richiesto": "Senior Consultant", "dipendente_id": "D005", "predecessore": None},
-    {"id": "T051", "progetto_id": "P008", "nome": "Stima costi ITAS", "fase": "Bando", "ore_stimate": 60, "data_inizio": datetime(2026,3,1), "data_fine": datetime(2026,4,10), "stato": "In corso", "profilo_richiesto": "PM", "dipendente_id": "D006", "predecessore": None},
-    {"id": "T052", "progetto_id": "P008", "nome": "Documentazione bando ITAS", "fase": "Bando", "ore_stimate": 30, "data_inizio": datetime(2026,3,15), "data_fine": datetime(2026,4,10), "stato": "Da iniziare", "profilo_richiesto": "Addetto amministrazione", "dipendente_id": "D015", "predecessore": None},
-    {"id": "T053", "progetto_id": "P009", "nome": "Proposta GRC Platform Banco Desio", "fase": "Bando", "ore_stimate": 120, "data_inizio": datetime(2026,3,1), "data_fine": datetime(2026,4,25), "stato": "In corso", "profilo_richiesto": "Senior Consultant", "dipendente_id": "D005", "predecessore": None},
-    {"id": "T054", "progetto_id": "P009", "nome": "Stima costi Banco Desio", "fase": "Bando", "ore_stimate": 60, "data_inizio": datetime(2026,3,15), "data_fine": datetime(2026,4,25), "stato": "Da iniziare", "profilo_richiesto": "PM", "dipendente_id": "D006", "predecessore": None},
-    {"id": "T055", "progetto_id": "P009", "nome": "Documentazione bando Banco Desio", "fase": "Bando", "ore_stimate": 30, "data_inizio": datetime(2026,3,20), "data_fine": datetime(2026,4,25), "stato": "Da iniziare", "profilo_richiesto": "Addetto amministrazione", "dipendente_id": "D014", "predecessore": None},
-    {"id": "T056", "progetto_id": "P008", "nome": "Review bandi e offerte (AD)", "fase": "Bando", "ore_stimate": 80, "data_inizio": datetime(2026,2,15), "data_fine": datetime(2026,4,25), "stato": "In corso", "profilo_richiesto": "AD", "dipendente_id": "D001", "predecessore": None},
+    # ── P008 BANDO PA (Innovation, PM Ida D016) — analisi bando ministeriale,
+    #    predisposizione domanda. Staff Innovation (Ida/Denise/Tetiana).
+    {"id": "T050", "progetto_id": "P008", "nome": "Analisi bando ministeriale PA", "fase": "Analisi bando", "ore_stimate": 120, "data_inizio": datetime(2026,2,15), "data_fine": datetime(2026,3,31), "stato": "In corso", "profilo_richiesto": "Senior Consultant", "dipendente_id": "D016", "predecessore": None},
+    {"id": "T051", "progetto_id": "P008", "nome": "Predisposizione domanda e istanza PA", "fase": "Predisposizione domanda", "ore_stimate": 90, "data_inizio": datetime(2026,4,1), "data_fine": datetime(2026,5,15), "stato": "Da iniziare", "profilo_richiesto": "Consultant", "dipendente_id": "D018", "predecessore": "T050"},
+    {"id": "T052", "progetto_id": "P008", "nome": "Rendicontazione e documentazione ITAS", "fase": "Predisposizione domanda", "ore_stimate": 40, "data_inizio": datetime(2026,4,1), "data_fine": datetime(2026,5,15), "stato": "Da iniziare", "profilo_richiesto": "Consultant", "dipendente_id": "D009", "predecessore": None},
+    {"id": "T056", "progetto_id": "P008", "nome": "Coordinamento e PM bando ITAS", "fase": "Gestione", "ore_stimate": 60, "data_inizio": datetime(2026,2,15), "data_fine": datetime(2026,5,15), "stato": "In corso", "profilo_richiesto": "Senior Consultant", "dipendente_id": "D016", "predecessore": None},
+    # ── P009 BANDO IMPRESE (Innovation, PM Domenica D017) — scouting agevolazioni,
+    #    business plan. Staff Innovation (Domenica/Denise/Tetiana).
+    {"id": "T053", "progetto_id": "P009", "nome": "Scouting agevolazioni imprese", "fase": "Scouting agevolazioni", "ore_stimate": 110, "data_inizio": datetime(2026,3,1), "data_fine": datetime(2026,4,15), "stato": "In corso", "profilo_richiesto": "Senior Consultant", "dipendente_id": "D017", "predecessore": None},
+    {"id": "T054", "progetto_id": "P009", "nome": "Business plan e piano economico", "fase": "Business plan", "ore_stimate": 90, "data_inizio": datetime(2026,4,16), "data_fine": datetime(2026,5,31), "stato": "Da iniziare", "profilo_richiesto": "Consultant", "dipendente_id": "D018", "predecessore": "T053"},
+    {"id": "T055", "progetto_id": "P009", "nome": "Predisposizione domanda agevolazione", "fase": "Business plan", "ore_stimate": 40, "data_inizio": datetime(2026,4,16), "data_fine": datetime(2026,5,31), "stato": "Da iniziare", "profilo_richiesto": "Consultant", "dipendente_id": "D009", "predecessore": None},
     {"id": "T057", "progetto_id": "PC01", "nome": "Corso inglese — Helena", "fase": "Formazione", "ore_stimate": 72, "data_inizio": datetime(2025,10,1), "data_fine": datetime(2026,6,30), "stato": "In corso", "profilo_richiesto": "", "dipendente_id": "D004", "predecessore": None},
     {"id": "T058", "progetto_id": "PC01", "nome": "Corso inglese — Andrea", "fase": "Formazione", "ore_stimate": 72, "data_inizio": datetime(2025,10,1), "data_fine": datetime(2026,6,30), "stato": "In corso", "profilo_richiesto": "", "dipendente_id": "D005", "predecessore": None},
     {"id": "T059", "progetto_id": "PC01", "nome": "Corso inglese — Paolo", "fase": "Formazione", "ore_stimate": 72, "data_inizio": datetime(2025,10,1), "data_fine": datetime(2026,6,30), "stato": "In corso", "profilo_richiesto": "", "dipendente_id": "D006", "predecessore": None},
@@ -492,6 +562,20 @@ TASKS = pd.DataFrame([
     {"id": "T101", "progetto_id": "PI09", "nome": "Pianificazione economico-finanziaria", "fase": "Continuativa", "ore_stimate": 807, "data_inizio": datetime(2025,9,1), "data_fine": datetime(2026,6,30), "stato": "In corso", "profilo_richiesto": "", "dipendente_id": "D013", "predecessore": None},
     {"id": "T102", "progetto_id": "PI11", "nome": "Documentazione e archivio", "fase": "Continuativa", "ore_stimate": 637, "data_inizio": datetime(2025,9,1), "data_fine": datetime(2026,6,30), "stato": "In corso", "profilo_richiesto": "", "dipendente_id": "D014", "predecessore": None},
     {"id": "T103", "progetto_id": "PI10", "nome": "Amministrazione corrente e fatturazione", "fase": "Continuativa", "ore_stimate": 1352, "data_inizio": datetime(2025,9,1), "data_fine": datetime(2026,6,30), "stato": "In corso", "profilo_richiesto": "", "dipendente_id": "D015", "predecessore": None},
+
+    # ── P010 AIoT Smart City Maida (Improve, PM Francesco D013) — ente pubblico
+    {"id": "T104", "progetto_id": "P010", "nome": "Analisi requisiti monitoraggio territorio", "fase": "Analisi", "ore_stimate": 120, "data_inizio": datetime(2026,2,1), "data_fine": datetime(2026,3,15), "stato": "In corso", "profilo_richiesto": "IT Consultant", "dipendente_id": "D004", "predecessore": None},
+    {"id": "T105", "progetto_id": "P010", "nome": "Design architettura AIoT e sensoristica", "fase": "Design", "ore_stimate": 140, "data_inizio": datetime(2026,3,16), "data_fine": datetime(2026,5,15), "stato": "Da iniziare", "profilo_richiesto": "Manager IT", "dipendente_id": "D002", "predecessore": "T104"},
+    {"id": "T106", "progetto_id": "P010", "nome": "Sviluppo piattaforma raccolta dati sensori", "fase": "Sviluppo", "ore_stimate": 260, "data_inizio": datetime(2026,5,16), "data_fine": datetime(2026,9,30), "stato": "Da iniziare", "profilo_richiesto": "Senior IT Consultant", "dipendente_id": "D003", "predecessore": "T105"},
+    {"id": "T107", "progetto_id": "P010", "nome": "Integrazione dashboard AI territoriale", "fase": "Sviluppo", "ore_stimate": 160, "data_inizio": datetime(2026,6,1), "data_fine": datetime(2026,10,31), "stato": "Da iniziare", "profilo_richiesto": "IT Consultant", "dipendente_id": "D004", "predecessore": "T105"},
+    {"id": "T108", "progetto_id": "P010", "nome": "Gestione progetto Maida", "fase": "Gestione", "ore_stimate": 120, "data_inizio": datetime(2026,2,1), "data_fine": datetime(2026,12,31), "stato": "In corso", "profilo_richiesto": "Senior Consultant", "dipendente_id": "D013", "predecessore": None},
+
+    # ── P011 AIoT Industria 4.0 Tecnomat (Improve, PM Francesco D013) — impresa
+    {"id": "T109", "progetto_id": "P011", "nome": "Analisi processi produttivi Tecnomat", "fase": "Analisi", "ore_stimate": 110, "data_inizio": datetime(2026,3,1), "data_fine": datetime(2026,4,15), "stato": "In corso", "profilo_richiesto": "IT Consultant", "dipendente_id": "D004", "predecessore": None},
+    {"id": "T110", "progetto_id": "P011", "nome": "Design soluzione AIoT industriale", "fase": "Design", "ore_stimate": 130, "data_inizio": datetime(2026,4,16), "data_fine": datetime(2026,6,15), "stato": "Da iniziare", "profilo_richiesto": "Manager IT", "dipendente_id": "D002", "predecessore": "T109"},
+    {"id": "T111", "progetto_id": "P011", "nome": "Sviluppo edge computing e manutenzione predittiva", "fase": "Sviluppo", "ore_stimate": 240, "data_inizio": datetime(2026,6,16), "data_fine": datetime(2026,10,15), "stato": "Da iniziare", "profilo_richiesto": "Senior IT Consultant", "dipendente_id": "D003", "predecessore": "T110"},
+    {"id": "T112", "progetto_id": "P011", "nome": "Testing sul campo e collaudo", "fase": "Testing", "ore_stimate": 90, "data_inizio": datetime(2026,10,16), "data_fine": datetime(2026,11,30), "stato": "Da iniziare", "profilo_richiesto": "IT Consultant", "dipendente_id": "D004", "predecessore": "T111"},
+    {"id": "T113", "progetto_id": "P011", "nome": "Gestione progetto Tecnomat", "fase": "Gestione", "ore_stimate": 100, "data_inizio": datetime(2026,3,1), "data_fine": datetime(2026,11,30), "stato": "In corso", "profilo_richiesto": "Senior Consultant", "dipendente_id": "D013", "predecessore": None},
 ])
 
 
