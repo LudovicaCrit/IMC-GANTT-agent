@@ -167,7 +167,8 @@ from data import (
     get_dipendente, carico_settimanale_dipendente, get_progetti_dipendente,
 )
 from gemini_client import (
-    init_gemini, costruisci_contesto, chiedi_agente, is_agent_available,
+    init_gemini, costruisci_contesto, chiedi_agente, chiedi_semplice,
+    is_agent_available,
 )
 from contesto import get_contesto_ia
 from utils import get_oggi
@@ -539,9 +540,7 @@ def analisi_gantt(
     prompt = f"Analizza questa segnalazione e proponi redistribuzioni:\n\n```json\n{contesto_json}\n```"
 
     try:
-        chat = model.start_chat(history=[])
-        response = chat.send_message(prompt)
-        risposta_raw = response.text
+        risposta_raw = chiedi_semplice(model, prompt)
 
         # Tenta di parsare il JSON dalla risposta (rimuovi backtick markdown)
         cleaned = risposta_raw.strip()
@@ -598,9 +597,7 @@ def suggerisci_task(
     prompt = f"Suggerisci i task per questo progetto:\n\n```json\n{contesto_json}\n```"
 
     try:
-        chat = model.start_chat(history=[])
-        response = chat.send_message(prompt)
-        risposta_raw = response.text
+        risposta_raw = chiedi_semplice(model, prompt)
 
         cleaned = risposta_raw.strip()
         if cleaned.startswith("```json"):
@@ -678,9 +675,7 @@ def verifica_pianificazione(
     prompt = f"Verifica questa pianificazione GANTT:\n\n```json\n{contesto_json}\n```"
 
     try:
-        chat = model.start_chat(history=[])
-        response = chat.send_message(prompt)
-        risposta_raw = response.text
+        risposta_raw = chiedi_semplice(model, prompt)
 
         # Parsa JSON
         cleaned = risposta_raw.strip()
@@ -731,9 +726,7 @@ def interpreta_scenario(req: InterpretaRequest, _: Utente = Depends(require_mana
     prompt += f"Stato attuale del sistema:\n\n```json\n{contesto_json}\n```"
 
     try:
-        chat = model.start_chat(history=[])
-        response = chat.send_message(prompt)
-        risposta_raw = response.text
+        risposta_raw = chiedi_semplice(model, prompt)
 
         # Pulisci e parsa JSON
         cleaned = risposta_raw.strip()

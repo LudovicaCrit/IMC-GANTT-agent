@@ -15,9 +15,10 @@ from utils import get_oggi
 
 load_dotenv()
 
-# ── Import Gemini SDK ──
+# ── Import Gemini SDK (nuovo google-genai) ──
 try:
-    import google.generativeai as genai
+    from google import genai
+    from google.genai import types
     GEMINI_AVAILABLE = True
 except ImportError:
     GEMINI_AVAILABLE = False
@@ -35,17 +36,28 @@ def carica_prompt(nome_file: str) -> str:
 
 
 def init_gemini(prompt_file: str = "consuntivazione.md"):
-    """Inizializza il client Gemini con il prompt specificato."""
+    """
+    Inizializza il client Gemini con il prompt specificato.
+
+    Nel nuovo SDK google-genai il system prompt NON sta dentro il modello:
+    va passato a ogni chiamata dentro types.GenerateContentConfig. Quindi
+    qui ritorniamo un dict autosufficiente {client, system_prompt, model_name}
+    che i chiamanti (chiedi_agente / chiedi_semplice) usano per costruire la
+    config a ogni generate_content.
+
+    Ritorna il dict, oppure None se l'SDK non è disponibile o manca la chiave.
+    """
     if not GEMINI_AVAILABLE or not GEMINI_API_KEY:
         return None
 
-    genai.configure(api_key=GEMINI_API_KEY)
+    client = genai.Client(api_key=GEMINI_API_KEY)
     system_prompt = carica_prompt(prompt_file)
 
-    model = genai.GenerativeModel(
-        model_name="gemini-2.5-flash",
-        system_instruction=system_prompt,
-    )
+    model = {
+        "client": client,
+        "system_prompt": system_prompt,
+        "model_name": "gemini-2.5-flash",
+    }
     return model
 
 
@@ -171,10 +183,15 @@ def costruisci_contesto(dip_data, ore_compilate, stati_compilati, tasks_attivi,
 
 
 def chiedi_agente(model, contesto_dict, messaggio_utente, chat_history=None):
-    """Invia un messaggio all'agente e ottieni la risposta."""
+    """Invia un messaggio all'agente (con storia) e ottieni la risposta.
+
+    Contratto verso /chat: in caso di errore ritorna una STRINGA di errore
+    (non solleva). Usa il nuovo SDK google-genai: la storia è costruita come
+    list[types.Content] e il system prompt va nella config.
+    """
 
     if model is None:
-        return "⚠️ Agente non disponibile. Verifica che GEMINI_API_KEY sia configurata nel .env e che google-generativeai sia installato."
+        return "⚠️ Agente non disponibile. Verifica che GEMINI_API_KEY sia configurata nel .env e che google-genai sia installato."
 
     try:
         contesto_json = json.dumps(contesto_dict, ensure_ascii=False, indent=2)
@@ -184,20 +201,54 @@ def chiedi_agente(model, contesto_dict, messaggio_utente, chat_history=None):
             f"Messaggio del dipendente: {messaggio_utente}"
         )
 
-        # Chat con storia
-        history = []
+        # Costruisci i contents: storia + messaggio corrente
+        contents = []
         if chat_history:
             for msg in chat_history:
                 role = "user" if msg["role"] == "user" else "model"
-                history.append({"role": role, "parts": [msg["content"]]})
+                contents.append(types.Content(
+                    role=role,
+                    parts=[types.Part.from_text(text=msg["content"])],
+                ))
+        contents.append(types.Content(
+            role="user",
+            parts=[types.Part.from_text(text=prompt_completo)],
+        ))
 
-        chat = model.start_chat(history=history)
-        response = chat.send_message(prompt_completo)
+        response = model["client"].models.generate_content(
+            model=model["model_name"],
+            contents=contents,
+            config=types.GenerateContentConfig(
+                system_instruction=model["system_prompt"],
+            ),
+        )
 
         return response.text
 
     except Exception as e:
         return f"⚠️ Errore nella comunicazione con l'agente: {str(e)}"
+
+
+def chiedi_semplice(model, prompt):
+    """Invio one-shot senza storia (nuovo SDK google-genai).
+
+    Nessun try/except: l'eccezione sale al chiamante, che ha già la sua
+    gestione (raise HTTPException(500, ...)). Ritorna response.text grezzo.
+    """
+    contents = [types.Content(
+        role="user",
+        parts=[types.Part.from_text(text=prompt)],
+    )]
+
+    response = model["client"].models.generate_content(
+        model=model["model_name"],
+        contents=contents,
+        config=types.GenerateContentConfig(
+            system_instruction=model["system_prompt"],
+        ),
+    )
+
+    return response.text
 
 
 def is_agent_available():
