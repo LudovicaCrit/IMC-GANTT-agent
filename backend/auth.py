@@ -3,9 +3,11 @@ backend/auth.py
 Utility per autenticazione: hashing password e gestione JWT.
 """
 import os
+import jwt
 from datetime import datetime, timedelta, timezone
-from passlib.context import CryptContext
-from jose import jwt, JWTError
+from argon2 import PasswordHasher
+from argon2.exceptions import VerifyMismatchError, VerificationError, InvalidHashError
+from jwt import PyJWTError
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -14,12 +16,13 @@ load_dotenv()
 SECRET_KEY = os.getenv("SECRET_KEY")
 JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
 JWT_EXPIRE_HOURS = int(os.getenv("JWT_EXPIRE_HOURS", "8"))
+JWT_ISSUER = os.getenv("JWT_ISSUER", "imc-gantt")
 
 if not SECRET_KEY:
     raise RuntimeError("SECRET_KEY mancante nel .env — impossibile avviare auth")
 
-# ── Contesto passlib (bcrypt) ──
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+# ── Hasher Argon2id ──
+_ph = PasswordHasher()
 
 
 # ══════════════════════════════════════════════════════════════
@@ -28,12 +31,15 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 def hash_password(plain_password: str) -> str:
     """Hasha una password in chiaro con bcrypt."""
-    return pwd_context.hash(plain_password)
+    return _ph.hash(plain_password)
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """Verifica che una password in chiaro corrisponda all'hash bcrypt."""
-    return pwd_context.verify(plain_password, hashed_password)
+    try:
+        return _ph.verify(hashed_password, plain_password)
+    except (VerifyMismatchError, VerificationError, InvalidHashError):
+        return False
 
 
 # ══════════════════════════════════════════════════════════════
@@ -48,7 +54,7 @@ def create_access_token(payload: dict) -> str:
     to_encode = payload.copy()
     now = datetime.now(timezone.utc)
     expire = now + timedelta(hours=JWT_EXPIRE_HOURS)
-    to_encode.update({"iat": now, "exp": expire})
+    to_encode.update({"iat": now, "exp": expire, "iss": JWT_ISSUER})
     return jwt.encode(to_encode, SECRET_KEY, algorithm=JWT_ALGORITHM)
 
 
@@ -57,4 +63,4 @@ def decode_access_token(token: str) -> dict:
     Decodifica e verifica un JWT.
     Solleva JWTError se il token è invalido, manomesso o scaduto.
     """
-    return jwt.decode(token, SECRET_KEY, algorithms=[JWT_ALGORITHM])
+    return jwt.decode(token, SECRET_KEY, algorithms=[JWT_ALGORITHM], issuer=JWT_ISSUER)

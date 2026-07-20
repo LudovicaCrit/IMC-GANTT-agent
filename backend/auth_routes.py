@@ -7,7 +7,7 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Response, Cookie, status, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
-from jose import JWTError
+from jwt import PyJWTError
 from deps import get_current_user
 from slowapi import Limiter
 from slowapi.util import get_remote_address

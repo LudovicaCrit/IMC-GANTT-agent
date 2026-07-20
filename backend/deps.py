@@ -3,9 +3,10 @@ backend/deps.py
 Dependency FastAPI riutilizzabili per autenticazione e autorizzazione.
 """
 import os
+import jwt
 from fastapi import Depends, HTTPException, Cookie, status
 from sqlalchemy.orm import Session
-from jose import JWTError
+from jwt import PyJWTError
 
 from models import get_session, Utente
 from auth import decode_access_token
@@ -45,7 +46,7 @@ def get_current_user(
         )
     try:
         payload = decode_access_token(session_cookie)
-    except JWTError:
+    except PyJWTError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Token non valido o scaduto",
