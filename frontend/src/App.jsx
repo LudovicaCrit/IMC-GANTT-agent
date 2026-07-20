@@ -4,6 +4,7 @@ import Home from './pages/Home'
 import Gantt from './pages/Gantt'
 import Risorse from './pages/Risorse'
 import Consuntivazione from './pages/Consuntivazione'
+import ConsuntivazioneUser from './pages/ConsuntivazioneUser'
 import AnalisiInterventi from './pages/AnalisiInterventi'
 import Pipeline from './pages/Pipeline'
 import Economia from './pages/Economia'
@@ -31,6 +32,7 @@ const navItems = [
   { to: '/analisi', label: 'Tavolo di Lavoro', icon: '🔬', requiresManager: true },
   { to: '/risorse', label: 'Risorse', icon: '👥', requiresManager: true },
   { to: '/consuntivazione', label: 'Consuntivazione', icon: '⏱️', requiresManager: false },
+  { to: '/consuntivazione-new', label: 'Consuntivazione (A′)', icon: '🆕', requiresManager: false },
   { to: '/pipeline', label: 'Pipeline', icon: '📋', requiresManager: true },
   { to: '/economia', label: 'Economia', icon: '💰', requiresManager: true },
   { to: '/attivita-interne', label: 'Attività Interne', icon: '🏢', requiresManager: true },
@@ -177,6 +179,9 @@ function MainLayout() {
           } />
           <Route path="/configurazione" element={
             <RequireManager><Configurazione /></RequireManager>
+          } />
+          <Route path="/configurazione-new" element={
+            <ConsuntivazioneUser />
           } />
           <Route path="/cantiere" element={
             <RequireManager><Cantiere /></RequireManager>

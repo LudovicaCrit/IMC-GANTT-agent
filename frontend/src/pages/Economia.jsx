@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { fetchMarginiEconomia } from '../api'
+import { fetchMarginiEconomia, fetchProgetti } from '../api'
 
 /* ── Helpers ──────────────────────────────────────────────────────── */
 const fmtEur = (n) =>
@@ -7,7 +7,7 @@ const fmtEur = (n) =>
 
 const fmtPct = (n) => `${(n ?? 0).toFixed(1)}%`
 
-const fmtPp = (n) => `${n < 0 ? '-' : '+'}${Math.abs(n).toFixed(1)} pp`
+const fmtPp = (n) => `${n < 0 ? '−' : '+'}${Math.abs(n).toFixed(1)} pp`
 
 /* ── Badge erosione ───────────────────────────────────────────────
    Erosione positiva = stiamo consumando più del previsto (male).
@@ -87,13 +87,18 @@ export default function Economia() {
   const [loading, setLoading] = useState(true)
   const [errore, setErrore] = useState(null)
   const [aperto, setAperto] = useState(null)
+  const [progettiFull, setProgettiFull] = useState(null)
+  const [tab, setTab] = useState('margini')
 
   useEffect(() => {
-    fetchMarginiEconomia()
-      .then(setDati)
+    Promise.all([fetchMarginiEconomia(), fetchProgetti().catch(() => [])])
+      .then(([m, p]) => {
+        setDati(m)
+        setProgettiFull(p)
+      })
       .catch((e) => setErrore(e.message))
       .finally(() => setLoading(false))
-  }, [])
+    }, [])
 
   if (loading) return <p className="text-gray-400">Caricamento…</p>
   if (errore) return <p className="text-red-400">Errore: {errore}</p>
@@ -113,8 +118,6 @@ export default function Economia() {
     }),
     { valore: 0, costo: 0, margine: 0, erosione: 0, progetti: 0 }
   )
-
-  const erosionePp = tot.valore > 0 ? (tot.erosione / tot.valore) * 100 : 0
 
   // Progetti ordinati per erosione decrescente: i più erosi in cima
   const ordinati = [...progetti].sort(
@@ -171,12 +174,22 @@ export default function Economia() {
         </div>
         <div className="bg-gray-800 rounded-xl p-5 border border-gray-700">
           <p className="text-sm text-gray-400">
-            {tot.erosione < 0 ? 'Efficienza sul venduto' : 'Erosione sul venduto'}
+            {tot.erosione < 0 ? 'Efficienza netta' : 'Erosione netta'}
           </p>
           <p className={`text-2xl font-bold mt-1 ${tot.erosione < 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-            {tot.erosione < 0 ? '−' : ''}{fmtEur(Math.abs(tot.erosione))}
+            {tot.erosione < 0 ? '−' : '+'}{fmtEur(Math.abs(tot.erosione))}
           </p>
-          <p className="text-xs text-gray-500 mt-0.5">{fmtPp(erosionePp)}</p>
+          <p className="text-xs text-gray-500 mt-1 leading-snug">
+            {aziende.map((a) => (
+              <span key={a.azienda_id} className="block">
+                {a.azienda_nome}{' '}
+                <span className={a.erosione_commerciale_eur < 0 ? 'text-emerald-400' : 'text-red-400'}>
+                  {a.erosione_commerciale_eur < 0 ? '−' : '+'}
+                  {fmtEur(Math.abs(a.erosione_commerciale_eur))}
+                </span>
+              </span>
+            ))}
+          </p>
         </div>
         <div className="bg-gray-800 rounded-xl p-5 border border-gray-700">
           <p className="text-sm text-gray-400">Progetti commerciali</p>
@@ -347,6 +360,71 @@ export default function Economia() {
           </tbody>
         </table>
       </div>
+
+      </>)}
+
+      {tab === 'avanzamento' && (
+        <div className="space-y-6">
+          {ecoData.length === 0 && (
+            <p className="text-gray-500 text-sm">Nessun progetto in esecuzione.</p>
+          )}
+          {ecoData.map((p) => {
+            const deltaTL = p.progressoTempo - p.progressoOre
+            let agentMsg = 'Il progetto procede in linea con le tempistiche.'
+            let agentBg = 'bg-green-900/20 border-green-800'
+            if (deltaTL > 15) {
+              agentMsg = `Il progetto è in ritardo: l'avanzamento temporale (${p.progressoTempo.toFixed(0)}%) supera quello lavorativo (${p.progressoOre.toFixed(0)}%) di ${deltaTL.toFixed(0)} punti.`
+              agentBg = 'bg-red-900/20 border-red-800'
+            } else if (deltaTL > 5) {
+              agentMsg = 'Lieve disallineamento tra tempo trascorso e lavoro svolto. Monitorare.'
+              agentBg = 'bg-yellow-900/20 border-yellow-800'
+            }
+
+            return (
+              <div key={p.id} className="bg-gray-900 rounded-xl border border-gray-800 p-6">
+                <div className="flex justify-between items-start mb-4">
+                  <div>
+                    <h3 className="font-semibold text-lg">{p.nome}</h3>
+                    <p className="text-sm text-gray-400">{p.cliente}</p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-xl font-bold">{fmtEur(p.valore_contratto)}</p>
+                    <p className="text-xs text-gray-500">valore contratto</p>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-3 gap-6 mb-4">
+                  <Gauge value={p.progressoTempo} label="Avanzamento Temporale"
+                    colorThresholds={{ yellow: 70, red: 90 }} />
+                  <Gauge value={p.progressoOre} label="Avanzamento Lavoro"
+                    colorThresholds={{ yellow: 70, red: 90 }} />
+                  <Gauge value={p.budgetUsato} label="Budget Utilizzato"
+                    colorThresholds={{ yellow: 60, red: 80 }} />
+                </div>
+
+                <div className="grid grid-cols-3 gap-4 text-sm mb-4">
+                  <div>
+                    <p className="text-gray-400">Ore consuntivate</p>
+                    <p className="font-medium">{p.ore_consuntivate}h / {p.budget_ore}h</p>
+                  </div>
+                  <div>
+                    <p className="text-gray-400">Budget usato</p>
+                    <p className="font-medium">{p.budgetUsato.toFixed(0)}%</p>
+                  </div>
+                  <div>
+                    <p className="text-gray-400">Task completati</p>
+                    <p className="font-medium">{p.task_completati ?? '—'} / {p.task_totali ?? '—'}</p>
+                  </div>
+                </div>
+
+                <div className={`p-3 rounded-lg border text-sm ${agentBg}`}>
+                  <span>🤖 <strong>Agente:</strong> {agentMsg}</span>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
     </div>
   )
 }
