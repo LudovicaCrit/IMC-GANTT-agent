@@ -413,3 +413,11 @@ export async function confermaScenario(modifiche) {
     body: { modifiche },
   });
 }
+
+// ═════════════════════════════════════════════════════════════════════════
+//  Margini economici
+// ═════════════════════════════════════════════════════════════════════════
+
+export async function fetchMarginiEconomia() {
+  return apiFetch(`${API_BASE}/economia/margini`);
+}
