@@ -38,8 +38,10 @@ DETTAGLIO ENDPOINT
      stessa così, anche se ha accesso a /settimana per la vista aziendale).
    - 400 se l'utente non è collegato a un dipendente
      (current_user.dipendente_id is None).
+   - Layout A': parte dai TASK attivi del dipendente (non dai Consuntivi),
+     via data.task_settimana_dipendente (riusabile dalla Home-utente).
    - Restituisce: nome, profilo, ore_contrattuali, totale_ore,
-     ore_per_task, compilato.
+     task_settimana, compilato.
 
 3. POST /api/consuntivi/salva
    - Pattern Y (self-or-manager): l'user può salvare SOLO i propri
@@ -80,8 +82,9 @@ DIPENDENZE
 
 NOTE TECNICHE
 ─────────────
-Helper privato `_consuntivo_vuoto_per_user` per coerenza del payload
-quando l'utente non ha ancora consuntivi.
+La vista `/me` non ha più early-return sulla tabella Consuntivi vuota: parte
+dai Task attivi, quindi `task_settimana` è popolata anche alla prima
+compilazione (ore_consumate=0), non lista vuota.
 
 STORIA
 ──────
@@ -99,7 +102,7 @@ from sqlalchemy.orm import joinedload
 
 from deps import get_current_user, require_manager
 from models import Utente, Dipendente, Task, Consuntivo, get_session
-from data import get_dipendente
+from data import get_dipendente, task_settimana_dipendente
 
 
 # Import condizionale per scrittura
@@ -121,24 +124,6 @@ class SalvaConsuntivoRequest(BaseModel):
     tipo_assenza: str = ""
     nota_assenza: str = ""
     spese: list[dict] = []
-
-
-# ── Helper privato ───────────────────────────────────────────────────────
-def _consuntivo_vuoto_per_user(dipendente_id: str):
-    """Payload coerente quando l'utente non ha ancora consuntivi."""
-    try:
-        dip = get_dipendente(dipendente_id)
-    except (IndexError, KeyError):
-        raise HTTPException(404, "Dipendente non trovato")
-    return {
-        "dipendente_id": dipendente_id,
-        "nome": dip["nome"],
-        "profilo": dip["profilo"],
-        "ore_contrattuali": int(dip["ore_sett"]),
-        "totale_ore": 0,
-        "ore_per_task": [],
-        "compilato": False,
-    }
 
 
 # ── Router ───────────────────────────────────────────────────────────────
@@ -241,50 +226,24 @@ def consuntivi_settimana_corrente(_: Utente = Depends(require_manager)):
 
 @router.get("/me")
 def consuntivi_settimana_me(current_user: Utente = Depends(get_current_user)):
-    """Vista PERSONALE: i consuntivi del solo chiamante (settimana corrente).
-    Self intrinseco: il dipendente è l'utente loggato, niente parametri."""
+    """Vista PERSONALE (Layout A'): «ecco cosa era previsto per te questa
+    settimana». Self intrinseco: il dipendente è l'utente loggato, niente
+    parametri.
+
+    Parte dai TASK attivi del dipendente (non dai Consuntivi): la lista
+    `task_settimana` contiene sempre i task da compilare, con le ore già
+    dichiarate attaccate (0 se non ancora compilato). La logica riusabile
+    sta in data.task_settimana_dipendente (la userà anche la Home-utente)."""
     if not current_user.dipendente_id:
         raise HTTPException(400, "Utente non collegato a un dipendente")
-
-    lun = datetime.now() - timedelta(days=datetime.now().weekday())
-    lun_date = lun.date() if hasattr(lun, 'date') else lun
-    ven_date = lun_date + timedelta(days=6)
-
-    session = get_session()
-    # Iso-comportamento: payload vuoto se la tabella consuntivi è
-    # totalmente vuota (replica l'early-return su _CONSUNTIVI().empty).
-    has_any = session.query(Consuntivo.id).first() is not None
-    if not has_any:
-        session.close()
-        return _consuntivo_vuoto_per_user(current_user.dipendente_id)
-
-    cons_user = session.query(Consuntivo).options(
-        joinedload(Consuntivo.task).joinedload(Task.progetto)
-    ).filter(
-        Consuntivo.dipendente_id == current_user.dipendente_id,
-        Consuntivo.settimana >= lun_date,
-        Consuntivo.settimana <= ven_date,
-    ).all()
-    session.close()
 
     try:
         dip = get_dipendente(current_user.dipendente_id)
     except (IndexError, KeyError):
         raise HTTPException(404, "Dipendente non trovato")
 
-    ore_per_task = []
-    totale = 0
-    for c in cons_user:
-        if c.ore_dichiarate > 0:
-            t = c.task
-            if t is not None:
-                proj_nome = t.progetto.nome if t.progetto else "?"
-                ore_per_task.append({
-                    "task_nome": t.nome,
-                    "progetto": proj_nome,
-                    "ore": float(c.ore_dichiarate),
-                })
-                totale += float(c.ore_dichiarate)
+    task_settimana = task_settimana_dipendente(current_user.dipendente_id)
+    totale = sum(t["ore_consumate"] for t in task_settimana)
 
     return {
         "dipendente_id": current_user.dipendente_id,
@@ -292,8 +251,8 @@ def consuntivi_settimana_me(current_user: Utente = Depends(get_current_user)):
         "profilo": dip["profilo"],
         "ore_contrattuali": int(dip["ore_sett"]),
         "totale_ore": round(totale, 1),
-        "ore_per_task": ore_per_task,
-        "compilato": bool(ore_per_task),
+        "task_settimana": task_settimana,
+        "compilato": totale > 0,
     }
 
 

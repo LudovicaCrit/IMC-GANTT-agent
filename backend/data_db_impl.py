@@ -349,6 +349,91 @@ def get_progetti_dipendente(did):
     return out
 
 
+def task_settimana_dipendente(dipendente_id, settimana=None):
+    """I task attivi del dipendente per una settimana, con le ore già
+    consuntivate da LUI in QUELLA settimana attaccate sopra.
+
+    Riusabile: alimenta sia GET /api/consuntivi/me sia la futura Home-utente
+    («su cosa sto lavorando, come procedono i progetti»). La logica sta qui,
+    non nella route, così un secondo endpoint la riusa senza duplicare la query.
+
+    Parte dai Task assegnati+attivi (NON dai Consuntivi): il dipendente vede
+    «cosa era previsto per lui questa settimana» anche se non ha ancora
+    compilato (ore_consumate = 0 in quel caso, non lista vuota).
+
+    Criterio "attivo": stato IN ('In corso','Da iniziare') — solo stato, niente
+    incrocio date. Coerente con get_progetti_dipendente e col conteggio task
+    attivi di /settimana; non scarta i task con date NULL (che vanno comunque
+    consuntivati). Assegnazione via Task.dipendente_id (colonna diretta).
+
+    Una query con joinedload(Task.progetto) per nome/tipologia progetto (niente
+    N+1); una seconda query indicizzata prende i Consuntivi del dip/settimana e
+    li attacca per task_id.
+
+    Ritorna list[dict] ordinata per task_id:
+      task_id, task_nome, progetto_id, progetto_nome, interna (bool),
+      ore_iniziale (= ore_stimate congelata), ore_pianificate (piano corrente),
+      ore_consumate (dichiarate dal dip in settimana), ore_rimanenti, stato.
+    """
+    from sqlalchemy.orm import joinedload
+
+    base = settimana if settimana is not None else datetime.now()
+    if isinstance(base, datetime):
+        base = base.date()
+    lun = base - timedelta(days=base.weekday())
+    fine_sett = lun + timedelta(days=6)  # lun..dom, come /me e /settimana
+
+    session = get_session()
+    try:
+        tasks = (
+            session.query(Task)
+            .options(joinedload(Task.progetto))
+            .filter(
+                Task.dipendente_id == dipendente_id,
+                Task.stato.in_(["In corso", "Da iniziare"]),
+            )
+            .order_by(Task.id)
+            .all()
+        )
+        # Ore dichiarate da QUESTO dip in QUESTA settimana, per task_id.
+        # (UNIQUE task+dip+settimana → di norma una riga per task; sommiamo
+        #  comunque per robustezza.)
+        cons_rows = (
+            session.query(Consuntivo.task_id, Consuntivo.ore_dichiarate)
+            .filter(
+                Consuntivo.dipendente_id == dipendente_id,
+                Consuntivo.settimana >= lun,
+                Consuntivo.settimana <= fine_sett,
+            )
+            .all()
+        )
+    finally:
+        session.close()
+
+    consumate_per_task = {}
+    for tid, ore in cons_rows:
+        consumate_per_task[tid] = consumate_per_task.get(tid, 0.0) + float(ore or 0)
+
+    out = []
+    for t in tasks:
+        prog = t.progetto
+        out.append({
+            "task_id": t.id,
+            "task_nome": t.nome,
+            "progetto_id": t.progetto_id,
+            "progetto_nome": prog.nome if prog else "?",
+            # interna = tipologia progetto, NON id P010 (vedi economia: il
+            # filtro per id era un hack morto). Per il badge blu/grigio.
+            "interna": bool(prog and prog.tipologia == "interna"),
+            "ore_iniziale": int(t.ore_stimate or 0),
+            "ore_pianificate": float(t.ore_pianificate or 0),
+            "ore_consumate": round(consumate_per_task.get(t.id, 0.0), 1),
+            "ore_rimanenti": float(t.ore_rimanenti or 0),
+            "stato": t.stato,
+        })
+    return out
+
+
 # ══════════════════════════════════════════════════════════════════════
 # FUNZIONI DI MODIFICA — scrittura (scrivono nel db + ricaricano cache)
 # ══════════════════════════════════════════════════════════════════════
