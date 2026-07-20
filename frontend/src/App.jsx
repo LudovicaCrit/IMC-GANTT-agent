@@ -157,6 +157,7 @@ function MainLayout() {
           {/* Pagine accessibili a TUTTI gli utenti loggati (user + manager) */}
           <Route path="/" element={<Home />} />
           <Route path="/consuntivazione" element={<Consuntivazione />} />
+          <Route path="/consuntivazione-new" element={<ConsuntivazioneUser />} />
 
           {/* Pagine manager-only — wrapped in <RequireManager> */}
           <Route path="/gantt" element={
@@ -179,9 +180,6 @@ function MainLayout() {
           } />
           <Route path="/configurazione" element={
             <RequireManager><Configurazione /></RequireManager>
-          } />
-          <Route path="/configurazione-new" element={
-            <ConsuntivazioneUser />
           } />
           <Route path="/cantiere" element={
             <RequireManager><Cantiere /></RequireManager>
