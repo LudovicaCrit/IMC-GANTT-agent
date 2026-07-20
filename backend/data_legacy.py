@@ -581,55 +581,194 @@ TASKS = pd.DataFrame([
 
 TASKS = TASKS.fillna({"predecessore": ""})
 
+# ═══════════════════════════════════════════════════════════════════════
+# RI-ANCORAGGIO TEMPORALE A date.today() (piano ibrido, 20/07/2026)
+# ═══════════════════════════════════════════════════════════════════════
+# Prima le date erano assolute (primavera 2026): col passare dei giorni i
+# progetti "scadevano" e gli stati (hardcoded) divergevano dalle date. Qui
+# rendiamo TUTTE le date relative a OGGI, così il seed resta sempre attuale,
+# e DERIVIAMO gli stati dalle date (niente più stati hardcoded incoerenti).
+#
+# Due trattamenti:
+#   • COMMERCIALI/BANDI (P001..P011): shift rolling (l'ancora 2026-07-20 è il
+#     giorno per cui le finestre legacy erano già ben distribuite — verificato:
+#     nessuno shift le bilancia meglio) + 2 fix mirati per centrare le fasce.
+#   • INTERNI (tipologia 'interna'): attività ricorrenti → finestra
+#     continuativa che CONTIENE oggi (così i task risultano attivi stasettimana).
+#
+# Nomenclatura stati (CHECK constraint DB):
+#   Progetto: Bozza / Da iniziare / In esecuzione / Sospeso / Completato / Annullato
+#   Task:     Da iniziare / In corso / Completato / Bloccato / Sospeso / Annullato
+# Le fasce avviati/in corso/chiusura sono POSIZIONI temporali → progetto
+# "In esecuzione" (cambia solo il mix di stati dei task); conclusi → "Completato".
+from datetime import date as _date
+
+OGGI = _date.today()
+_ANCHOR = _date(2026, 7, 20)          # 'oggi' di riferimento delle finestre legacy
+_SHIFT = OGGI - _ANCHOR               # timedelta; oggi ≡ 0 → rolling, sempre attuale
+_oggi_ts = pd.Timestamp(OGGI)
+
+def _ts(d):
+    return pd.Timestamp(d)
+
+_interni = set(PROGETTI[PROGETTI["tipologia"] == "interna"]["id"])
+
+# ── 1) COMMERCIALI: shift rolling su progetti e task ──
+_mask_p_comm = ~PROGETTI["id"].isin(_interni)
+_mask_t_comm = ~TASKS["progetto_id"].isin(_interni)
+for _col in ("data_inizio", "data_fine"):
+    PROGETTI.loc[_mask_p_comm, _col] = PROGETTI.loc[_mask_p_comm, _col] + _SHIFT
+    TASKS.loc[_mask_t_comm, _col] = TASKS.loc[_mask_t_comm, _col] + _SHIFT
+
+# ── 2) FIX MIRATI (2) per popolare tutte le fasce ──
+# P004 → CHIUSURA: fine tra ~3 settimane (i suoi task restano nel passato →
+#        quasi tutti Completato, come ci si aspetta da un progetto in chiusura).
+# P009 → AVVIATO: inizio ~2 settimane fa; riallineo i suoi 3 task (1 in corso,
+#        2 da iniziare) perché "appena avviato" sia coerente.
+PROGETTI.loc[PROGETTI["id"] == "P004", "data_fine"] = _ts(OGGI + timedelta(days=21))
+PROGETTI.loc[PROGETTI["id"] == "P009", "data_inizio"] = _ts(OGGI - timedelta(days=14))
+_p009_task_win = {
+    "T053": (OGGI - timedelta(days=10), OGGI + timedelta(days=20)),   # In corso
+    "T054": (OGGI + timedelta(days=21), OGGI + timedelta(days=55)),   # Da iniziare
+    "T055": (OGGI + timedelta(days=21), OGGI + timedelta(days=55)),   # Da iniziare
+}
+for _tid, (_di, _df) in _p009_task_win.items():
+    TASKS.loc[TASKS["id"] == _tid, "data_inizio"] = _ts(_di)
+    TASKS.loc[TASKS["id"] == _tid, "data_fine"] = _ts(_df)
+
+# ── 3) INTERNI: finestra continuativa [OGGI-30 sett, OGGI+12 sett] ──
+# Mansioni/formazione/innovazione sono ricorrenti: task = finestra del progetto
+# → tutti In corso QUESTA settimana (requisito: i 4 task di D011 attivi ora).
+_int_inizio = _ts(OGGI - timedelta(weeks=30))
+_int_fine = _ts(OGGI + timedelta(weeks=12))
+_mask_t_int = TASKS["progetto_id"].isin(_interni)
+for _col, _val in (("data_inizio", _int_inizio), ("data_fine", _int_fine)):
+    PROGETTI.loc[PROGETTI["id"].isin(_interni), _col] = _val
+    TASKS.loc[_mask_t_int, _col] = _val
+
+# ── 4) D011: un task su progetto COMMERCIALE (badge blu accanto ai grigi) ──
+# Oltre ai 4 task interni (T062, T082-84), così la Consuntivazione di Ludovica
+# mostra sia interne (grigio) sia progetto (blu) e si testa il raggruppamento.
+_t_ludovica = pd.DataFrame([{
+    "id": "T114", "progetto_id": "P002",
+    "nome": "Supporto testing piattaforma GRC", "fase": "Testing",
+    "ore_stimate": 40,
+    "data_inizio": _ts(OGGI - timedelta(days=10)),
+    "data_fine": _ts(OGGI + timedelta(days=40)),
+    "stato": "In corso", "profilo_richiesto": "Consultant",
+    "dipendente_id": "D011", "predecessore": "",
+}])
+TASKS = pd.concat([TASKS, _t_ludovica], ignore_index=True)
+
+# ── 5) EROSIONE: ore_pianificate ≠ ore_stimate su 3 progetti ──
+# Prima coincidevano sempre → in Economia le due erosioni erano identiche.
+# Simuliamo revisioni di piano del PM: P002 +15%, P004 −15%, P010 +10%.
+TASKS["ore_pianificate"] = TASKS["ore_stimate"].astype(float)
+for _pid, _factor in (("P002", 1.15), ("P004", 0.85), ("P010", 1.10)):
+    _idx = TASKS["progetto_id"] == _pid
+    TASKS.loc[_idx, "ore_pianificate"] = (TASKS.loc[_idx, "ore_stimate"] * _factor).round()
+
+# ── 6) STATI DERIVATI dalle date ──
+_stati_speciali = {"P006": "Sospeso", "P007": "Bozza"}   # fuori dalle 4 fasce
+
+def _stato_progetto(row):
+    if row["id"] in _interni:
+        return "In esecuzione"
+    if row["id"] in _stati_speciali:
+        return _stati_speciali[row["id"]]
+    return "Completato" if row["data_fine"] < _oggi_ts else "In esecuzione"
+
+PROGETTI["stato"] = PROGETTI.apply(_stato_progetto, axis=1)
+_stato_prog = dict(zip(PROGETTI["id"], PROGETTI["stato"]))
+
+def _stato_task(row):
+    sp = _stato_prog.get(row["progetto_id"], "In esecuzione")
+    if sp == "Completato":
+        return "Completato"                       # progetto concluso → tutti i task chiusi
+    if sp == "Bozza":
+        return "Da iniziare"
+    if sp == "Sospeso":                            # storia preservata: fatti → Completato
+        return "Completato" if row["data_fine"] < _oggi_ts else "Sospeso"
+    di, df = row["data_inizio"], row["data_fine"]  # progetto In esecuzione → per data
+    if df < _oggi_ts:
+        return "Completato"
+    if di > _oggi_ts:
+        return "Da iniziare"
+    return "In corso"
+
+TASKS["stato"] = TASKS.apply(_stato_task, axis=1)
+
+# ── 7) ECCEZIONI "in ritardo" (3): finestra passata ma ancora In corso ──
+# Fanno scattare gli alert di ritardo. Solo su progetti In esecuzione.
+for _tid in ("T011", "T022", "T041"):
+    TASKS.loc[TASKS["id"] == _tid, "stato"] = "In corso"
+
 # ── CONSUNTIVI (ore effettivamente lavorate) ───────────────────────────
 
 def genera_consuntivi():
-    """Genera consuntivi settimanali realistici con buchi."""
+    """Genera consuntivi settimanali realistici con buchi.
+
+    Ancorato a OGGI: si generano consuntivi solo per le settimane FINO a oggi
+    (mai future). Le ore settimanali sono proporzionate al budget del task
+    spalmato sulla sua durata (ore_pianificate / n_settimane_totali), così il
+    consumato accumulato è proporzionale all'avanzamento TEMPORALE: un task
+    partito da 3 settimane accumula ~3 settimane di ore, non l'intero budget.
+    """
     records = []
-    oggi = datetime.now()
+    oggi = _oggi_ts  # pd.Timestamp(date.today()) — coerente col ri-ancoraggio
 
     for _, task in TASKS.iterrows():
-        if task["stato"] in ["Completato", "In corso"]:
-            inizio = task["data_inizio"]
-            fine = min(task["data_fine"], oggi)
+        # Solo task avviati: In corso o già Completato. Da iniziare / Sospeso /
+        # Bloccato non producono consuntivi (⇒ niente settimane future).
+        if task["stato"] not in ("Completato", "In corso"):
+            continue
 
-            settimana = inizio
-            while settimana <= fine:
-                lun = settimana - timedelta(days=settimana.weekday())
+        inizio = task["data_inizio"]
+        if inizio > oggi:
+            continue
+        fine_cap = min(task["data_fine"], oggi)
 
-                compilato = random.random() > 0.15
+        # Ritmo settimanale ~ budget / durata totale (min 1 settimana).
+        settimane_totali = max(1, ((task["data_fine"] - inizio).days // 7) + 1)
+        ritmo = float(task["ore_pianificate"]) / settimane_totali
 
-                if compilato:
-                    ore = random.choice([4, 4, 6, 8, 8, 8, 12, 16, 16, 20, 24])
-                    records.append({
-                        "task_id": task["id"],
-                        "dipendente_id": task["dipendente_id"],
-                        "settimana": lun,
-                        "ore_dichiarate": ore,
-                        "compilato": True,
-                        "data_compilazione": lun + timedelta(days=random.choice([4, 5, 6, 7, 8, 9, 12])),
-                        "nota": random.choice([
-                            "", "", "", "", "",
-                            "Attesa feedback dal cliente",
-                            "Ritardo per approvazione interna",
-                            "Lavoro extra per change request",
-                            "Call di allineamento non prevista",
-                            "Supporto a collega su altro progetto",
-                            "Attesa documentazione dal cliente",
-                        ]),
-                    })
-                else:
-                    records.append({
-                        "task_id": task["id"],
-                        "dipendente_id": task["dipendente_id"],
-                        "settimana": lun,
-                        "ore_dichiarate": 0,
-                        "compilato": False,
-                        "data_compilazione": None,
-                        "nota": "",
-                    })
+        settimana = inizio
+        while settimana <= fine_cap:
+            lun = settimana - timedelta(days=settimana.weekday())
+            compilato = random.random() > 0.15
 
-                settimana += timedelta(weeks=1)
+            if compilato:
+                # jitter attorno al ritmo; almeno 1h, arrotondato a interi.
+                ore = max(1, round(ritmo * random.uniform(0.5, 1.4)))
+                records.append({
+                    "task_id": task["id"],
+                    "dipendente_id": task["dipendente_id"],
+                    "settimana": lun,
+                    "ore_dichiarate": ore,
+                    "compilato": True,
+                    "data_compilazione": lun + timedelta(days=random.choice([4, 5, 6, 7, 8, 9, 12])),
+                    "nota": random.choice([
+                        "", "", "", "", "",
+                        "Attesa feedback dal cliente",
+                        "Ritardo per approvazione interna",
+                        "Lavoro extra per change request",
+                        "Call di allineamento non prevista",
+                        "Supporto a collega su altro progetto",
+                        "Attesa documentazione dal cliente",
+                    ]),
+                })
+            else:
+                records.append({
+                    "task_id": task["id"],
+                    "dipendente_id": task["dipendente_id"],
+                    "settimana": lun,
+                    "ore_dichiarate": 0,
+                    "compilato": False,
+                    "data_compilazione": None,
+                    "nota": "",
+                })
+
+            settimana += timedelta(weeks=1)
 
     return pd.DataFrame(records)
 

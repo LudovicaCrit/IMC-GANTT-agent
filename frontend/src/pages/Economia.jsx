@@ -1,32 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { fetchMarginiEconomia, fetchProgetti } from '../api'
-
-
-/* ── Gauge ad anello ──────────────────────────────────────────────── */
-function Gauge({ value, label, colorThresholds }) {
-  const pct = Math.min(100, Math.max(0, value))
-  let color = 'text-green-400'
-  if (colorThresholds) {
-    if (value > colorThresholds.red) color = 'text-red-400'
-    else if (value > colorThresholds.yellow) color = 'text-yellow-400'
-  }
-  const radius = 45
-  const circumference = 2 * Math.PI * radius
-  const offset = circumference - (pct / 100) * circumference
-
-  return (
-    <div className="flex flex-col items-center">
-      <svg width="120" height="120" className="transform -rotate-90">
-        <circle cx="60" cy="60" r={radius} fill="none" stroke="#374151" strokeWidth="10" />
-        <circle cx="60" cy="60" r={radius} fill="none" stroke="currentColor"
-          strokeWidth="10" strokeDasharray={circumference} strokeDashoffset={offset}
-          strokeLinecap="round" className={`${color} transition-all duration-500`} />
-      </svg>
-      <p className={`text-2xl font-bold -mt-16 mb-8 ${color}`}>{value.toFixed(0)}%</p>
-      <p className="text-xs text-gray-400 text-center">{label}</p>
-    </div>
-  )
-}
+import { fetchMarginiEconomia } from '../api'
 
 /* ── Helpers ──────────────────────────────────────────────────────── */
 const fmtEur = (n) =>
@@ -34,7 +7,7 @@ const fmtEur = (n) =>
 
 const fmtPct = (n) => `${(n ?? 0).toFixed(1)}%`
 
-const fmtPp = (n) => `${n >= 0 ? '' : '+'}${Math.abs(n).toFixed(1)} pp`
+const fmtPp = (n) => `${n < 0 ? '-' : '+'}${Math.abs(n).toFixed(1)} pp`
 
 /* ── Badge erosione ───────────────────────────────────────────────
    Erosione positiva = stiamo consumando più del previsto (male).
@@ -56,7 +29,7 @@ function ErosioneBadge({ eur, pp, size = 'md' }) {
 
   return (
     <span className={`inline-flex items-baseline gap-2 rounded-lg border ${color} ${pad}`}>
-      <span className="font-bold">{negativa ? '−' : ''}{fmtEur(Math.abs(eur))}</span>
+      <span className="font-bold">{negativa ? '−' : '+'}{fmtEur(Math.abs(eur))}</span>
       <span className="opacity-70">{fmtPp(pp)}</span>
     </span>
   )
@@ -114,15 +87,10 @@ export default function Economia() {
   const [loading, setLoading] = useState(true)
   const [errore, setErrore] = useState(null)
   const [aperto, setAperto] = useState(null)
-  const [progettiFull, setProgettiFull] = useState([])
-  const [tab, setTab] = useState('margini')
 
   useEffect(() => {
-    Promise.all([fetchMarginiEconomia(), fetchProgetti().catch(() => [])])
-      .then(([m, p]) => {
-        setDati(m)
-        setProgettiFull(p)
-      })
+    fetchMarginiEconomia()
+      .then(setDati)
       .catch((e) => setErrore(e.message))
       .finally(() => setLoading(false))
   }, [])
@@ -153,29 +121,23 @@ export default function Economia() {
     (a, b) => b.erosione_commerciale_pp - a.erosione_commerciale_pp
   )
 
-  // ── Avanzamento: progetti in esecuzione, progressi tempo/ore ──
+  // Dati avanzamento: progressi temporale / lavoro / budget
+  const oggi = new Date()
   const ecoData = progettiFull
     .filter((p) => p.stato === 'In esecuzione')
     .map((p) => {
-      const inizio = p.data_inizio ? new Date(p.data_inizio) : null
-      const fine = p.data_fine ? new Date(p.data_fine) : null
-      let progressoTempo = 0
-      if (inizio && fine && fine > inizio) {
-        const durata = fine - inizio
-        const trascorsi = Date.now() - inizio
-        progressoTempo = Math.min(100, Math.max(0, (trascorsi / durata) * 100))
-      }
-      const progressoOre =
-        p.budget_ore > 0 ? (p.ore_consuntivate / p.budget_ore) * 100 : 0
-      const budgetUsato = progressoOre
-      return { ...p, progressoTempo, progressoOre, budgetUsato }
+      const durata = (new Date(p.data_fine) - new Date(p.data_inizio)) / 86400000
+      const trascorsi = (oggi - new Date(p.data_inizio)) / 86400000
+      const progressoTempo = durata > 0 ? Math.min(100, Math.max(0, (trascorsi / durata) * 100)) : 0
+      const progressoOre = p.budget_ore > 0 ? (p.ore_consuntivate / p.budget_ore) * 100 : 0
+      return { ...p, progressoTempo, progressoOre, budgetUsato: progressoOre }
     })
 
   return (
     <div>
       <h1 className="text-3xl font-bold mb-2">💰 Economia</h1>
       <p className="text-sm text-yellow-400 mb-6">🔒 Sezione riservata al management</p>
-
+      
       <div className="flex gap-2 mb-6">
         <button onClick={() => setTab('margini')}
           className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
@@ -209,22 +171,12 @@ export default function Economia() {
         </div>
         <div className="bg-gray-800 rounded-xl p-5 border border-gray-700">
           <p className="text-sm text-gray-400">
-            {tot.erosione < 0 ? 'Efficienza netta' : 'Erosione netta'}
+            {tot.erosione < 0 ? 'Efficienza sul venduto' : 'Erosione sul venduto'}
           </p>
           <p className={`text-2xl font-bold mt-1 ${tot.erosione < 0 ? 'text-emerald-400' : 'text-red-400'}`}>
             {tot.erosione < 0 ? '−' : ''}{fmtEur(Math.abs(tot.erosione))}
           </p>
-          <p className="text-xs text-gray-500 mt-1 leading-snug">
-            {aziende.map((a) => (
-              <span key={a.azienda_id} className="block">
-                {a.azienda_nome}{' '}
-                <span className={a.erosione_commerciale_eur < 0 ? 'text-emerald-400' : 'text-red-400'}>
-                  {a.erosione_commerciale_eur < 0 ? '−' : '+'}
-                  {fmtEur(Math.abs(a.erosione_commerciale_eur))}
-                </span>
-              </span>
-            ))}
-          </p>
+          <p className="text-xs text-gray-500 mt-0.5">{fmtPp(erosionePp)}</p>
         </div>
         <div className="bg-gray-800 rounded-xl p-5 border border-gray-700">
           <p className="text-sm text-gray-400">Progetti commerciali</p>
@@ -395,79 +347,6 @@ export default function Economia() {
           </tbody>
         </table>
       </div>
-
-      </>)}
-
-      {tab === 'avanzamento' && (
-        <div>
-          {ecoData.length === 0 ? (
-            <p className="text-gray-400">Nessun progetto in esecuzione.</p>
-          ) : (
-            <div className="space-y-6">
-              {ecoData.map((p) => {
-                const deltaTL = p.progressoTempo - p.progressoOre
-                let boxColor, boxMsg
-                if (deltaTL > 15) {
-                  boxColor = 'text-red-300 bg-red-900/20 border-red-800'
-                  boxMsg = '🔴 Progetto in ritardo: il tempo trascorso supera l\'avanzamento del lavoro.'
-                } else if (deltaTL > 5) {
-                  boxColor = 'text-amber-300 bg-amber-900/20 border-amber-800'
-                  boxMsg = '🟡 Lieve disallineamento tra tempo trascorso e lavoro svolto.'
-                } else {
-                  boxColor = 'text-emerald-300 bg-emerald-900/20 border-emerald-800'
-                  boxMsg = '🟢 Avanzamento in linea con il tempo trascorso.'
-                }
-                return (
-                  <div key={p.id} className="bg-gray-900 rounded-xl border border-gray-800 p-5">
-                    <div className="flex justify-between items-start mb-4">
-                      <div>
-                        <h3 className="font-semibold text-lg">{p.nome}</h3>
-                        <p className="text-xs text-gray-500">{p.cliente}</p>
-                      </div>
-                      <div className="text-right">
-                        <p className="text-xl font-bold">{fmtEur(p.valore_contratto)}</p>
-                        <p className="text-xs text-gray-500">valore contratto</p>
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-3 gap-4 mb-4">
-                      <Gauge value={p.progressoTempo} label="Avanzamento Temporale"
-                        colorThresholds={{ yellow: 70, red: 90 }} />
-                      <Gauge value={p.progressoOre} label="Avanzamento Lavoro"
-                        colorThresholds={{ yellow: 70, red: 90 }} />
-                      <Gauge value={p.budgetUsato} label="Budget Utilizzato"
-                        colorThresholds={{ yellow: 60, red: 80 }} />
-                    </div>
-
-                    <div className="grid grid-cols-3 gap-3 text-sm mb-4">
-                      <div>
-                        <p className="text-xs text-gray-500">Ore consuntivate</p>
-                        <p className="font-medium">
-                          {p.ore_consuntivate ?? '—'}h / {p.budget_ore ?? '—'}h
-                        </p>
-                      </div>
-                      <div>
-                        <p className="text-xs text-gray-500">Budget usato</p>
-                        <p className="font-medium">{p.budgetUsato.toFixed(0)}%</p>
-                      </div>
-                      <div>
-                        <p className="text-xs text-gray-500">Task completati</p>
-                        <p className="font-medium">
-                          {p.task_completati ?? '—'} / {p.task_totali ?? '—'}
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className={`rounded-lg border p-3 text-sm ${boxColor}`}>
-                      {boxMsg}
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
-          )}
-        </div>
-      )}
     </div>
   )
 }

@@ -233,10 +233,12 @@ def seed():
             fase_id=fase_obj.id if fase_obj else None,
             nome=row["nome"],
             ore_stimate=int(row["ore_stimate"]),
-            # piano corrente = stima iniziale al seed; poi diverge (prereq. SAL).
-            # Allineato alla migration b8c9d0e1f2a3: re-seed da zero → 0 NULL.
-            ore_pianificate=float(row["ore_stimate"]),
-            ore_rimanenti=float(row["ore_stimate"]),  # all'inizio rimanenti = stimate
+            # piano corrente: di norma = stima iniziale, ma su alcuni progetti il
+            # PM ha rivisto il piano (ore_pianificate ≠ ore_stimate) → le due
+            # erosioni in Economia divergono. Colonna fornita da data_legacy;
+            # fallback alla stima se assente (retrocompat.).
+            ore_pianificate=float(row.get("ore_pianificate", row["ore_stimate"])),
+            ore_rimanenti=float(row.get("ore_pianificate", row["ore_stimate"])),  # rimanenti = piano corrente al seed
             data_inizio=row["data_inizio"].date() if hasattr(row["data_inizio"], "date") else row["data_inizio"],
             data_fine=row["data_fine"].date() if hasattr(row["data_fine"], "date") else row["data_fine"],
             stato=row["stato"],
