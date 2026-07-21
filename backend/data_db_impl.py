@@ -349,22 +349,51 @@ def get_progetti_dipendente(did):
     return out
 
 
+def _lunedi(d=None):
+    """Normalizza una data al lunedì della sua settimana ISO.
+
+    Regola UNICA condivisa da lettura (task_settimana_dipendente) e scrittura
+    (salva_consuntivo): la colonna `settimana` di Consuntivo / Presenza /
+    Spesa contiene SEMPRE un lunedì. Se la scrittura ci mette un giorno
+    qualsiasi (era `datetime.now()`), la UNIQUE task+dip+settimana non
+    intercetta il doppione e la stessa settimana si sdoppia in righe diverse:
+    è l'origine del bug duplicati.
+
+    Accetta date, datetime, stringa ISO 'YYYY-MM-DD' o None (= oggi).
+    Solleva ValueError se la stringa non è una data ISO valida.
+    """
+    if d is None:
+        d = date.today()
+    if isinstance(d, str):
+        d = date.fromisoformat(d)      # ValueError se malformata
+    if isinstance(d, datetime):
+        d = d.date()
+    return d - timedelta(days=d.weekday())
+
+
 def task_settimana_dipendente(dipendente_id, settimana=None):
-    """I task attivi del dipendente per una settimana, con le ore già
+    """I task schedulati sul dipendente per una settimana, con le ore già
     consuntivate da LUI in QUELLA settimana attaccate sopra.
 
     Riusabile: alimenta sia GET /api/consuntivi/me sia la futura Home-utente
     («su cosa sto lavorando, come procedono i progetti»). La logica sta qui,
     non nella route, così un secondo endpoint la riusa senza duplicare la query.
 
-    Parte dai Task assegnati+attivi (NON dai Consuntivi): il dipendente vede
-    «cosa era previsto per lui questa settimana» anche se non ha ancora
-    compilato (ore_consumate = 0 in quel caso, non lista vuota).
+    Parte dai Task assegnati (NON dai Consuntivi): il dipendente vede «cosa era
+    previsto per lui quella settimana» anche se non ha ancora compilato
+    (ore_consumate = 0 in quel caso, non lista vuota).
 
-    Criterio "attivo": stato IN ('In corso','Da iniziare') — solo stato, niente
-    incrocio date. Coerente con get_progetti_dipendente e col conteggio task
-    attivi di /settimana; non scarta i task con date NULL (che vanno comunque
-    consuntivati). Assegnazione via Task.dipendente_id (colonna diretta).
+    Criterio di inclusione: PURAMENTE TEMPORALE — il task compare se la sua
+    finestra data_inizio..data_fine interseca la settimana richiesta. Lo stato
+    NON filtra (si esclude solo 'Annullato'): «schedulato» e «stato» sono assi
+    indipendenti — un task può essere schedulato per questa settimana ed essere
+    Bloccato, o schedulato per la scorsa e ancora In corso perché in ritardo.
+    Il criterio precedente (stato IN 'In corso','Da iniziare') era
+    settimana-cieco: guardando la settimana scorsa mostrava i task attivi
+    OGGI, così un task chiuso venerdì spariva e le ore fatte su di esso
+    diventavano indichiarabili.
+    I task con date NULL restano inclusi (non si può dire che NON intersecano,
+    e vanno comunque consuntivati). Assegnazione via Task.dipendente_id.
 
     Una query con joinedload(Task.progetto) per nome/tipologia progetto (niente
     N+1); una seconda query indicizzata prende i Consuntivi del dip/settimana e
@@ -372,15 +401,17 @@ def task_settimana_dipendente(dipendente_id, settimana=None):
 
     Ritorna list[dict] ordinata per task_id:
       task_id, task_nome, progetto_id, progetto_nome, interna (bool),
-      ore_iniziale (= ore_stimate congelata), ore_pianificate (piano corrente),
-      ore_consumate (dichiarate dal dip in settimana), ore_rimanenti, stato.
+      ore_iniziale (= ore_stimate congelata), ore_pianificate (totale del task),
+      ore_pianificate_settimana (quota della settimana corrente: ore_pianificate
+        spalmate sulla durata del task; None se date NULL, 0 se la finestra non
+        tocca la settimana), ore_consumate (dichiarate dal dip in settimana),
+      ore_rimanenti (residuo del task = ore_pianificate − consumato TOTALE del
+        task su tutti i dipendenti/settimane, calcolato al volo), stato.
     """
     from sqlalchemy.orm import joinedload
+    from sqlalchemy import func, or_, and_
 
-    base = settimana if settimana is not None else datetime.now()
-    if isinstance(base, datetime):
-        base = base.date()
-    lun = base - timedelta(days=base.weekday())
+    lun = _lunedi(settimana)
     fine_sett = lun + timedelta(days=6)  # lun..dom, come /me e /settimana
 
     session = get_session()
@@ -390,11 +421,19 @@ def task_settimana_dipendente(dipendente_id, settimana=None):
             .options(joinedload(Task.progetto))
             .filter(
                 Task.dipendente_id == dipendente_id,
-                Task.stato.in_(["In corso", "Da iniziare"]),
+                Task.stato != "Annullato",
+                # intersezione finestra-task × settimana; date NULL incluse
+                or_(
+                    Task.data_inizio.is_(None),
+                    Task.data_fine.is_(None),
+                    and_(Task.data_inizio <= fine_sett, Task.data_fine >= lun),
+                ),
             )
             .order_by(Task.id)
             .all()
         )
+        task_ids = [t.id for t in tasks]
+
         # Ore dichiarate da QUESTO dip in QUESTA settimana, per task_id.
         # (UNIQUE task+dip+settimana → di norma una riga per task; sommiamo
         #  comunque per robustezza.)
@@ -407,6 +446,18 @@ def task_settimana_dipendente(dipendente_id, settimana=None):
             )
             .all()
         )
+        # Consumato TOTALE per task (tutti i dipendenti, tutte le settimane):
+        # serve per ore_rimanenti. La colonna Task.ore_rimanenti è denormalizzata
+        # e stale (il seed non la aggiorna dopo i consuntivi) → la ricalcolo al
+        # volo, stesso principio del serializzatore SAL su ore_consumate.
+        tot_rows = []
+        if task_ids:
+            tot_rows = (
+                session.query(Consuntivo.task_id, func.sum(Consuntivo.ore_dichiarate))
+                .filter(Consuntivo.task_id.in_(task_ids))
+                .group_by(Consuntivo.task_id)
+                .all()
+            )
     finally:
         session.close()
 
@@ -414,9 +465,25 @@ def task_settimana_dipendente(dipendente_id, settimana=None):
     for tid, ore in cons_rows:
         consumate_per_task[tid] = consumate_per_task.get(tid, 0.0) + float(ore or 0)
 
+    consumato_totale_task = {tid: float(s or 0) for tid, s in tot_rows}
+
+    def _quota_settimana(t):
+        """Quota di ore per la settimana corrente: ore_pianificate spalmate
+        uniformemente sulle settimane di durata del task. Riusa la stessa logica
+        di carico_settimanale_dipendente, così le due viste restano coerenti.
+        Casi limite: date NULL → None; finestra fuori settimana → 0; durata < 1
+        settimana → tutte le ore nella settimana (weeks = max(1, ...))."""
+        if t.data_inizio is None or t.data_fine is None:
+            return None
+        if t.data_inizio > fine_sett or t.data_fine < lun:
+            return 0.0
+        weeks = max(1, (t.data_fine - t.data_inizio).days / 7)
+        return round((t.ore_pianificate or 0) / weeks, 1)
+
     out = []
     for t in tasks:
         prog = t.progetto
+        pianificate = float(t.ore_pianificate or 0)
         out.append({
             "task_id": t.id,
             "task_nome": t.nome,
@@ -426,12 +493,130 @@ def task_settimana_dipendente(dipendente_id, settimana=None):
             # filtro per id era un hack morto). Per il badge blu/grigio.
             "interna": bool(prog and prog.tipologia == "interna"),
             "ore_iniziale": int(t.ore_stimate or 0),
-            "ore_pianificate": float(t.ore_pianificate or 0),
+            "ore_pianificate": pianificate,             # totale del task (contesto)
+            "ore_pianificate_settimana": _quota_settimana(t),  # quota settimana
             "ore_consumate": round(consumate_per_task.get(t.id, 0.0), 1),
-            "ore_rimanenti": float(t.ore_rimanenti or 0),
+            # residuo del TASK (non del singolo/settimana): piano − consumato tot.
+            "ore_rimanenti": round(pianificate - consumato_totale_task.get(t.id, 0.0), 1),
             "stato": t.stato,
         })
     return out
+
+
+def lunedi_settimana(d=None):
+    """Alias PUBBLICO di `_lunedi`. Non è una seconda regola: delega, punto.
+
+    Esiste solo per attraversare il confine di `data.py`, che fa
+    `from data_db_impl import *` — e `import *` non porta con sé i nomi che
+    iniziano con underscore. Le route devono poter normalizzare la settimana
+    richiesta (query param / body) con la STESSA regola usata qui dentro,
+    invece di ricalcolare il lunedì per conto loro: è esattamente la
+    duplicazione che ha generato il bug dei duplicati.
+    """
+    return _lunedi(d)
+
+
+_MESI_ABBR = ["gen", "feb", "mar", "apr", "mag", "giu",
+              "lug", "ago", "set", "ott", "nov", "dic"]
+
+
+def _etichetta_intervallo(lun):
+    """'13–19 lug' se la settimana sta in un mese solo, '29 giu – 5 lug' se
+    scavalca. Solo presentazione: il frontend mostra la stringa così com'è."""
+    dom = lun + timedelta(days=6)
+    if lun.month == dom.month:
+        return f"{lun.day}–{dom.day} {_MESI_ABBR[dom.month - 1]}"
+    return (f"{lun.day} {_MESI_ABBR[lun.month - 1]} – "
+            f"{dom.day} {_MESI_ABBR[dom.month - 1]}")
+
+
+def ore_dichiarate_settimana(dipendente_id, settimana=None):
+    """Ore COPERTE dal dipendente in una settimana (float): ore dichiarate sui
+    task + ore di assenza. È l'input del criterio di completezza.
+
+    Le assenze contano. Chi è in ferie tutta la settimana HA compilato
+    correttamente — ha dichiarato l'assenza. Se contassimo solo i Consuntivi
+    resterebbe a 0 ore, quindi «incompleto», e il sistema gli chiederebbe in
+    eterno di fare una cosa che ha già fatto.
+
+    Indipendente dai task: somma TUTTI i Consuntivi del dip in quella
+    settimana, anche quelli su task che non intersecano più la finestra.
+    `task_settimana_dipendente` invece somma solo i task che vede — va bene
+    per il totale mostrato accanto alla lista, non per decidere se una
+    settimana è «compilata» (un task chiuso e uscito dalla finestra
+    renderebbe la settimana incompleta per sempre).
+
+    Range lun..dom, non `== lunedì`: rete di sicurezza per righe storiche o
+    scritte da altre fonti con una data non normalizzata. Sommarle è il
+    comportamento corretto in quel caso.
+    """
+    from sqlalchemy import func
+    from models import PresenzaSettimanale
+
+    lun = _lunedi(settimana)
+    dom = lun + timedelta(days=6)
+    session = get_session()
+    try:
+        ore_task = (
+            session.query(func.sum(Consuntivo.ore_dichiarate))
+            .filter(
+                Consuntivo.dipendente_id == dipendente_id,
+                Consuntivo.settimana >= lun,
+                Consuntivo.settimana <= dom,
+            )
+            .scalar()
+        )
+        # Due query invece di un join: le presenze stanno su una tabella
+        # separata con cardinalità 1-per-settimana, un join produrrebbe
+        # righe moltiplicate e una somma gonfiata.
+        ore_assenza = (
+            session.query(func.sum(PresenzaSettimanale.ore_assenza))
+            .filter(
+                PresenzaSettimanale.dipendente_id == dipendente_id,
+                PresenzaSettimanale.settimana >= lun,
+                PresenzaSettimanale.settimana <= dom,
+            )
+            .scalar()
+        )
+    finally:
+        session.close()
+    return round(float(ore_task or 0) + float(ore_assenza or 0), 1)
+
+
+def settimane_selezionabili(dipendente_id):
+    """Le settimane che il dipendente può aprire in consuntivazione: la
+    corrente e la precedente. Nient'altro — non si compila in anticipo, e il
+    recupero all'indietro si ferma a una settimana.
+
+    Ogni voce: {lunedi (ISO), etichetta, compilabile}.
+
+    `compilabile` sulla settimana corrente è sempre True. Sulla precedente è
+    True solo se INCOMPLETA: il recupero serve a chi non ha compilato, non a
+    rivedere ciò che è chiuso. Criterio di completezza: ore dichiarate >= ore
+    contrattuali del dipendente.
+
+    Nota: la voce resta nella lista anche quando `compilabile` è False — il
+    frontend la mostra disabilitata («già compilata») invece di farla sparire,
+    così l'utente capisce perché non può tornarci.
+    """
+    corrente = _lunedi()
+    precedente = corrente - timedelta(days=7)
+
+    ore_sett = int(get_dipendente(dipendente_id).get("ore_sett") or 0)
+    dichiarate_prec = ore_dichiarate_settimana(dipendente_id, precedente)
+
+    return [
+        {
+            "lunedi": corrente.isoformat(),
+            "etichetta": "Questa settimana",
+            "compilabile": True,
+        },
+        {
+            "lunedi": precedente.isoformat(),
+            "etichetta": f"Settimana scorsa ({_etichetta_intervallo(precedente)})",
+            "compilabile": dichiarate_prec < ore_sett,
+        },
+    ]
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -837,11 +1022,22 @@ def salva_consuntivo(dipendente_id, settimana, ore_per_task, stati_per_task,
     Salva il consuntivo settimanale completo di un dipendente.
     ore_per_task: dict {task_id: ore}
     stati_per_task: dict {task_id: stato}
+    spese_lista: None = non pervenuto, non toccare le spese esistenti.
+                 [] o lista = stato COMPLETO della settimana, sostituisce.
+
+    La `settimana` viene normalizzata al lunedì con `_lunedi` — stessa regola
+    della lettura, e qui è la riga che ripara il bug dei duplicati. Prima
+    arrivava `datetime.now()` dalla route, cioè il giorno della compilazione:
+    la UNIQUE (task_id, dipendente_id, settimana) non riconosceva il doppione,
+    e ricompilare martedì dopo aver compilato lunedì inseriva una riga NUOVA
+    invece di aggiornare quella esistente. In lettura le due righe cadono
+    entrambe nel range lun..dom e si sommano: 6h corrette in 8h diventavano
+    14h. Stesso meccanismo su PresenzaSettimanale (UNIQUE dip+settimana).
     """
     from models import PresenzaSettimanale, Spesa
 
     session = get_session()
-    settimana_date = settimana.date() if isinstance(settimana, datetime) else settimana
+    settimana_date = _lunedi(settimana)
 
     # 1) Salva/aggiorna ore per ogni task
     for task_id, ore in ore_per_task.items():
@@ -895,8 +1091,22 @@ def salva_consuntivo(dipendente_id, settimana, ore_per_task, stati_per_task,
             nota_assenza=nota_assenza if ore_assenza > 0 else None,
         ))
 
-    # 3) Salva spese
-    if spese_lista:
+    # 3) Salva spese — SOSTITUZIONE, non accodamento.
+    # Il form manda lo stato completo delle spese della settimana, non righe
+    # incrementali: non c'è modo di dire «questa riga è nuova» o «questa l'ho
+    # cancellata». Prima erano `session.add()` incondizionati senza lookup, e
+    # Spesa non ha UNIQUE a proteggere: ogni ri-salvataggio re-inseriva tutte
+    # le spese del form, moltiplicando i rimborsi a ogni click su «Invia».
+    # Cancella-e-riscrivi è l'unica semantica coerente con un form di stato.
+    # `spese_lista is None` = campo non pervenuto (chiamante che non gestisce
+    # le spese) → non toccare nulla. `[]` = «questa settimana nessuna spesa»
+    # → svuota davvero.
+    if spese_lista is not None:
+        session.query(Spesa).filter(
+            Spesa.dipendente_id == dipendente_id,
+            Spesa.settimana == settimana_date,
+        ).delete(synchronize_session=False)
+
         for spesa in spese_lista:
             if spesa.get("importo", 0) > 0:
                 session.add(Spesa(

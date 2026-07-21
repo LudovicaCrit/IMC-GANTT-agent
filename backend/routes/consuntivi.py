@@ -38,10 +38,21 @@ DETTAGLIO ENDPOINT
      stessa così, anche se ha accesso a /settimana per la vista aziendale).
    - 400 se l'utente non è collegato a un dipendente
      (current_user.dipendente_id is None).
-   - Layout A': parte dai TASK attivi del dipendente (non dai Consuntivi),
+   - Layout A': parte dai TASK del dipendente (non dai Consuntivi),
      via data.task_settimana_dipendente (riusabile dalla Home-utente).
-   - Restituisce: nome, profilo, ore_contrattuali, totale_ore,
-     task_settimana, compilato.
+   - Query param opzionale `settimana` (ISO YYYY-MM-DD, qualsiasi giorno
+     della settimana → normalizzato al lunedì da data.lunedi_settimana).
+     Assente = settimana corrente. Ammesse solo corrente e precedente:
+     qualsiasi altra → 400. Serve al recupero di chi non ha compilato in
+     tempo; non si compila in anticipo né si riscrive un mese fa.
+   - Restituisce: nome, profilo, ore_contrattuali, settimana (lunedì ISO),
+     settimane_disponibili, totale_ore, task_settimana, compilato.
+   - `settimane_disponibili`: le due settimane apribili, ciascuna con
+     lunedi/etichetta/compilabile. CONSULTABILE ≠ COMPILABILE: la scorsa si
+     apre sempre in lettura, ma `compilabile` è False se già completa (ore
+     dichiarate >= ore contrattuali) — il recupero serve a chi non ha
+     compilato, non a rivedere ciò che è chiuso. La guardia in scrittura sta
+     su POST /salva, non qui.
 
 3. POST /api/consuntivi/salva
    - Pattern Y (self-or-manager): l'user può salvare SOLO i propri
@@ -95,14 +106,20 @@ Letture migrate da DataFrame in cache a Postgres diretto il 21 maggio 2026
 """
 
 from datetime import datetime, timedelta
-from fastapi import APIRouter, Depends, HTTPException
+from typing import Optional
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import func
 from sqlalchemy.orm import joinedload
 
 from deps import get_current_user, require_manager
 from models import Utente, Dipendente, Task, Consuntivo, get_session
-from data import get_dipendente, task_settimana_dipendente
+from data import (
+    get_dipendente,
+    task_settimana_dipendente,
+    lunedi_settimana,
+    settimane_selezionabili,
+)
 
 
 # Import condizionale per scrittura
@@ -116,6 +133,9 @@ except ImportError:
 # ── DTO ──────────────────────────────────────────────────────────────────
 class SalvaConsuntivoRequest(BaseModel):
     dipendente_id: str
+    # Lunedì della settimana in ISO. Assente = settimana corrente. Qualsiasi
+    # giorno è accettato e normalizzato al lunedì (data.lunedi_settimana).
+    settimana: Optional[str] = None
     ore_per_task: dict[str, float] = {}
     stati_per_task: dict[str, str] = {}
     giorni_sede: int = 3
@@ -123,7 +143,11 @@ class SalvaConsuntivoRequest(BaseModel):
     ore_assenza: float = 0
     tipo_assenza: str = ""
     nota_assenza: str = ""
-    spese: list[dict] = []
+    # None = il chiamante non gestisce le spese, non toccarle. [] = «questa
+    # settimana nessuna spesa», svuota. Il default è None e NON [] proprio
+    # per tenere distinti i due casi: con [] come default, un client che
+    # omette il campo cancellerebbe le spese senza volerlo.
+    spese: Optional[list[dict]] = None
 
 
 # ── Router ───────────────────────────────────────────────────────────────
@@ -225,15 +249,36 @@ def consuntivi_settimana_corrente(_: Utente = Depends(require_manager)):
 
 
 @router.get("/me")
-def consuntivi_settimana_me(current_user: Utente = Depends(get_current_user)):
-    """Vista PERSONALE (Layout A'): «ecco cosa era previsto per te questa
+def consuntivi_settimana_me(
+    settimana: Optional[str] = Query(
+        None,
+        description="Lunedì della settimana in ISO (YYYY-MM-DD). Assente = "
+                    "settimana corrente. Ammesse solo la corrente e la "
+                    "precedente; qualsiasi giorno della settimana è accettato "
+                    "e viene normalizzato al lunedì.",
+    ),
+    current_user: Utente = Depends(get_current_user),
+):
+    """Vista PERSONALE (Layout A'): «ecco cosa era previsto per te in questa
     settimana». Self intrinseco: il dipendente è l'utente loggato, niente
-    parametri.
+    parametro `dipendente_id`.
 
-    Parte dai TASK attivi del dipendente (non dai Consuntivi): la lista
+    Parte dai TASK del dipendente (non dai Consuntivi): la lista
     `task_settimana` contiene sempre i task da compilare, con le ore già
     dichiarate attaccate (0 se non ancora compilato). La logica riusabile
-    sta in data.task_settimana_dipendente (la userà anche la Home-utente)."""
+    sta in data.task_settimana_dipendente (la userà anche la Home-utente).
+
+    Il param `settimana` serve al recupero all'indietro: chi non ha compilato
+    entro domenica deve poter tornare sulla settimana scorsa. Si ferma lì —
+    non si compila in anticipo e non si riscrive un mese fa. La
+    normalizzazione al lunedì passa da data.lunedi_settimana (la stessa regola
+    della scrittura: mai ricalcolarla qui).
+
+    Attenzione alla differenza fra CONSULTABILE e COMPILABILE: la settimana
+    scorsa è sempre consultabile (la si apre in sola lettura), ma è
+    `compilabile` solo se incompleta. La guardia sulla scrittura sta su
+    POST /salva, non qui.
+    """
     if not current_user.dipendente_id:
         raise HTTPException(400, "Utente non collegato a un dipendente")
 
@@ -242,7 +287,29 @@ def consuntivi_settimana_me(current_user: Utente = Depends(get_current_user)):
     except (IndexError, KeyError):
         raise HTTPException(404, "Dipendente non trovato")
 
-    task_settimana = task_settimana_dipendente(current_user.dipendente_id)
+    disponibili = settimane_selezionabili(current_user.dipendente_id)
+
+    if settimana is None:
+        lun = lunedi_settimana()
+    else:
+        try:
+            lun = lunedi_settimana(settimana)
+        except ValueError:
+            raise HTTPException(
+                400,
+                f"Settimana '{settimana}' non è una data ISO valida "
+                f"(atteso YYYY-MM-DD)",
+            )
+        ammesse = [s["lunedi"] for s in disponibili]
+        if lun.isoformat() not in ammesse:
+            raise HTTPException(
+                400,
+                f"Settimana '{lun.isoformat()}' non consultabile: sono "
+                f"ammesse solo la corrente e la precedente "
+                f"({', '.join(ammesse)})",
+            )
+
+    task_settimana = task_settimana_dipendente(current_user.dipendente_id, lun)
     totale = sum(t["ore_consumate"] for t in task_settimana)
 
     return {
@@ -250,8 +317,20 @@ def consuntivi_settimana_me(current_user: Utente = Depends(get_current_user)):
         "nome": dip["nome"],
         "profilo": dip["profilo"],
         "ore_contrattuali": int(dip["ore_sett"]),
+        "settimana": lun.isoformat(),
+        "settimane_disponibili": disponibili,
         "totale_ore": round(totale, 1),
         "task_settimana": task_settimana,
+        # ⚠️ DIVERGENZA NOTA — `compilato` e `compilabile` (dentro
+        # settimane_disponibili) misurano due cose diverse e possono
+        # contraddirsi:
+        #   compilato   = totale_ore > 0, sui soli task VISIBILI questa
+        #                 settimana. Vero appena si dichiara un'ora.
+        #   compilabile = ore dichiarate + assenze < ore contrattuali, su
+        #                 TUTTI i consuntivi del dip. Guarda la copertura.
+        # Una settimana con 4h su 40 è `compilato: True` e `compilabile:
+        # True` insieme. `compilato` è un contratto già consumato dal
+        # frontend: si allinea quando rifacciamo la pagina, non prima.
         "compilato": totale > 0,
     }
 
@@ -261,7 +340,17 @@ def salva_consuntivo_endpoint(
     req: SalvaConsuntivoRequest,
     current_user: Utente = Depends(get_current_user),
 ):
-    """Salva il consuntivo settimanale (Pattern Y: self-or-manager)."""
+    """Salva il consuntivo settimanale (Pattern Y: self-or-manager).
+
+    La settimana di destinazione arriva dal body (`settimana`, opzionale) e
+    viene normalizzata al lunedì da data.lunedi_settimana. Prima era
+    `datetime.now()`, cioè il giorno della compilazione: vedi la docstring di
+    salva_consuntivo per il meccanismo dei duplicati che ne seguiva.
+
+    La guardia sta QUI, non solo nel frontend: si scrive sulla settimana
+    corrente sempre, sulla precedente solo se ancora incompleta. Nascondere il
+    bottone non è una guardia — la POST resta raggiungibile.
+    """
     # User può salvare SOLO i propri consuntivi (anti-impersonation)
     if current_user.ruolo_app != "manager" and req.dipendente_id != current_user.dipendente_id:
         raise HTTPException(403, "Puoi salvare solo i tuoi consuntivi")
@@ -271,10 +360,41 @@ def salva_consuntivo_endpoint(
     except (IndexError, KeyError):
         raise HTTPException(404, "Dipendente non trovato")
 
+    # Settimana bersaglio: sempre quella del DIPENDENTE consuntivato, non di
+    # chi salva — un manager che compila per altri deve ricadere sulle
+    # settimane aperte per quel dipendente.
+    if req.settimana is None:
+        lun = lunedi_settimana()
+    else:
+        try:
+            lun = lunedi_settimana(req.settimana)
+        except ValueError:
+            raise HTTPException(
+                400,
+                f"Settimana '{req.settimana}' non è una data ISO valida "
+                f"(atteso YYYY-MM-DD)",
+            )
+
+    disponibili = {s["lunedi"]: s for s in settimane_selezionabili(req.dipendente_id)}
+    scelta = disponibili.get(lun.isoformat())
+    if scelta is None:
+        raise HTTPException(
+            400,
+            f"Settimana '{lun.isoformat()}' non compilabile: sono ammesse solo "
+            f"la corrente e la precedente ({', '.join(disponibili)})",
+        )
+    if not scelta["compilabile"]:
+        raise HTTPException(
+            400,
+            f"La {scelta['etichetta'].lower()} risulta già compilata: il "
+            f"recupero è previsto per chi non ha compilato, non per rivedere "
+            f"una settimana chiusa",
+        )
+
     if PERSISTENT_MODE:
         ok = salva_consuntivo(
             dipendente_id=req.dipendente_id,
-            settimana=datetime.now(),
+            settimana=lun,
             ore_per_task=req.ore_per_task,
             stati_per_task=req.stati_per_task,
             giorni_sede=req.giorni_sede,
@@ -282,11 +402,15 @@ def salva_consuntivo_endpoint(
             ore_assenza=req.ore_assenza,
             tipo_assenza=req.tipo_assenza,
             nota_assenza=req.nota_assenza,
-            spese_lista=req.spese if req.spese else None,
+            # req.spese passa così com'è: None e [] hanno significati diversi
+            # (vedi DTO). Il vecchio `req.spese if req.spese else None`
+            # collassava [] su None, rendendo impossibile svuotare le spese.
+            spese_lista=req.spese,
         )
-        return {"salvato": ok, "dipendente": dip["nome"]}
+        return {"salvato": ok, "dipendente": dip["nome"], "settimana": lun.isoformat()}
     return {
         "salvato": True,
         "dipendente": dip["nome"],
+        "settimana": lun.isoformat(),
         "nota": "Dati non persistenti (db non attivo)",
     }
