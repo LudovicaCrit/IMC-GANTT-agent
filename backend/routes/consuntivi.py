@@ -47,6 +47,10 @@ DETTAGLIO ENDPOINT
      tempo; non si compila in anticipo né si riscrive un mese fa.
    - Restituisce: nome, profilo, ore_contrattuali, settimana (lunedì ISO),
      settimane_disponibili, totale_ore, task_settimana, compilato.
+   - Ogni voce di `task_settimana` porta `in_ritardo` (bool): DERIVATO
+     (finestra del task chiusa + task non chiuso), non dichiarato. Il ritardo
+     non è uno stato che il dipendente sceglie — non è nella tendina: è una
+     segnalazione che il sistema calcola e il frontend mostra accanto al task.
    - `settimane_disponibili`: le due settimane apribili, ciascuna con
      lunedi/etichetta/compilabile. CONSULTABILE ≠ COMPILABILE: la scorsa si
      apre sempre in lettura, ma `compilabile` è False se già completa (ore
@@ -58,8 +62,15 @@ DETTAGLIO ENDPOINT
    - Pattern Y (self-or-manager): l'user può salvare SOLO i propri
      consuntivi (controllo self via current_user.dipendente_id);
      il manager può salvare per chiunque.
-   - Body: dipendente_id, ore_per_task, stati_per_task, giorni sede/remoto,
-     ore_assenza, tipo_assenza, nota_assenza, spese.
+   - Body: dipendente_id, ore_per_task, stati_per_task, note_per_task,
+     giorni sede/remoto, ore_assenza, tipo_assenza, nota_assenza, spese.
+   - Lo stato dichiarato NON resta sul Consuntivo: `salva_consuntivo` lo
+     propaga su Task.stato passando da `modifica_task` (la stessa porta del
+     Cantiere). È ciò che rende osservabile un "Completato": senza, il task
+     ricompariva in /me la settimana dopo come se nulla fosse.
+   - 400 se lo stato non è dichiarabile dal dipendente (solo In corso,
+     Completato, Bloccato: vedi models.STATI_DICHIARABILI) o se un task è
+     dichiarato Bloccato senza nota. Validato nel DTO, prima del data layer.
    - 403 se user prova a salvare per un altro dipendente.
    - 404 se dipendente non esiste.
    - Persiste in db (PERSISTENT_MODE) o ritorna conferma simulata altrimenti.
@@ -108,12 +119,14 @@ Letture migrate da DataFrame in cache a Postgres diretto il 21 maggio 2026
 from datetime import datetime, timedelta
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 from sqlalchemy import func
 from sqlalchemy.orm import joinedload
 
 from deps import get_current_user, require_manager
-from models import Utente, Dipendente, Task, Consuntivo, get_session
+from models import (
+    Utente, Dipendente, Task, Consuntivo, get_session, STATI_DICHIARABILI,
+)
 from data import (
     get_dipendente,
     task_settimana_dipendente,
@@ -137,7 +150,14 @@ class SalvaConsuntivoRequest(BaseModel):
     # giorno è accettato e normalizzato al lunedì (data.lunedi_settimana).
     settimana: Optional[str] = None
     ore_per_task: dict[str, float] = {}
+    # Lo STATO è il campo primario della compilazione: il dipendente dichiara
+    # «a che punto sono», non «quanto ho lavorato». Ammessi solo i tre stati di
+    # models.STATI_DICHIARABILI — vedi il validatore sotto.
     stati_per_task: dict[str, str] = {}
+    # «A che punto sono», in parole. Obbligatoria su Bloccato, libera altrove.
+    # None = il chiamante non gestisce le note, non toccarle (stessa
+    # convenzione di `spese`); chiave presente e vuota = cancella la nota.
+    note_per_task: Optional[dict[str, str]] = None
     giorni_sede: int = 3
     giorni_remoto: int = 2
     ore_assenza: float = 0
@@ -148,6 +168,44 @@ class SalvaConsuntivoRequest(BaseModel):
     # per tenere distinti i due casi: con [] come default, un client che
     # omette il campo cancellerebbe le spese senza volerlo.
     spese: Optional[list[dict]] = None
+
+    @model_validator(mode="after")
+    def _valida_dichiarazione(self):
+        """Gli stati dichiarabili e la nota obbligatoria su Bloccato.
+
+        Sta QUI e non nella route perché è una proprietà del payload, non del
+        caso d'uso: chiunque costruisca un SalvaConsuntivoRequest ottiene la
+        stessa regola. E soprattutto sta PRIMA del data layer: senza, uno
+        stato fuori lista (es. "Annullato" da un client curioso) arriverebbe
+        fino al CHECK ck_task_stato_ammessi e tornerebbe come IntegrityError,
+        cioè un 500 opaco su quello che è un errore del chiamante.
+
+        `HTTPException` invece di `ValueError` di proposito: pydantic converte
+        i ValueError in errori di validazione (422 «Unprocessable Entity»),
+        mentre le altre eccezioni attraversano la validazione e finiscono
+        all'handler di FastAPI. Qui vogliamo un 400 con un messaggio che dica
+        al dipendente cosa correggere, non un dump di validazione.
+        """
+        for task_id, stato in self.stati_per_task.items():
+            if stato not in STATI_DICHIARABILI:
+                raise HTTPException(
+                    400,
+                    f"Stato '{stato}' non dichiarabile sul task {task_id}: "
+                    f"il dipendente può dichiarare solo "
+                    f"{', '.join(STATI_DICHIARABILI)}. Gli altri stati "
+                    f"(Da iniziare, Sospeso, Annullato) sono decisioni di "
+                    f"pianificazione e si impostano dal Cantiere.",
+                )
+            if stato == "Bloccato" and not (self.note_per_task or {}).get(task_id, "").strip():
+                # Un blocco senza spiegazione non è azionabile: il PM legge
+                # «fermo» e non sa cosa sbloccare. È l'unico caso in cui la
+                # nota è obbligatoria — altrove è un di più, non un pedaggio.
+                raise HTTPException(
+                    400,
+                    f"Il task {task_id} è dichiarato Bloccato: serve una nota "
+                    f"che spieghi cosa lo blocca (note_per_task['{task_id}']).",
+                )
+        return self
 
 
 # ── Router ───────────────────────────────────────────────────────────────
@@ -397,6 +455,7 @@ def salva_consuntivo_endpoint(
             settimana=lun,
             ore_per_task=req.ore_per_task,
             stati_per_task=req.stati_per_task,
+            note_per_task=req.note_per_task,
             giorni_sede=req.giorni_sede,
             giorni_remoto=req.giorni_remoto,
             ore_assenza=req.ore_assenza,

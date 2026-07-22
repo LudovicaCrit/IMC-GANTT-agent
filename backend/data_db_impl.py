@@ -406,7 +406,14 @@ def task_settimana_dipendente(dipendente_id, settimana=None):
         spalmate sulla durata del task; None se date NULL, 0 se la finestra non
         tocca la settimana), ore_consumate (dichiarate dal dip in settimana),
       ore_rimanenti (residuo del task = ore_pianificate − consumato TOTALE del
-        task su tutti i dipendenti/settimane, calcolato al volo), stato.
+        task su tutti i dipendenti/settimane, calcolato al volo), stato,
+      in_ritardo (bool).
+
+    `in_ritardo` NON è uno stato: è DERIVATO da data_fine e stato, ricalcolato
+    a ogni lettura. Non è nella lista di ciò che il dipendente può dichiarare e
+    non ha una colonna — il ritardo non si «dichiara», succede: la finestra del
+    task si è chiusa e il task non è chiuso. Il frontend lo rende come
+    segnalazione automatica accanto al task, non come opzione della tendina.
     """
     from sqlalchemy.orm import joinedload
     from sqlalchemy import func, or_, and_
@@ -480,6 +487,19 @@ def task_settimana_dipendente(dipendente_id, settimana=None):
         weeks = max(1, (t.data_fine - t.data_inizio).days / 7)
         return round((t.ore_pianificate or 0) / weeks, 1)
 
+    oggi = date.today()
+
+    def _in_ritardo(t):
+        """Finestra chiusa (data_fine passata) e task non chiuso.
+        Il confronto è con OGGI, non con la settimana visualizzata: un task
+        scaduto resta in ritardo anche riaprendo la settimana scorsa.
+        Date NULL → non si può dire che sia scaduto, quindi False.
+        'Sospeso' è escluso con 'Completato': è una decisione del PM, non un
+        ritardo del dipendente — segnalarlo accuserebbe del contrario."""
+        if t.data_fine is None:
+            return False
+        return t.data_fine < oggi and t.stato not in ("Completato", "Sospeso")
+
     out = []
     for t in tasks:
         prog = t.progetto
@@ -499,6 +519,7 @@ def task_settimana_dipendente(dipendente_id, settimana=None):
             # residuo del TASK (non del singolo/settimana): piano − consumato tot.
             "ore_rimanenti": round(pianificate - consumato_totale_task.get(t.id, 0.0), 1),
             "stato": t.stato,
+            "in_ritardo": _in_ritardo(t),
         })
     return out
 
@@ -1014,16 +1035,45 @@ def aggiungi_segnalazione(tipo, priorita, dipendente_id, dettaglio):
 # CONSUNTIVI — SALVATAGGIO
 # ══════════════════════════════════════════════════════════════════════
 
+def _nota_task(testo):
+    """Normalizza la nota «a che punto sono»: stringa vuota o soli spazi → None.
+
+    In DB la nota assente è NULL, non "": così `nota IS NOT NULL` significa
+    davvero «il dipendente ha scritto qualcosa» e non serve ricordarsi di
+    testare anche la stringa vuota ogni volta che la si legge.
+    """
+    testo = (testo or "").strip()
+    return testo or None
+
+
 def salva_consuntivo(dipendente_id, settimana, ore_per_task, stati_per_task,
                      giorni_sede=0, giorni_remoto=0,
                      ore_assenza=0, tipo_assenza="", nota_assenza="",
-                     spese_lista=None):
+                     spese_lista=None, note_per_task=None):
     """
     Salva il consuntivo settimanale completo di un dipendente.
     ore_per_task: dict {task_id: ore}
-    stati_per_task: dict {task_id: stato}
+    stati_per_task: dict {task_id: stato} — SOLO stati dichiarabili
+                 (models.STATI_DICHIARABILI). La validazione sta a monte, nel
+                 DTO della route: qui si assume già filtrato.
+    note_per_task: dict {task_id: «a che punto sono»} → Consuntivo.nota.
+                 None = non pervenuto, non toccare le note esistenti (stessa
+                 convenzione di spese_lista). Chiave presente con stringa
+                 vuota = cancella la nota; chiave assente = lascia com'è.
     spese_lista: None = non pervenuto, non toccare le spese esistenti.
                  [] o lista = stato COMPLETO della settimana, sostituisce.
+
+    LO STATO È IL CAMPO PRIMARIO. Le ore sono secondarie: un task può arrivare
+    con 0 ore e stato "Completato" ed è una compilazione valida. Per questo lo
+    stato dichiarato NON si ferma sul Consuntivo — arriva su Task.stato, che è
+    ciò che il PM legge nel Cantiere e ciò che decide se il task ricompare in
+    /me la settimana dopo. Senza propagazione, marcare Completato non aveva
+    alcun effetto osservabile.
+
+    La propagazione passa da `modifica_task` — la stessa funzione che usa il
+    Cantiere — e non da una `setattr` diretta: un solo punto di scrittura su
+    Task.stato, così quando ci si appenderà logica (audit, cascata,
+    notifiche) varrà per entrambe le porte d'ingresso.
 
     La `settimana` viene normalizzata al lunedì con `_lunedi` — stessa regola
     della lettura, e qui è la riga che ripara il bug dei duplicati. Prima
@@ -1039,10 +1089,18 @@ def salva_consuntivo(dipendente_id, settimana, ore_per_task, stati_per_task,
     session = get_session()
     settimana_date = _lunedi(settimana)
 
-    # 1) Salva/aggiorna ore per ogni task
+    # 1) Salva/aggiorna ore, stato e nota per ogni task
+    stati_dichiarati = {}   # task_id → stato, da propagare dopo il commit
     for task_id, ore in ore_per_task.items():
-        if ore == 0 and not stati_per_task.get(task_id):
+        stato = stati_per_task.get(task_id)
+        if ore == 0 and not stato:
             continue  # salta task senza ore né stato
+
+        # motivo_fermo è un flag, non un archivio: va RIALLINEATO a ogni
+        # salvataggio, non solo popolato. Prima il ramo `else` non esisteva e
+        # un task sbloccato la settimana dopo restava marcato «bloccato» per
+        # sempre. Il perché del blocco lo scrive il dipendente in `nota`.
+        motivo = "Segnalato come bloccato dal dipendente" if stato == "Bloccato" else None
 
         existing = session.query(Consuntivo).filter(
             Consuntivo.task_id == task_id,
@@ -1054,9 +1112,9 @@ def salva_consuntivo(dipendente_id, settimana, ore_per_task, stati_per_task,
             existing.ore_dichiarate = ore
             existing.compilato = True
             existing.data_compilazione = datetime.utcnow()
-            stato = stati_per_task.get(task_id, "In corso")
-            if stato == "Bloccato":
-                existing.motivo_fermo = "Segnalato come bloccato dal dipendente"
+            existing.motivo_fermo = motivo
+            if note_per_task is not None and task_id in note_per_task:
+                existing.nota = _nota_task(note_per_task[task_id])
         else:
             session.add(Consuntivo(
                 task_id=task_id,
@@ -1065,8 +1123,12 @@ def salva_consuntivo(dipendente_id, settimana, ore_per_task, stati_per_task,
                 ore_dichiarate=ore,
                 compilato=True,
                 data_compilazione=datetime.utcnow(),
-                motivo_fermo="Segnalato come bloccato" if stati_per_task.get(task_id) == "Bloccato" else None,
+                motivo_fermo=motivo,
+                nota=_nota_task((note_per_task or {}).get(task_id)),
             ))
+
+        if stato:
+            stati_dichiarati[task_id] = stato
 
     # 2) Salva presenze settimanali (smart working + assenze)
     existing_pres = session.query(PresenzaSettimanale).filter(
@@ -1117,8 +1179,34 @@ def salva_consuntivo(dipendente_id, settimana, ore_per_task, stati_per_task,
                     categoria=spesa.get("categoria", ""),
                 ))
 
+    # 4) Legge lo stato ATTUALE dei task dichiarati (serve al passo 5, ma la
+    # sessione è ancora aperta: una query in più invece di una sessione in più).
+    stati_correnti = {}
+    if stati_dichiarati:
+        stati_correnti = dict(
+            session.query(Task.id, Task.stato)
+            .filter(Task.id.in_(list(stati_dichiarati)))
+            .all()
+        )
+
     session.commit()
     session.close()
+
+    # 5) PROPAGAZIONE: lo stato dichiarato arriva su Task.stato.
+    # Fuori dalla sessione del consuntivo e DOPO il commit, di proposito:
+    # `modifica_task` apre la propria sessione (è la porta del Cantiere) e le
+    # ore restano salvate anche se un task nel frattempo è sparito.
+    for task_id, stato in stati_dichiarati.items():
+        corrente = stati_correnti.get(task_id)
+        if corrente is None or corrente == stato:
+            continue  # task inesistente, o già in quello stato: niente da fare
+        if corrente in ("Sospeso", "Annullato"):
+            # Decisioni di pianificazione del PM. Il form del dipendente non le
+            # mostra e non può rappresentarle: se propagassimo, un "In corso"
+            # di default sovrascriverebbe in silenzio una sospensione decisa
+            # altrove. Chi dichiara non può disfare ciò che non vede.
+            continue
+        modifica_task(task_id, stato=stato)
 
     return True
 

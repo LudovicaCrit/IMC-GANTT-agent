@@ -76,6 +76,18 @@ STATI_TASK = (
     "Annullato",
 )
 
+# Sottoinsieme DICHIARABILE DAL DIPENDENTE in consuntivazione. Il dipendente
+# risponde a «a che punto sono»: sta lavorando, ha finito, è fermo. Gli altri
+# tre stati sono decisioni di pianificazione del PM e restano al Cantiere:
+# "Da iniziare" è il default di un task appena creato (non lo si "dichiara"),
+# "Sospeso" e "Annullato" arrivano dalla cascata Fase→Task.
+# È il vincolo che le API di consuntivazione validano PRIMA di scrivere, così
+# il CHECK ck_task_stato_ammessi non viene mai raggiunto con un valore fuori
+# lista (l'IntegrityError sarebbe un 500 opaco invece di un 400 parlante).
+# Vale per il task oggi e varrà identico per il sottotask quando la
+# granularità scenderà: è una proprietà della DICHIARAZIONE, non dell'entità.
+STATI_DICHIARABILI = ("In corso", "Completato", "Bloccato")
+
 # Step 3.1 (25/05/2026): tipi di dipendenza tra task ammessi.
 # Sostituiscono la vecchia colonna `Task.predecessore` (stringa singola, tipo
 # non registrato — implicitamente FS) con la tabella-grafo `dipendenza_task`.
