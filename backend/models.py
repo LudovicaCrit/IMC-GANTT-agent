@@ -526,6 +526,15 @@ class Consuntivo(Base):
     motivo_fermo = Column(String(120), nullable=True)
     sottotask_nota = Column(Text, nullable=True)
     nota = Column(Text, nullable=True)
+    # Lo stato che il DIPENDENTE ha dichiarato in questa settimana su questo
+    # task. Valori: il sottoinsieme STATI_DICHIARABILI (vincolo nel DTO della
+    # route, non un CHECK: la colonna dovrà accogliere anche le dichiarazioni
+    # sui sottotask). NULL = «non si è espresso sullo stato» — righe scritte
+    # prima che la colonna esistesse, o compilazioni di sole ore / sola nota.
+    # Non è un doppione di Task.stato: quello è lo stato del task OGGI, a
+    # sovrascrittura e senza autore; questo è cosa disse quel dipendente in
+    # quella settimana, e resta. Vedi migration e1f2a3b4c5d6.
+    stato_dichiarato = Column(String(20), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     __table_args__ = (

@@ -132,6 +132,7 @@ from data import (
     task_settimana_dipendente,
     lunedi_settimana,
     settimane_selezionabili,
+    note_consuntivi_settimana,
 )
 
 
@@ -141,6 +142,36 @@ try:
     PERSISTENT_MODE = True
 except ImportError:
     PERSISTENT_MODE = False
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# DOVE VA UNA VALIDAZIONE — nota di metodo
+# ══════════════════════════════════════════════════════════════════════════
+# Le validazioni di POST /salva stanno in DUE punti diversi, e non è un caso
+# né un'incoerenza da "sistemare" accorpandole. Il criterio è uno solo:
+#
+#   Il DTO vede SOLO il body. Qualunque regola che dipenda da cosa c'è già in
+#   database non può stare lì, e va dove lo stato attuale è conoscibile.
+#
+# 1) Nel DTO (`SalvaConsuntivoRequest._valida_stati_dichiarabili`) le regole
+#    che si decidono guardando il solo payload: «Bloccato non è uno stato che
+#    il dipendente può dichiarare?» è vero o falso a prescindere dal DB.
+#    Vantaggio: valgono per chiunque costruisca il DTO, e scattano prima che
+#    si apra una sessione.
+#
+# 2) Nella route (`_valida_blocchi_motivati`) le regole che dipendono dallo
+#    stato persistito. «Bloccato richiede una nota» sembra una regola sul
+#    body, e all'inizio era scritta nel DTO come `not note_per_task.get(id)`:
+#    sbagliata, perché il form manda solo le note MODIFICATE. Ridichiarare
+#    Bloccato senza ritoccare una nota già salvata prendeva 400 — un
+#    salvataggio legittimo rifiutato, per una regola messa dove non poteva
+#    vedere la nota che esisteva.
+#
+# La morale per chi passa di qui: prima di aggiungere una regola al DTO,
+# chiedersi «per rispondere mi basta il body?». Se la risposta è no — anche
+# solo "dipende da cosa c'era prima" — la regola va in (2), non in (1).
+# Le due strade convergono comunque su un 400 con messaggio parlante: la
+# differenza è dove si può sapere la verità, non come la si comunica.
 
 
 # ── DTO ──────────────────────────────────────────────────────────────────
@@ -158,11 +189,18 @@ class SalvaConsuntivoRequest(BaseModel):
     # None = il chiamante non gestisce le note, non toccarle (stessa
     # convenzione di `spese`); chiave presente e vuota = cancella la nota.
     note_per_task: Optional[dict[str, str]] = None
-    giorni_sede: int = 3
-    giorni_remoto: int = 2
-    ore_assenza: float = 0
-    tipo_assenza: str = ""
-    nota_assenza: str = ""
+    # Presenze: None = «non gestisco questo campo, non toccarlo» (stessa
+    # convenzione di `spese` e `note_per_task`). I default 3/2/0 di prima non
+    # erano dati dichiarati ma un'ipotesi di comodo, e finivano scritti in DB a
+    # ogni salvataggio: un client che manda solo uno stato riportava a 3 e 2 i
+    # giorni sede/remoto che il dipendente aveva impostato altrove. Un campo
+    # assente ora non scrive niente; se arrivano solo alcuni campi, gli altri
+    # restano com'erano.
+    giorni_sede: Optional[int] = None
+    giorni_remoto: Optional[int] = None
+    ore_assenza: Optional[float] = None
+    tipo_assenza: Optional[str] = None
+    nota_assenza: Optional[str] = None
     # None = il chiamante non gestisce le spese, non toccarle. [] = «questa
     # settimana nessuna spesa», svuota. Il default è None e NON [] proprio
     # per tenere distinti i due casi: con [] come default, un client che
@@ -170,15 +208,21 @@ class SalvaConsuntivoRequest(BaseModel):
     spese: Optional[list[dict]] = None
 
     @model_validator(mode="after")
-    def _valida_dichiarazione(self):
-        """Gli stati dichiarabili e la nota obbligatoria su Bloccato.
+    def _valida_stati_dichiarabili(self):
+        """Gli stati che il dipendente può dichiarare.
 
         Sta QUI e non nella route perché è una proprietà del payload, non del
         caso d'uso: chiunque costruisca un SalvaConsuntivoRequest ottiene la
-        stessa regola. E soprattutto sta PRIMA del data layer: senza, uno
-        stato fuori lista (es. "Annullato" da un client curioso) arriverebbe
-        fino al CHECK ck_task_stato_ammessi e tornerebbe come IntegrityError,
-        cioè un 500 opaco su quello che è un errore del chiamante.
+        stessa regola, e non serve conoscere il DB per applicarla. Soprattutto
+        sta PRIMA del data layer: senza, uno stato fuori lista (es. "Annullato"
+        da un client curioso) arriverebbe fino al CHECK ck_task_stato_ammessi e
+        tornerebbe come IntegrityError, cioè un 500 opaco su quello che è un
+        errore del chiamante.
+
+        La regola «Bloccato richiede una nota» NON sta qui: dipende da cosa c'è
+        già in DB, che il DTO non può sapere. Vive nella route — vedi
+        `_valida_blocchi_motivati` e la nota di metodo «DOVE VA UNA
+        VALIDAZIONE» sopra la definizione di questa classe.
 
         `HTTPException` invece di `ValueError` di proposito: pydantic converte
         i ValueError in errori di validazione (422 «Unprocessable Entity»),
@@ -196,16 +240,56 @@ class SalvaConsuntivoRequest(BaseModel):
                     f"(Da iniziare, Sospeso, Annullato) sono decisioni di "
                     f"pianificazione e si impostano dal Cantiere.",
                 )
-            if stato == "Bloccato" and not (self.note_per_task or {}).get(task_id, "").strip():
-                # Un blocco senza spiegazione non è azionabile: il PM legge
-                # «fermo» e non sa cosa sbloccare. È l'unico caso in cui la
-                # nota è obbligatoria — altrove è un di più, non un pedaggio.
-                raise HTTPException(
-                    400,
-                    f"Il task {task_id} è dichiarato Bloccato: serve una nota "
-                    f"che spieghi cosa lo blocca (note_per_task['{task_id}']).",
-                )
         return self
+
+
+def _valida_blocchi_motivati(req: "SalvaConsuntivoRequest", settimana):
+    """Un task dichiarato Bloccato deve avere una nota che spieghi il blocco.
+
+    Il vincolo è che la nota ESISTA, non che sia arrivata in questa richiesta.
+    Il form manda solo le note MODIFICATE: ridichiarare Bloccato la settimana
+    dopo senza ritoccare il testo è il caso normale, e pretendere il rinvio
+    significava rifiutare salvataggi legittimi di chi una nota ce l'aveva già.
+    Da qui il controllo in due tempi — prima la richiesta, poi il DB — e da qui
+    il fatto che viva nella route e non nel DTO, che vede solo il body: il
+    perché per esteso sta nella nota di metodo «DOVE VA UNA VALIDAZIONE», sopra
+    SalvaConsuntivoRequest. Se ti viene voglia di riportare questa regola nel
+    DTO «per tenere le validazioni insieme», leggila prima: è già stata lì, e
+    rifiutava salvataggi legittimi.
+
+    Una stringa vuota in `note_per_task` NON è «campo assente»: è una
+    cancellazione esplicita (la stessa convenzione con cui il data layer azzera
+    la nota). Cancellare la spiegazione di un blocco lascia il PM davanti a un
+    «fermo» senza motivo, quindi si rifiuta anche se in DB una nota c'era.
+
+    La query sul DB parte solo se serve davvero: un salvataggio senza task
+    bloccati, o con le note tutte in arrivo, non la esegue.
+    """
+    da_motivare = []
+    note_esistenti = None
+
+    for task_id, stato in req.stati_per_task.items():
+        if stato != "Bloccato":
+            continue
+        if req.note_per_task is not None and task_id in req.note_per_task:
+            if (req.note_per_task[task_id] or "").strip():
+                continue          # nota in arrivo: basta questa
+            da_motivare.append(task_id)   # cancellazione esplicita: rifiuta
+            continue
+        if note_esistenti is None:
+            note_esistenti = note_consuntivi_settimana(req.dipendente_id, settimana)
+        if not note_esistenti.get(task_id):
+            da_motivare.append(task_id)
+
+    if da_motivare:
+        elenco = ", ".join(sorted(da_motivare))
+        raise HTTPException(
+            400,
+            f"Dichiarati Bloccati senza una nota che spieghi cosa li blocca: "
+            f"{elenco}. Scrivi il motivo in note_per_task (una nota già "
+            f"salvata in questa settimana va bene: non serve rimandarla, ma "
+            f"non si può svuotarla).",
+        )
 
 
 # ── Router ───────────────────────────────────────────────────────────────
@@ -448,6 +532,10 @@ def salva_consuntivo_endpoint(
             f"recupero è previsto per chi non ha compilato, non per rivedere "
             f"una settimana chiusa",
         )
+
+    # Dopo le guardie sulla settimana: la nota di un blocco si valuta sulla
+    # settimana bersaglio, che qui è ormai decisa.
+    _valida_blocchi_motivati(req, lun)
 
     if PERSISTENT_MODE:
         ok = salva_consuntivo(

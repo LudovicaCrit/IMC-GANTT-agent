@@ -408,7 +408,15 @@ def task_settimana_dipendente(dipendente_id, settimana=None):
       ore_rimanenti (residuo del task = ore_pianificate − consumato TOTALE del
         task su tutti i dipendenti/settimane, calcolato al volo), stato,
       in_ritardo (bool), nota (str|None: «a che punto sono», scritta dal dip in
-        QUELLA settimana — è il round-trip di note_per_task in scrittura).
+        QUELLA settimana — è il round-trip di note_per_task in scrittura),
+      dichiarato (bool: esiste una riga Consuntivo compilata di QUESTO dip su
+        QUESTO task in QUELLA settimana),
+      stato_dichiarato (str|None: lo stato che il dipendente ha dichiarato in
+        QUELLA settimana; None se non si è espresso).
+    `stato`, `dichiarato` e `stato_dichiarato` sono tre assi indipendenti: a che
+    punto è il task oggi, se il dipendente ha compilato, e cosa ha dichiarato.
+    Solo il terzo è attribuibile a lui — `stato` può essere stato scritto dal PM
+    in Cantiere e non dice né chi né quando.
 
     `in_ritardo` NON è uno stato: è DERIVATO da data_fine e stato, ricalcolato
     a ogni lettura. Non è nella lista di ciò che il dipendente può dichiarare e
@@ -446,7 +454,9 @@ def task_settimana_dipendente(dipendente_id, settimana=None):
         # task_id. (UNIQUE task+dip+settimana → di norma una riga per task;
         # sommiamo comunque per robustezza.)
         cons_rows = (
-            session.query(Consuntivo.task_id, Consuntivo.ore_dichiarate, Consuntivo.nota)
+            session.query(Consuntivo.task_id, Consuntivo.ore_dichiarate,
+                          Consuntivo.nota, Consuntivo.compilato,
+                          Consuntivo.stato_dichiarato)
             .filter(
                 Consuntivo.dipendente_id == dipendente_id,
                 Consuntivo.settimana >= lun,
@@ -471,8 +481,15 @@ def task_settimana_dipendente(dipendente_id, settimana=None):
 
     consumate_per_task = {}
     note_per_task = {}
-    for tid, ore, nota in cons_rows:
+    dichiarati = set()
+    stato_dichiarato_per_task = {}
+    for tid, ore, nota, compilato, stato_dich in cons_rows:
         consumate_per_task[tid] = consumate_per_task.get(tid, 0.0) + float(ore or 0)
+        if compilato:
+            dichiarati.add(tid)
+        # Come la nota: non si somma, e la prima valorizzata vince.
+        if stato_dich and not stato_dichiarato_per_task.get(tid):
+            stato_dichiarato_per_task[tid] = stato_dich
         # La nota NON si somma: è testo. Se per qualche ragione ci fossero due
         # righe nel range, vince la prima non vuota — meglio mostrare una nota
         # vecchia che perderla e costringere a riscriverla.
@@ -533,6 +550,20 @@ def task_settimana_dipendente(dipendente_id, settimana=None):
             # Bloccato la nota è obbligatoria in scrittura, quindi senza
             # rileggerla un ri-salvataggio verrebbe rifiutato con 400.
             "nota": note_per_task.get(t.id),
+            # Il dipendente ha dichiarato qualcosa su questo task IN QUESTA
+            # settimana? È un asse diverso da `stato`: `stato` è Task.stato,
+            # che esiste da quando il PM ha creato il task e vale "Da iniziare"
+            # o "In corso" anche se nessuno ha mai compilato nulla. Senza
+            # questo flag la pagina non può distinguere «non dichiarato» da
+            # «dichiarato In corso», e il salvataggio non lascia traccia
+            # visibile. Le righe del seed hanno compilato=True e risultano
+            # dichiarate: è corretto, sono consuntivi a tutti gli effetti.
+            "dichiarato": t.id in dichiarati,
+            # CHE COSA ha dichiarato il dipendente in questa settimana (None se
+            # non si è espresso). Terzo asse, distinto dagli altri due: `stato`
+            # è il task oggi, `dichiarato` è se ha compilato, questo è la sua
+            # dichiarazione. Solo questo può essere attribuito a lui.
+            "stato_dichiarato": stato_dichiarato_per_task.get(t.id),
         })
     return out
 
@@ -548,6 +579,42 @@ def lunedi_settimana(d=None):
     duplicazione che ha generato il bug dei duplicati.
     """
     return _lunedi(d)
+
+
+def note_consuntivi_settimana(dipendente_id, settimana=None):
+    """{task_id: nota} delle note NON VUOTE già scritte dal dipendente in quella
+    settimana. I task senza nota non compaiono nel dict.
+
+    Serve alla validazione «Bloccato richiede una nota», che deve guardare ciò
+    che ESISTE e non solo ciò che è arrivato nella richiesta: il form manda solo
+    le note MODIFICATE, quindi ridichiarare Bloccato senza ritoccare la nota è
+    il caso normale, non un errore. La lettura sta qui e non nella route perché
+    è una domanda sul DB, e le route non fanno SQL.
+
+    Query indicizzata su (dipendente_id, settimana), le stesse colonne del resto
+    del modulo; il range lun..dom è quello di /me e /settimana.
+    """
+    lun = _lunedi(settimana)
+    fine_sett = lun + timedelta(days=6)
+
+    session = get_session()
+    try:
+        rows = (
+            session.query(Consuntivo.task_id, Consuntivo.nota)
+            .filter(
+                Consuntivo.dipendente_id == dipendente_id,
+                Consuntivo.settimana >= lun,
+                Consuntivo.settimana <= fine_sett,
+                Consuntivo.nota.isnot(None),
+            )
+            .all()
+        )
+    finally:
+        session.close()
+
+    # Lo strip finale: in DB una nota vuota è NULL (vedi _nota_task), ma righe
+    # scritte da altri percorsi potrebbero portare spazi — «vuota» resta vuota.
+    return {tid: nota for tid, nota in rows if (nota or "").strip()}
 
 
 _MESI_ABBR = ["gen", "feb", "mar", "apr", "mag", "giu",
@@ -1060,12 +1127,20 @@ def _nota_task(testo):
 
 
 def salva_consuntivo(dipendente_id, settimana, ore_per_task, stati_per_task,
-                     giorni_sede=0, giorni_remoto=0,
-                     ore_assenza=0, tipo_assenza="", nota_assenza="",
+                     giorni_sede=None, giorni_remoto=None,
+                     ore_assenza=None, tipo_assenza=None, nota_assenza=None,
                      spese_lista=None, note_per_task=None):
     """
     Salva il consuntivo settimanale completo di un dipendente.
-    ore_per_task: dict {task_id: ore}
+
+    I task da scrivere sono l'UNIONE delle chiavi di ore_per_task,
+    stati_per_task e note_per_task: un task entra nel salvataggio se ha almeno
+    uno dei tre, non solo se ha le ore.
+
+    ore_per_task: dict {task_id: ore}. Chiave assente = ore non dichiarate,
+                 che NON è 0: sulla riga esistente `ore_dichiarate` resta com'è
+                 (dichiarare uno stato non azzera le ore già inserite), sulla
+                 riga nuova si parte da 0.
     stati_per_task: dict {task_id: stato} — SOLO stati dichiarabili
                  (models.STATI_DICHIARABILI). La validazione sta a monte, nel
                  DTO della route: qui si assume già filtrato.
@@ -1075,6 +1150,12 @@ def salva_consuntivo(dipendente_id, settimana, ore_per_task, stati_per_task,
                  vuota = cancella la nota; chiave assente = lascia com'è.
     spese_lista: None = non pervenuto, non toccare le spese esistenti.
                  [] o lista = stato COMPLETO della settimana, sostituisce.
+    giorni_sede, giorni_remoto, ore_assenza, tipo_assenza, nota_assenza:
+                 None = non pervenuto. Se lo sono TUTTI, PresenzaSettimanale
+                 non viene nemmeno interrogata; se lo sono solo alcuni, la riga
+                 esistente è aggiornata SUI SOLI campi pervenuti (caso misto:
+                 `ore_assenza` senza i giorni non deve riportare i giorni a
+                 zero).
 
     LO STATO È IL CAMPO PRIMARIO. Le ore sono secondarie: un task può arrivare
     con 0 ore e stato "Completato" ed è una compilazione valida. Per questo lo
@@ -1102,12 +1183,40 @@ def salva_consuntivo(dipendente_id, settimana, ore_per_task, stati_per_task,
     session = get_session()
     settimana_date = _lunedi(settimana)
 
-    # 1) Salva/aggiorna ore, stato e nota per ogni task
+    # 1) Salva/aggiorna ore, stato e nota per ogni task.
+    # Si itera sull'UNIONE delle chiavi dei tre dizionari, non su ore_per_task:
+    # le ore non sono più il campo che decide se un task è stato compilato. Il
+    # campo primario è lo stato — «a che punto sono», non «quanto ho lavorato»
+    # — e le ore sono facoltative. Ciclando su ore_per_task, una compilazione
+    # di soli stati (caso ormai normale) non entrava mai nel ciclo: la funzione
+    # tornava True senza aver scritto una riga. Residuo di quando le ore erano
+    # obbligatorie.
+    # dict.fromkeys e non set(): preserva l'ordine di arrivo, così le scritture
+    # restano deterministiche e i test riproducibili.
+    task_toccati = dict.fromkeys(
+        list(ore_per_task) + list(stati_per_task) + list(note_per_task or {})
+    )
     stati_dichiarati = {}   # task_id → stato, da propagare dopo il commit
-    for task_id, ore in ore_per_task.items():
+    for task_id in task_toccati:
+        # `ore is None` = ore non dichiarate: diverso da 0 («non ci ho
+        # lavorato»). Sulla riga esistente le ore non si toccano, sulla nuova
+        # si parte da 0.
+        ore = ore_per_task.get(task_id)
         stato = stati_per_task.get(task_id)
-        if ore == 0 and not stato:
-            continue  # salta task senza ore né stato
+        # La nota conta come pervenuta anche se è la stringa vuota: cancellare
+        # una nota è un ATTO del dipendente, non un non-evento, e va scritto.
+        nota_pervenuta = note_per_task is not None and task_id in note_per_task
+        # Salta solo i task che non portano NIENTE: né stato, né nota, né ore.
+        # `not ore` copre insieme None (ore non dichiarate) e 0 («non ci ho
+        # lavorato»): l'intenzione non dipende più dal fatto accidentale che
+        # `None == 0` sia False, che è ciò che teneva in piedi il caso
+        # «solo nota» — un `or 0` aggiunto a monte lo avrebbe rotto in
+        # silenzio, facendo sparire le note senza errori.
+        # La guardia serve ancora: il form manda a 0 anche i task su cui non
+        # si è lavorato, e senza di essa ogni salvataggio creerebbe una riga
+        # vuota per ciascuno.
+        if not stato and not nota_pervenuta and not ore:
+            continue
 
         # motivo_fermo è un flag, non un archivio: va RIALLINEATO a ogni
         # salvataggio, non solo popolato. Prima il ramo `else` non esisteva e
@@ -1122,10 +1231,18 @@ def salva_consuntivo(dipendente_id, settimana, ore_per_task, stati_per_task,
         ).first()
 
         if existing:
-            existing.ore_dichiarate = ore
+            if ore is not None:
+                existing.ore_dichiarate = ore
             existing.compilato = True
             existing.data_compilazione = datetime.utcnow()
             existing.motivo_fermo = motivo
+            # Lo stato dichiarato resta anche sulla riga della settimana, non
+            # solo su Task.stato: quest'ultimo è a sovrascrittura e non dice né
+            # chi né quando. `stato` assente = non pervenuto, la colonna non si
+            # tocca (stessa convenzione di note e presenze): un salvataggio di
+            # sole ore non cancella la dichiarazione fatta prima.
+            if stato:
+                existing.stato_dichiarato = stato
             if note_per_task is not None and task_id in note_per_task:
                 existing.nota = _nota_task(note_per_task[task_id])
         else:
@@ -1133,38 +1250,68 @@ def salva_consuntivo(dipendente_id, settimana, ore_per_task, stati_per_task,
                 task_id=task_id,
                 dipendente_id=dipendente_id,
                 settimana=settimana_date,
-                ore_dichiarate=ore,
+                ore_dichiarate=ore if ore is not None else 0,
                 compilato=True,
                 data_compilazione=datetime.utcnow(),
                 motivo_fermo=motivo,
                 nota=_nota_task((note_per_task or {}).get(task_id)),
+                # None se il task non è in stati_per_task: la riga nasce da
+                # sole ore o sola nota e nessuno si è espresso sullo stato.
+                stato_dichiarato=stato,
             ))
 
         if stato:
             stati_dichiarati[task_id] = stato
 
-    # 2) Salva presenze settimanali (smart working + assenze)
-    existing_pres = session.query(PresenzaSettimanale).filter(
-        PresenzaSettimanale.dipendente_id == dipendente_id,
-        PresenzaSettimanale.settimana == settimana_date,
-    ).first()
+    # 2) Presenze settimanali (smart working + assenze) — SOLO SE PERVENUTE.
+    # Ogni campo è aggiornato singolarmente e solo se non è None: il blocco non
+    # riscrive mai i campi che il chiamante non ha nominato. Stessa convenzione
+    # di `spese_lista` e `note_per_task`: None = «non gestisco questo campo».
+    # Prima erano parametri con default 0/0/0/""/"" scritti incondizionatamente,
+    # e i default sono nati quando il body del form portava sempre tutto. Con un
+    # client che manda solo uno stato (le presenze le ha compilate ieri, in
+    # un'altra schermata) quei default tornavano in DB come dati veri: 1 giorno
+    # in sede e 4 da remoto diventavano 3 e 2 al primo salvataggio di una nota.
+    # Un default non è un dato dichiarato — e sovrascriverlo in silenzio è
+    # peggio che non scriverlo.
+    presenze_pervenute = {
+        campo: valore
+        for campo, valore in (
+            ("giorni_sede", giorni_sede),
+            ("giorni_remoto", giorni_remoto),
+            ("ore_assenza", ore_assenza),
+            ("tipo_assenza", tipo_assenza),
+            ("nota_assenza", nota_assenza),
+        )
+        if valore is not None
+    }
 
-    if existing_pres:
-        existing_pres.giorni_sede = giorni_sede
-        existing_pres.giorni_remoto = giorni_remoto
-        existing_pres.ore_assenza = ore_assenza
-        existing_pres.tipo_assenza = tipo_assenza if ore_assenza > 0 else None
-        existing_pres.nota_assenza = nota_assenza if ore_assenza > 0 else None
-    else:
-        session.add(PresenzaSettimanale(
-            dipendente_id=dipendente_id,
-            settimana=settimana_date,
-            giorni_sede=giorni_sede,
-            giorni_remoto=giorni_remoto,
-            ore_assenza=ore_assenza,
-            tipo_assenza=tipo_assenza if ore_assenza > 0 else None,
-            nota_assenza=nota_assenza if ore_assenza > 0 else None,
-        ))
+    if presenze_pervenute:
+        existing_pres = session.query(PresenzaSettimanale).filter(
+            PresenzaSettimanale.dipendente_id == dipendente_id,
+            PresenzaSettimanale.settimana == settimana_date,
+        ).first()
+
+        if existing_pres is None:
+            # Riga nuova: i campi NON pervenuti restano al default di colonna
+            # (0), non a un valore inventato qui.
+            existing_pres = PresenzaSettimanale(
+                dipendente_id=dipendente_id,
+                settimana=settimana_date,
+            )
+            session.add(existing_pres)
+
+        for campo, valore in presenze_pervenute.items():
+            setattr(existing_pres, campo, valore)
+
+        # Coerenza dell'assenza: se le ore di assenza sono state dichiarate a
+        # zero, l'assenza non c'è e tipo/nota non hanno più un referente —
+        # vanno azzerati anche se sono arrivati valorizzati. Vale solo quando
+        # `ore_assenza` è pervenuto: senza, non sappiamo nulla dell'assenza e
+        # non tocchiamo ciò che c'è già.
+        if ore_assenza is not None and ore_assenza <= 0:
+            existing_pres.tipo_assenza = None
+            existing_pres.nota_assenza = None
 
     # 3) Salva spese — SOSTITUZIONE, non accodamento.
     # Il form manda lo stato completo delle spese della settimana, non righe
