@@ -407,7 +407,8 @@ def task_settimana_dipendente(dipendente_id, settimana=None):
         tocca la settimana), ore_consumate (dichiarate dal dip in settimana),
       ore_rimanenti (residuo del task = ore_pianificate − consumato TOTALE del
         task su tutti i dipendenti/settimane, calcolato al volo), stato,
-      in_ritardo (bool).
+      in_ritardo (bool), nota (str|None: «a che punto sono», scritta dal dip in
+        QUELLA settimana — è il round-trip di note_per_task in scrittura).
 
     `in_ritardo` NON è uno stato: è DERIVATO da data_fine e stato, ricalcolato
     a ogni lettura. Non è nella lista di ciò che il dipendente può dichiarare e
@@ -441,11 +442,11 @@ def task_settimana_dipendente(dipendente_id, settimana=None):
         )
         task_ids = [t.id for t in tasks]
 
-        # Ore dichiarate da QUESTO dip in QUESTA settimana, per task_id.
-        # (UNIQUE task+dip+settimana → di norma una riga per task; sommiamo
-        #  comunque per robustezza.)
+        # Ore dichiarate e nota scritta da QUESTO dip in QUESTA settimana, per
+        # task_id. (UNIQUE task+dip+settimana → di norma una riga per task;
+        # sommiamo comunque per robustezza.)
         cons_rows = (
-            session.query(Consuntivo.task_id, Consuntivo.ore_dichiarate)
+            session.query(Consuntivo.task_id, Consuntivo.ore_dichiarate, Consuntivo.nota)
             .filter(
                 Consuntivo.dipendente_id == dipendente_id,
                 Consuntivo.settimana >= lun,
@@ -469,8 +470,14 @@ def task_settimana_dipendente(dipendente_id, settimana=None):
         session.close()
 
     consumate_per_task = {}
-    for tid, ore in cons_rows:
+    note_per_task = {}
+    for tid, ore, nota in cons_rows:
         consumate_per_task[tid] = consumate_per_task.get(tid, 0.0) + float(ore or 0)
+        # La nota NON si somma: è testo. Se per qualche ragione ci fossero due
+        # righe nel range, vince la prima non vuota — meglio mostrare una nota
+        # vecchia che perderla e costringere a riscriverla.
+        if nota and not note_per_task.get(tid):
+            note_per_task[tid] = nota
 
     consumato_totale_task = {tid: float(s or 0) for tid, s in tot_rows}
 
@@ -520,6 +527,12 @@ def task_settimana_dipendente(dipendente_id, settimana=None):
             "ore_rimanenti": round(pianificate - consumato_totale_task.get(t.id, 0.0), 1),
             "stato": t.stato,
             "in_ritardo": _in_ritardo(t),
+            # «A che punto sono», come l'ha scritta il dipendente in QUESTA
+            # settimana (None se non ha scritto nulla). Serve a riaprire una
+            # settimana già compilata senza perdere il testo: su un task
+            # Bloccato la nota è obbligatoria in scrittura, quindi senza
+            # rileggerla un ri-salvataggio verrebbe rifiutato con 400.
+            "nota": note_per_task.get(t.id),
         })
     return out
 
