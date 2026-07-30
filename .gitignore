@@ -37,3 +37,4 @@ backend/diagnostico_*.py
 backup_*.sql
 *.bak
 backend/cookies.txt
+auth_gantt.zip

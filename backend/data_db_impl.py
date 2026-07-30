@@ -264,6 +264,116 @@ def criticita_sforamento_progetti(progetti_ids):
         session.close()
 
 
+def scostamento_stime_sottotask(task_ids):
+    """Scostamento tra la scomposizione in sottotask e il piano del task.
+
+    Step 2.3 sottotask (30/07/2026). SEGNALA, NON IMPONE: espone tre numeri e
+    basta. Nessun vincolo, nessun blocco alla creazione o modifica di un
+    sottotask se la somma sfora, nessun ribilanciamento automatico — il PM
+    guarda e decide. (`routes/progetti.py`, che rifiuta con 422 se la somma
+    delle ore di fase non quadra col budget di progetto, è il CONTRO-esempio:
+    lì è un vincolo di creazione, qui è informazione.)
+
+    FIRMA BATCH — accetta una LISTA di task_id e restituisce un dict
+    {task_id: {...}}. È la forma che serve al chiamante più esigente
+    (gantt_strutturato, che serializza tutti i task dei progetti attivi e non
+    può permettersi una query per task). Chi ne vuole uno solo passa [task_id] e
+    fa `.get(task_id)`. Stesso pattern di `ore_per_task` in routes/gantt.py:
+    una GROUP BY, poi lookup con default.
+
+    I TRE NUMERI, per ogni task calcolabile:
+      - somma_stime_sottotask : SUM(Sottotask.ore_stimate) dei sottotask che
+                                contano (vedi sotto)
+      - ore_pianificate_task  : Task.ore_pianificate, il piano CORRENTE
+      - differenza            : ore_pianificate_task − somma_stime_sottotask
+
+    Segno della differenza: POSITIVA = il piano del task è più grande della
+    somma delle stime, c'è piano non ancora coperto dalla scomposizione;
+    NEGATIVA = i sottotask sforano il piano. Stessa convenzione di
+    `ore_rimanenti` in routes/fasi.py (ore_vendute − ore_consumate), dove il
+    positivo è il margine che resta e il negativo lo sforo: il PM legge i due
+    scostamenti nello stesso verso.
+
+    RIFERIMENTO = ore_pianificate e non ore_stimate. Sono due grandezze vive
+    che si confrontano: le stime dei sottotask si aggiornano, il piano si
+    rivede. `Task.ore_stimate` è il budget storico congelato (convenzione R1,
+    non si tocca dopo l'avvio): confrontarci una somma che cambia darebbe uno
+    scostamento che cresce da solo senza che nessuno abbia sbagliato piano.
+
+    QUALI SOTTOTASK CONTANO — tutti tranne gli "Annullato" (i "Sospeso" SÌ).
+    La domanda a cui questo numero risponde è «il piano di questo task quadra?»,
+    ed è una domanda sul PIANO: un sottotask sospeso è in pausa ma resta nel
+    piano, un annullato ne è stato tolto e le sue ore non sono più lavoro
+    previsto. Precedente affine: `task_settimana_dipendente` filtra
+    `Task.stato != "Annullato"` per la stessa ragione (cosa c'è nel piano di
+    quella persona), mentre i filtri del carico/saturazione in routes/risorse.py
+    escludono anche i Sospesi — ma quelli rispondono a «quanto lavoro c'è ORA»,
+    che è un'altra domanda.
+
+    QUANDO NON SI SEGNALA (la chiave manca dal dict, il chiamante legge None):
+      - `Task.ore_pianificate` NULL: manca il termine di confronto. Non è un
+        errore, non è calcolabile — come il "progetto senza budget complessivo:
+        saltato" di `criticita_sforamento_progetti`.
+      - task senza NESSUN sottotask che conta (mai scomposto, o scomposto e poi
+        annullato tutto): la domanda non si pone. Senza questa esclusione ogni
+        task non scomposto del sistema — cioè tutti e 114 quelli in DB oggi —
+        risulterebbe "scostante" dell'intero piano: un falso positivo di massa
+        che renderebbe la segnalazione inutile. Coerente con «i progetti sani
+        non compaiono» di criticita_sforamento_progetti.
+    NB: un task CON sottotask attivi ma tutti senza `ore_stimate` compare invece
+    con somma 0 — lì la scomposizione esiste ma non è stimata, ed è
+    informazione buona da mostrare, non un caso da nascondere. La GROUP BY
+    distingue i due casi da sola: nessuna riga contro una riga che somma 0.
+    """
+    from sqlalchemy import func
+    from models import Sottotask
+
+    if not task_ids:
+        return {}
+
+    session = get_session()
+    try:
+        # Somma delle stime per task, in UNA query. I sottotask annullati sono
+        # esclusi qui, non dopo: non devono nemmeno entrare nell'aggregato.
+        somme = dict(
+            session.query(
+                Sottotask.task_id,
+                func.coalesce(func.sum(Sottotask.ore_stimate), 0.0),
+            )
+            .filter(
+                Sottotask.task_id.in_(task_ids),
+                Sottotask.stato != "Annullato",
+            )
+            .group_by(Sottotask.task_id)
+            .all()
+        )
+        if not somme:
+            return {}
+
+        # Il piano corrente dei soli task che hanno una scomposizione.
+        piani = dict(
+            session.query(Task.id, Task.ore_pianificate)
+            .filter(Task.id.in_(list(somme.keys())))
+            .all()
+        )
+
+        out = {}
+        for tid, somma in somme.items():
+            piano = piani.get(tid)
+            if piano is None:  # niente piano corrente → non calcolabile
+                continue
+            somma = float(somma or 0.0)
+            piano = float(piano)
+            out[tid] = {
+                "somma_stime_sottotask": round(somma, 1),
+                "ore_pianificate_task": round(piano, 1),
+                "differenza": round(piano - somma, 1),
+            }
+        return out
+    finally:
+        session.close()
+
+
 def tasso_compilazione_progetto(pid):
     session = get_session()
     base = session.query(Consuntivo).join(

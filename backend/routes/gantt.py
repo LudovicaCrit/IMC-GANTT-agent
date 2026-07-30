@@ -151,7 +151,7 @@ def _predecessore_principale(task: Task) -> str:
     fs = [d for d in entranti if d.tipo_dipendenza == "FS"]
     scelta = fs[0] if fs else entranti[0]
     return scelta.task_predecessore_id or ""
-from data import get_dipendente
+from data import get_dipendente, scostamento_stime_sottotask
 from data_db_impl import _to_dt
 
 
@@ -326,6 +326,24 @@ def gantt_strutturato(
             ).filter(Consuntivo.task_id.in_(task_ids_all)).group_by(Consuntivo.task_id).all()
             ore_per_task = {tid: float(ore) for tid, ore in righe}
 
+        # ── 2-bis. Scostamento stime sottotask, in UNA chiamata ───────
+        # Step 2.3 sottotask (30/07/2026). Stessa logica di ore_per_task: una
+        # sola aggregazione per TUTTI i task in scope, poi lookup per riga nel
+        # loop. Questo endpoint gira anche sulla lista di tutti i progetti
+        # attivi, quindi una chiamata per task sarebbe un N+1 su ~100 task.
+        # Il dict contiene solo i task calcolabili: `.get()` restituisce None
+        # per i task mai scomposti o senza ore_pianificate, ed è il valore che
+        # finisce nel payload (nessuna segnalazione da fare).
+        # Il calcolo sta in data_db_impl come tutte le aggregazioni di dominio
+        # (criticita_sforamento_progetti, margini_economia): la route non
+        # ricalcola nulla, e lo stesso dato alimenta GET /api/sottotask/{id}.
+        # Nota sessioni: la funzione dello strato dati apre e chiude la PROPRIA
+        # sessione — per contratto, come tutte le sue sorelle. Per la durata
+        # delle sue due SELECT ci sono due connessioni aperte su questo thread;
+        # sono letture brevi e senza lock, e l'alternativa (passarle la
+        # sessione della route) romperebbe la firma di tutto lo strato dati.
+        scostamento_per_task = scostamento_stime_sottotask(task_ids_all)
+
         # ── 3. Cache nomi dipendenti per evitare lookup ripetuti ──────
         dip_rows = session.query(Dipendente).all()
         nomi_dip = {d.id: d.nome for d in dip_rows}
@@ -354,7 +372,19 @@ def gantt_strutturato(
                         "nome": t.nome,
                         "stato": t.stato,
                         "ore_stimate": int(t.ore_stimate) if t.ore_stimate else 0,
+                        # Step 2.3: il piano CORRENTE del task, finora esposto
+                        # solo a livello fase. È il termine di confronto dello
+                        # scostamento qui sotto: quando quello è null per
+                        # assenza di piano, questo campo mostra il perché.
+                        "ore_pianificate": float(t.ore_pianificate) if t.ore_pianificate is not None else None,
                         "ore_consumate": round(ore_cons_t, 1),
+                        # Step 2.3: scostamento fra la somma delle stime dei
+                        # sottotask e il piano del task, o null se non c'è
+                        # niente da segnalare. SEGNALA, NON IMPONE: sono tre
+                        # numeri, nessun giudizio — coerente col design
+                        # "endpoint stupido, il frontend decide la resa".
+                        # Stessa forma di GET /api/sottotask/{task_id}.
+                        "scostamento": scostamento_per_task.get(t.id),
                         "data_inizio": t.data_inizio.isoformat() if t.data_inizio else None,
                         "data_fine": t.data_fine.isoformat() if t.data_fine else None,
                         "dipendente_id": t.dipendente_id or "",

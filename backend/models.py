@@ -88,6 +88,26 @@ STATI_TASK = (
 # granularità scenderà: è una proprietà della DICHIARAZIONE, non dell'entità.
 STATI_DICHIARABILI = ("In corso", "Completato", "Bloccato")
 
+# Step 2 sottotask (30/07/2026): stati di PIANIFICAZIONE del sottotask, quelli
+# che il PM governa dal Cantiere sulla DEFINIZIONE del pezzo di lavoro.
+#
+# Non è un doppione di STATI_DICHIARABILI: sono due assi distinti e ortogonali.
+#   - qui (Sottotask.stato)                      → il PM dice se il pezzo è da
+#     fare, messo in pausa o cancellato dal piano. Vive sulla definizione,
+#     condivisa da tutti i collaboratori del task.
+#   - STATI_DICHIARABILI (ConsuntivoSottotask.stato_dichiarato) → il dipendente
+#     dice a che punto è lui su quel pezzo, in quella settimana.
+#
+# I tre dichiarabili (In corso / Completato / Bloccato) NON vanno replicati qui:
+# sarebbero una seconda verità sull'avanzamento, senza autore né settimana —
+# esattamente il problema che il commento su Consuntivo.stato_dichiarato
+# descrive per Task.stato. "In corso" su una definizione condivisa non
+# significherebbe nulla: in corso per chi?
+#
+# CHECK constraint a livello DB: ck_sottotask_stato_pianificazione, vedi
+# migration alembic a3b4c5d6e7f8.
+STATI_PIANIFICAZIONE_SOTTOTASK = ("Da iniziare", "Sospeso", "Annullato")
+
 # Step 3.1 (25/05/2026): tipi di dipendenza tra task ammessi.
 # Sostituiscono la vecchia colonna `Task.predecessore` (stringa singola, tipo
 # non registrato — implicitamente FS) con la tabella-grafo `dipendenza_task`.
@@ -521,6 +541,12 @@ class Sottotask(Base):
     task_id = Column(String(10), ForeignKey("task.id", ondelete="CASCADE"), nullable=False)
     nome = Column(String(200), nullable=False)
     ore_stimate = Column(Integer, nullable=True)
+    # stato: PIANIFICAZIONE, non avanzamento. Vedi STATI_PIANIFICAZIONE_SOTTOTASK
+    # in cima al modulo — è il PM che sospende o annulla un pezzo del piano.
+    # Come il dipendente sta andando su questo sottotask si legge invece dalle
+    # sue dichiarazioni (`dichiarazioni[].stato_dichiarato`).
+    # CHECK a livello DB: ck_sottotask_stato_pianificazione (alembic a3b4c5d6e7f8).
+    stato = Column(String(20), nullable=False, default="Da iniziare")
     # ordine: sequenza logica dei sottotask dentro il task. Stesso tipo di
     # Task.ordine. Il default alla creazione (max(ordine)+1) è responsabilità
     # della route, non della colonna.
