@@ -228,6 +228,7 @@ class Dipendente(Base):
     competenze_rel = relationship("DipendentiCompetenze", back_populates="dipendente")
     assegnazioni = relationship("Assegnazione", back_populates="dipendente")
     consuntivi = relationship("Consuntivo", back_populates="dipendente")
+    consuntivi_sottotask = relationship("ConsuntivoSottotask", back_populates="dipendente")
     utente = relationship("Utente", back_populates="dipendente", uselist=False)
 
 
@@ -430,6 +431,13 @@ class Task(Base):
         cascade="all, delete-orphan",
     )
 
+    # Sottotask: la scomposizione del task fatta dal PM. Condivisa, uguale per
+    # tutti i collaboratori del task. Cascade delete allineato alla FK
+    # ON DELETE CASCADE della migration (il sottotask non sopravvive al padre).
+    sottotask = relationship("Sottotask", back_populates="task",
+                             cascade="all, delete-orphan",
+                             order_by="Sottotask.ordine")
+
 
 class DipendenzaTask(Base):
     """Dipendenza tra task (modello-grafo).
@@ -490,6 +498,41 @@ class DipendenzaTask(Base):
     )
 
 
+class Sottotask(Base):
+    """Pezzo in cui il PM scompone un task. DEFINIZIONE, non dichiarazione.
+
+    È condiviso: uguale per tutti i collaboratori del task. Chi lavora al task
+    vede la stessa lista di sottotask, e ognuno dichiara il proprio avanzamento
+    su ciascuno in `ConsuntivoSottotask` (una riga per persona/settimana).
+
+    Cosa NON ha, per scelta:
+      - date proprie: eredita la finestra temporale del task padre.
+      - assegnatario proprio: l'assegnazione resta a livello di task
+        (`Assegnazione`), il sottotask non ripartisce le persone.
+
+    `ore_stimate` porta lo stesso nome e la stessa filosofia di
+    `Task.ore_stimate` (convenzione R1): stima del PM, ore intere, regno
+    matematico della pianificazione. Non è il consumato — quello si aggrega
+    dalle dichiarazioni.
+    """
+    __tablename__ = "sottotask"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    task_id = Column(String(10), ForeignKey("task.id", ondelete="CASCADE"), nullable=False)
+    nome = Column(String(200), nullable=False)
+    ore_stimate = Column(Integer, nullable=True)
+    # ordine: sequenza logica dei sottotask dentro il task. Stesso tipo di
+    # Task.ordine. Il default alla creazione (max(ordine)+1) è responsabilità
+    # della route, non della colonna.
+    ordine = Column(SmallInteger, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    task = relationship("Task", back_populates="sottotask")
+    dichiarazioni = relationship("ConsuntivoSottotask", back_populates="sottotask",
+                                 cascade="all, delete-orphan")
+
+
 # ══════════════════════════════════════════════════════════════════════
 # RELAZIONI OPERATIVE
 # ══════════════════════════════════════════════════════════════════════
@@ -543,6 +586,54 @@ class Consuntivo(Base):
 
     task = relationship("Task", back_populates="consuntivi")
     dipendente = relationship("Dipendente", back_populates="consuntivi")
+
+
+class ConsuntivoSottotask(Base):
+    """Dichiarazione di un dipendente su un sottotask, per settimana.
+
+    Speculare a `Consuntivo`: quello è una riga per (task, dipendente,
+    settimana), questo una riga per (sottotask, dipendente, settimana). Una per
+    persona, non una per sottotask: più collaboratori lavorano allo stesso task
+    facendo cose diverse, e ognuno racconta la propria.
+
+    Qui vive la DICHIARAZIONE, non la definizione: cosa ha detto quella persona
+    quella settimana su quel pezzo, e resta. Le ore NON sono una colonna — si
+    derivano (motore ore-derivate, passo successivo) e restano aggregate in
+    `Consuntivo.ore_dichiarate` a livello di task.
+    """
+    __tablename__ = "consuntivo_sottotask"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    sottotask_id = Column(Integer, ForeignKey("sottotask.id", ondelete="CASCADE"), nullable=False)
+    dipendente_id = Column(String(10), ForeignKey("dipendenti.id"), nullable=False)
+    settimana = Column(Date, nullable=False)  # lunedì normalizzato, come Consuntivo
+    # stato_dichiarato: sottoinsieme STATI_DICHIARABILI, stessa semantica di
+    # Consuntivo.stato_dichiarato. NULL = «non si è espresso sullo stato».
+    stato_dichiarato = Column(String(20), nullable=True)
+    # percentuale: avanzamento 0-100 dichiarato sullo slider. Integer perché lo
+    # slider è a passi interi: un Float introdurrebbe una precisione decimale
+    # che nessuno intende su una stima soggettiva.
+    # nullable=True È INTENZIONALE: se il dipendente non muove lo slider resta
+    # NULL e il sistema NON inventa un default. È il motore ore-derivate che,
+    # trovando NULL, deriverà l'avanzamento dallo STATO.
+    # Range 0-100 imposto da CHECK a livello DB: ck_consuntivo_sottotask_percentuale.
+    percentuale = Column(Integer, nullable=True)
+    # nota: la nota-sottotask vive TUTTA qui, attaccata al pezzo che descrive.
+    # «Obbligatoria se Bloccato» è validazione della route, non della colonna.
+    nota = Column(Text, nullable=True)
+    compilato = Column(Boolean, nullable=False, default=False)
+    data_compilazione = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "sottotask_id", "dipendente_id", "settimana",
+            name="uq_consuntivo_sottotask",
+        ),
+    )
+
+    sottotask = relationship("Sottotask", back_populates="dichiarazioni")
+    dipendente = relationship("Dipendente", back_populates="consuntivi_sottotask")
 
 
 # ══════════════════════════════════════════════════════════════════════
