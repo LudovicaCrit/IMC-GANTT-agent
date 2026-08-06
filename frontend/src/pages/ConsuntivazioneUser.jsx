@@ -13,6 +13,10 @@ const STATO_STYLE = {
 const TOOLTIP = {
   previste: 'Le ore programmate per te su questo task in questa settimana.',
   ore: 'Quante ore ci hai messo, se te lo ricordi. Campo facoltativo.',
+  oreEffettive: 'Ore reali su questo pezzo, se l\'avanzamento non le racconta ' +
+                '(fermo, o costato più della stima). Vuoto = si calcolano dal cursore.',
+  oreDerivate: 'Calcolate dai pezzi: quanto sono avanzati per la loro stima, ' +
+               'oppure le ore reali dove le hai scritte a mano.',
 }
 
 /* ── Helpers ──────────────────────────────────────────────────────── */
@@ -37,6 +41,14 @@ export default function ConsuntivazioneUser() {
   const [modifiche, setModifiche] = useState({})
   const [noteAperte, setNoteAperte] = useState({})
 
+  // Modifiche pendenti sui PEZZI: { [sottotask_id]: { percentuale?, ore_effettive?, bloccato?, nota? } }
+  // Mappa separata e non annidata dentro `modifiche`: la grana è diversa (il
+  // sottotask ha un id suo, non è un campo del task) e il submit ne costruisce
+  // quattro dizionari distinti. Tenerle separate evita di dover distinguere a
+  // ogni lettura se una chiave è un task o un pezzo.
+  const [modificheSottotask, setModificheSottotask] = useState({})
+  const [noteSottotaskAperte, setNoteSottotaskAperte] = useState({})
+
   /* ── Caricamento ── */
   const carica = useCallback((settimana) => {
     setLoading(true)
@@ -49,6 +61,8 @@ export default function ConsuntivazioneUser() {
         setSettimanaSel(d.settimana)
         setModifiche({})
         setNoteAperte({})
+        setModificheSottotask({})
+        setNoteSottotaskAperte({})
         setSalvataggio(null)
       })
       .catch((e) => setErrore(e.message))
@@ -58,7 +72,9 @@ export default function ConsuntivazioneUser() {
   useEffect(() => { carica(null) }, [carica])
 
   /* ── Avviso se si esce con modifiche pendenti ── */
-  const haPendenti = Object.keys(modifiche).length > 0
+  const nModifiche =
+    Object.keys(modifiche).length + Object.keys(modificheSottotask).length
+  const haPendenti = nModifiche > 0
   useEffect(() => {
     if (!haPendenti) return
     const handler = (e) => { e.preventDefault(); e.returnValue = '' }
@@ -80,6 +96,29 @@ export default function ConsuntivazioneUser() {
     setModifiche((prev) => ({
       ...prev,
       [task_id]: { ...(prev[task_id] ?? {}), [campo]: val },
+    }))
+    setSalvataggio(null)
+  }
+
+  /* ── Stesso meccanismo, un livello più giù: i pezzi ── */
+  const valoreSottotask = (p, campo) => {
+    const m = modificheSottotask[p.id]
+    if (m && m[campo] !== undefined) return m[campo]
+    // Il cursore parte da dove il pezzo è ARRIVATO: la dichiarazione di questa
+    // settimana se c'è, altrimenti la baseline (l'ultima percentuale
+    // dichiarata prima d'ora). Mai da zero: ripartire da zero su un pezzo al
+    // 40% suggerirebbe di aver disfatto il lavoro.
+    if (campo === 'percentuale') return p.percentuale ?? p.baseline_pct
+    if (campo === 'ore_effettive') return p.ore_effettive ?? ''
+    if (campo === 'bloccato') return p.stato_dichiarato === 'Bloccato'
+    if (campo === 'nota') return p.nota ?? ''
+    return undefined
+  }
+
+  const modificaSottotask = (sottotask_id, campo, val) => {
+    setModificheSottotask((prev) => ({
+      ...prev,
+      [sottotask_id]: { ...(prev[sottotask_id] ?? {}), [campo]: val },
     }))
     setSalvataggio(null)
   }
@@ -133,6 +172,20 @@ export default function ConsuntivazioneUser() {
       }
     }
 
+    // Stessa regola sui PEZZI. Si controllano solo quelli TOCCATI: un pezzo
+    // altrui già bloccato senza nota non è affar mio e non deve impedirmi di
+    // salvare. Rifiutare qui evita al dipendente il 400 del backend, che dice
+    // la stessa cosa ma dopo aver premuto Salva.
+    const pezzi = (dati.task_settimana ?? []).flatMap((t) => t.sottotask ?? [])
+    for (const p of pezzi) {
+      if (!modificheSottotask[p.id]) continue
+      if (!valoreSottotask(p, 'bloccato')) continue
+      if ((valoreSottotask(p, 'nota') ?? '').trim()) continue
+      setSalvataggio(`"${p.nome}" è bloccato: scrivi perché nella nota.`)
+      setNoteSottotaskAperte((prev) => ({ ...prev, [p.id]: true }))
+      return
+    }
+
     setSalvataggio('invio')
 
     const ore_per_task = {}
@@ -145,6 +198,46 @@ export default function ConsuntivazioneUser() {
       if (m.nota !== undefined) note_per_task[task_id] = m.nota
     }
 
+    /* ── I quattro dizionari dei pezzi ──────────────────────────────────
+     * Chiavi come stringhe (JSON non ne conosce altre): il DTO le dichiara
+     * `dict[int, …]` e pydantic converte. `bloccati` è un array, che pydantic
+     * riceve in un `set[int]`.
+     *
+     * QUANDO SI MANDA LA PERCENTUALE — non solo quando il cursore si è mosso.
+     * Il backend ricalcola `stato_dichiarato` se il pezzo compare fra gli
+     * avanzamenti O fra i bloccati; se lo si toglie da «bloccato» senza
+     * mandare nulla, non ricade in nessuno dei due e resterebbe Bloccato per
+     * sempre. Quindi lo sblocco manda anche la percentuale, che è ciò da cui
+     * lo stato va riderivato.
+     * Simmetricamente NON si manda la percentuale quando si ritocca solo la
+     * nota di un pezzo fermo: la manderemmo identica, ma basterebbe a far
+     * ricalcolare lo stato e a sbloccarlo in silenzio.
+     */
+    const avanzamenti_sottotask = {}
+    const ore_effettive_sottotask = {}
+    const bloccati_sottotask = []
+    const note_sottotask = {}
+
+    for (const p of pezzi) {
+      const m = modificheSottotask[p.id]
+      if (!m) continue
+      const id = String(p.id)
+      const bloccato = valoreSottotask(p, 'bloccato')
+
+      if (m.percentuale !== undefined || m.bloccato === false) {
+        avanzamenti_sottotask[id] = Number(valoreSottotask(p, 'percentuale'))
+      }
+      // Campo svuotato = nessun valore da mandare: la chiave assente lascia in
+      // pace le ore già salvate. Azzerarle davvero non è esprimibile — 0.0 per
+      // il backend significa «zero ore effettive, e lo dico io», che spegne la
+      // derivazione invece di riattivarla.
+      if (m.ore_effettive !== undefined && String(m.ore_effettive).trim() !== '') {
+        ore_effettive_sottotask[id] = parseFloat(m.ore_effettive)
+      }
+      if (bloccato) bloccati_sottotask.push(p.id)
+      if (m.nota !== undefined) note_sottotask[id] = m.nota
+    }
+
     try {
       await apiFetch('/api/consuntivi/salva', {
         method: 'POST',
@@ -154,6 +247,10 @@ export default function ConsuntivazioneUser() {
           ore_per_task,
           stati_per_task,
           note_per_task,
+          avanzamenti_sottotask,
+          ore_effettive_sottotask,
+          bloccati_sottotask,
+          note_sottotask,
         },
       })
       setSalvataggio('ok')
@@ -302,6 +399,13 @@ export default function ConsuntivazioneUser() {
                     onNotaAperta={(v) =>
                       setNoteAperte((p) => ({ ...p, [t.task_id]: v }))
                     }
+                    dipendenteId={dati.dipendente_id}
+                    valoreSottotask={valoreSottotask}
+                    noteSottotaskAperte={noteSottotaskAperte}
+                    onModificaSottotask={modificaSottotask}
+                    onNotaSottotaskAperta={(id, v) =>
+                      setNoteSottotaskAperte((prev) => ({ ...prev, [id]: v }))
+                    }
                   />
                 ))}
               </React.Fragment>
@@ -323,7 +427,7 @@ export default function ConsuntivazioneUser() {
               )}
               {!salvataggio && haPendenti && (
                 <span className="text-amber-300">
-                  {Object.keys(modifiche).length} {Object.keys(modifiche).length === 1 ? 'modifica' : 'modifiche'} da salvare
+                  {nModifiche} {nModifiche === 1 ? 'modifica' : 'modifiche'} da salvare
                 </span>
               )}
               {!salvataggio && !haPendenti && (
@@ -377,8 +481,18 @@ function RigaTask({
   soloLettura,
   onModifica,
   onNotaAperta,
+  dipendenteId,
+  valoreSottotask,
+  noteSottotaskAperte,
+  onModificaSottotask,
+  onNotaSottotaskAperta,
 }) {
   const haNota = nota.trim().length > 0
+  // La chiave `sottotask` arriva da /me SOLO sui task scomposti: la sua
+  // presenza è il criterio, non un flag a parte che potrebbe disallinearsi
+  // dalla lista che descrive.
+  const pezzi = t.sottotask ?? []
+  const scomposto = pezzi.length > 0
 
   return (
     <React.Fragment>
@@ -441,19 +555,33 @@ function RigaTask({
           </div>
         </td>
 
-        {/* Ore — facoltative */}
+        {/* Ore — facoltative sul task semplice, DERIVATE su quello scomposto */}
         <td className="px-4 py-3 text-center">
-          <input
-            type="number" min="0" step="0.5"
-            disabled={soloLettura}
-            value={ore}
-            onChange={(e) => onModifica('ore', e.target.value)}
-            placeholder="—"
-            className="w-16 bg-gray-950 text-gray-200 rounded-md px-2 py-1.5 text-center
-                       border border-gray-700 focus:outline-none focus:ring-2
-                       focus:ring-blue-600 focus:border-blue-600
-                       disabled:opacity-50 placeholder:text-gray-700"
-          />
+          {scomposto ? (
+            // Niente input: su un task scomposto le ore le calcola il backend
+            // sommando i pezzi (Δavanzamento × stima, o le ore effettive), e le
+            // derivate VINCONO su un eventuale valore scritto a mano. Un campo
+            // editabile qui accetterebbe un numero per poi sostituirlo in
+            // silenzio al salvataggio: meglio non offrirlo.
+            <>
+              <span className="text-gray-300 font-medium" title={TOOLTIP.oreDerivate}>
+                {fmtH(t.ore_consumate)}
+              </span>
+              <p className="text-[11px] text-gray-600">dai pezzi</p>
+            </>
+          ) : (
+            <input
+              type="number" min="0" step="0.5"
+              disabled={soloLettura}
+              value={ore}
+              onChange={(e) => onModifica('ore', e.target.value)}
+              placeholder="—"
+              className="w-16 bg-gray-950 text-gray-200 rounded-md px-2 py-1.5 text-center
+                         border border-gray-700 focus:outline-none focus:ring-2
+                         focus:ring-blue-600 focus:border-blue-600
+                         disabled:opacity-50 placeholder:text-gray-700"
+            />
+          )}
         </td>
 
         {/* Icona nota */}
@@ -497,6 +625,180 @@ function RigaTask({
           </td>
         </tr>
       )}
+
+      {/* Pezzi in cui il task è scomposto */}
+      {scomposto && (
+        <tr className="border-t border-gray-800/30">
+          <td colSpan={5} className="px-4 pb-4 pt-1 bg-gray-950/40">
+            <div className="pl-4 border-l-2 border-gray-800 space-y-2">
+              {pezzi.map((p) => (
+                <PezzoSottotask
+                  key={p.id}
+                  pezzo={p}
+                  // Un pezzo affidato a un altro si vede ma non si compila:
+                  // l'avanzamento lo dichiara chi ci lavora. `assegnatario_id`
+                  // arriva già RISOLTO da /me (override o eredità dal task).
+                  mio={p.assegnatario_id === dipendenteId}
+                  soloLettura={soloLettura}
+                  pct={valoreSottotask(p, 'percentuale')}
+                  oreEffettive={valoreSottotask(p, 'ore_effettive')}
+                  bloccato={valoreSottotask(p, 'bloccato')}
+                  nota={valoreSottotask(p, 'nota')}
+                  notaAperta={Boolean(noteSottotaskAperte[p.id])}
+                  onModifica={(campo, val) => onModificaSottotask(p.id, campo, val)}
+                  onNotaAperta={(v) => onNotaSottotaskAperta(p.id, v)}
+                />
+              ))}
+            </div>
+          </td>
+        </tr>
+      )}
     </React.Fragment>
+  )
+}
+
+
+/* ── Un pezzo (sottotask) dentro la riga del task ──────────────────────
+ * Mostra a che punto è il pezzo e — quando è di chi sta compilando — lascia
+ * dichiararne l'avanzamento. Controllato come RigaTask: nessuno stato proprio.
+ */
+function PezzoSottotask({
+  pezzo: p,
+  mio,
+  pct,
+  oreEffettive,
+  bloccato,
+  nota,
+  notaAperta,
+  soloLettura,
+  onModifica,
+  onNotaAperta,
+}) {
+  // Non compilabile: settimana chiusa, oppure pezzo affidato a un altro.
+  const bloccatoInput = soloLettura || !mio
+  const haNota = (nota ?? '').trim().length > 0
+  // Lo stato non si chiede: si legge dallo slider. Solo "Bloccato" è un flag a
+  // parte, perché è l'unica cosa che una percentuale non può dire — un pezzo
+  // fermo al 40% è indistinguibile da uno che avanza piano.
+  const statoMostrato = bloccato
+    ? 'Bloccato'
+    : pct >= 100 ? 'Completato'
+    : pct > 0 ? 'In corso'
+    : null
+
+  return (
+    <>
+      <div className="flex items-center gap-3 py-1.5">
+        {/* Nome + stima */}
+        <div className="min-w-0 w-56">
+          <p className={`text-sm truncate ${mio ? 'text-gray-300' : 'text-gray-500'}`}>
+            {p.nome}
+            {p.stato === 'Sospeso' && (
+              <span className="ml-2 text-[10px] uppercase tracking-wider text-amber-500/70">sospeso</span>
+            )}
+          </p>
+          <p className="text-[11px] text-gray-600">
+            {p.ore_stimate == null ? 'non stimato' : `stima ${fmtH(p.ore_stimate)}`}
+            {!mio && <span className="text-gray-500"> · di un altro</span>}
+          </p>
+        </div>
+
+        {/* Avanzamento: cursore + casella. Due controlli sullo stesso valore
+            perché servono a due gesti diversi — il cursore per la stima a
+            occhio, la casella per scrivere «65» senza inseguire il pixel. */}
+        <div className="flex items-center gap-2 flex-1 min-w-0">
+          <input
+            type="range"
+            min={p.baseline_pct} max={100} step={5}
+            disabled={bloccatoInput}
+            value={pct}
+            onChange={(e) => onModifica('percentuale', Number(e.target.value))}
+            title={p.baseline_pct > 0 ? `Non sotto il ${p.baseline_pct}% già dichiarato` : undefined}
+            className="flex-1 min-w-0 accent-blue-500 disabled:opacity-40 disabled:cursor-not-allowed"
+          />
+          <input
+            type="number"
+            min={p.baseline_pct} max={100} step={5}
+            disabled={bloccatoInput}
+            value={pct}
+            onChange={(e) => onModifica('percentuale', Number(e.target.value))}
+            className="w-14 bg-gray-950 text-gray-200 rounded-md px-1.5 py-1 text-center text-sm
+                       border border-gray-700 focus:outline-none focus:ring-2
+                       focus:ring-blue-600 focus:border-blue-600 disabled:opacity-40"
+          />
+          <span className="text-[11px] text-gray-600 w-14 shrink-0">
+            {p.baseline_pct > 0 ? `da ${p.baseline_pct}%` : ''}
+          </span>
+        </div>
+
+        {/* Ore reali, quando l'avanzamento non le cattura */}
+        <input
+          type="number" min="0" step="0.5"
+          disabled={bloccatoInput}
+          value={oreEffettive}
+          onChange={(e) => onModifica('ore_effettive', e.target.value)}
+          placeholder="—"
+          title={TOOLTIP.oreEffettive}
+          className="w-16 bg-gray-950 text-gray-200 rounded-md px-2 py-1 text-center text-sm
+                     border border-gray-700 focus:outline-none focus:ring-2
+                     focus:ring-blue-600 focus:border-blue-600
+                     disabled:opacity-40 placeholder:text-gray-700"
+        />
+
+        {/* Bloccato */}
+        <button
+          disabled={bloccatoInput}
+          onClick={() => {
+            onModifica('bloccato', !bloccato)
+            if (!bloccato) onNotaAperta(true)   // la nota diventa obbligatoria
+          }}
+          title="Il pezzo è fermo: dovrai scrivere perché"
+          className={`px-2 py-1 rounded-md text-xs font-medium border transition-colors shrink-0 ${
+            bloccato ? STATO_STYLE['Bloccato'].on : STATO_STYLE['Bloccato'].off
+          } ${bloccatoInput ? 'opacity-40 cursor-not-allowed' : ''}`}
+        >
+          Bloccato
+        </button>
+
+        {/* Stato derivato, in sola lettura: è il riflesso dello slider */}
+        <div className="w-20 text-center shrink-0">
+          {statoMostrato && (
+            <span className={`px-2 py-0.5 rounded text-[10px] font-medium border ${STATO_STYLE[statoMostrato].on}`}>
+              {statoMostrato === 'Completato' ? 'Fatto' : statoMostrato}
+            </span>
+          )}
+        </div>
+
+        {/* Nota */}
+        <button
+          onClick={() => onNotaAperta(!notaAperta)}
+          title={haNota ? 'Nota presente' : 'Aggiungi una nota'}
+          className={`w-6 h-6 rounded-md border text-xs transition-colors shrink-0 ${
+            haNota
+              ? 'bg-amber-900/30 border-amber-700/60 text-amber-300'
+              : 'border-gray-700 text-gray-600 hover:text-gray-400'
+          }`}
+        >
+          {haNota ? '✎' : '+'}
+        </button>
+      </div>
+
+      {notaAperta && (
+        <div className="pb-2 pr-1">
+          <textarea
+            rows={2}
+            disabled={bloccatoInput}
+            value={nota}
+            onChange={(e) => onModifica('nota', e.target.value)}
+            placeholder={bloccato ? 'Perché è fermo? (obbligatorio)' : 'Cosa hai fatto su questo pezzo?'}
+            className={`w-full bg-gray-950 text-gray-200 rounded-md px-3 py-2 text-sm
+                        border focus:outline-none focus:ring-2 focus:ring-blue-600
+                        placeholder:text-gray-600 disabled:opacity-40 ${
+                          bloccato && !haNota ? 'border-red-800' : 'border-gray-700'
+                        }`}
+          />
+        </div>
+      )}
+    </>
   )
 }
