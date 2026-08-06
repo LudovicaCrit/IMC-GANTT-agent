@@ -423,6 +423,9 @@ def modifica_task_singolo(
 
     Tutti i campi sono opzionali (semantica PATCH). Date come stringhe ISO
     vengono convertite a `date`. Cambio fase: passare `fase_id` numerico.
+
+    422 anche se la modifica lascerebbe il task "In corso" senza assegnatario
+    (Step 4, 06/08/2026 — vedi la guardia in fondo alla funzione).
     """
     kwargs = {}
     payload = req.model_dump(exclude_unset=True)
@@ -478,6 +481,60 @@ def modifica_task_singolo(
         finally:
             session.close()
 
+    # ── Guardia: nessun task in lavorazione senza assegnatario ────────────
+    # Step 4 sottotask (06/08/2026). Un task può stare senza assegnatario
+    # finché è in pianificazione; quando entra in lavorazione ("In corso")
+    # l'assegnatario è dovuto.
+    #
+    # Si valuta lo stato FINALE — il merge del body sulla riga corrente — non
+    # i due campi isolati. Un PATCH che porta insieme stato="In corso" e
+    # dipendente_id è un avvio con assegnazione contestuale, ed è LEGITTIMO:
+    # guardando il solo `dipendente_id` a DB (ancora NULL) lo rifiuteremmo,
+    # costringendo il PM a due richieste per un'operazione sola.
+    # Simmetricamente, il merge intercetta anche il caso opposto — togliere
+    # l'assegnatario a un task GIÀ "In corso" — che produce esattamente lo
+    # stato che la regola vieta. L'invariante presidiato è «un task In corso
+    # ha un assegnatario», non solo «l'istante della transizione».
+    #
+    # La guardia sta QUI e non in `modifica_task`: quella è attraversata anche
+    # dalla propagazione di `salva_consuntivo`, dove a scrivere è il dipendente
+    # che dichiara «ci sto lavorando». L'obbligo è del PM che avvia il task dal
+    # Cantiere, non di chi lo consuntiva — vedi il commento gemello in
+    # `data_db_impl.aggiungi_task`.
+    if "stato" in kwargs or "dipendente_id" in kwargs:
+        session = get_session()
+        try:
+            task_row = session.query(Task).filter(Task.id == task_id).first()
+            # Riga inesistente: nessun 404 qui, ci pensa `modifica_task` sotto
+            # ritornando False — un solo punto per quel messaggio.
+            if task_row is not None:
+                stato_finale = kwargs.get("stato", task_row.stato)
+                dip_finale = kwargs.get("dipendente_id", task_row.dipendente_id)
+                if stato_finale == "In corso" and not dip_finale:
+                    # Due modi di violare lo stesso invariante, due messaggi:
+                    # dire «non può passare In corso» a chi sta rimuovendo
+                    # l'assegnatario di un task che già ci si trova manderebbe
+                    # il PM a cercare una transizione che non ha chiesto.
+                    if task_row.stato != "In corso":
+                        motivo = (
+                            f"non può passare in stato 'In corso' senza "
+                            f"assegnatario: un task che entra in lavorazione "
+                            f"deve avere un responsabile. Indica "
+                            f"`dipendente_id` nella stessa richiesta"
+                        )
+                    else:
+                        motivo = (
+                            f"è 'In corso': non puoi rimuoverne l'assegnatario "
+                            f"senza indicarne un altro. Un task in lavorazione "
+                            f"deve sempre avere un responsabile"
+                        )
+                    raise HTTPException(
+                        status_code=422,
+                        detail=f"Il task '{task_id}' {motivo}."
+                    )
+        finally:
+            session.close()
+
     ok = modifica_task(task_id, **kwargs)
     if not ok:
         raise HTTPException(status_code=404, detail=f"Task '{task_id}' non trovato")
@@ -492,6 +549,67 @@ def applica_modifiche(req: ApplicaRequest, _: Utente = Depends(require_manager))
     sia da Pipeline (Conferma e avvia progetto).
     """
     risultati = []
+
+    # ── Guardia: nessun task in lavorazione senza assegnatario ────────────
+    # Step 4 sottotask (06/08/2026). Stessa regola della PATCH sul singolo
+    # task, adattata alla forma di questo endpoint: qui le modifiche arrivano
+    # UNA PER CAMPO, quindi `stato` e `dipendente_id` dello stesso task sono
+    # due item distinti della lista. Valutarli isolatamente rifiuterebbe un
+    # avvio-con-assegnazione perfettamente valido, che è esattamente ciò che
+    # il frontend manda: Analisi&Interventi emette `dipendente_id` e `stato`
+    # come due voci separate (AnalisiInterventi.jsx:494-495).
+    #
+    # Perciò si pre-scansiona il batch e si calcola, per ogni task toccato, la
+    # coppia FINALE (stato, assegnatario) = valore nel batch se presente,
+    # altrimenti valore a DB. Non ci si appoggia all'ORDINE degli item: oggi
+    # il frontend manda `dipendente_id` prima di `stato`, ma è un dettaglio di
+    # quel componente — le voci suggerite dall'IA vengono accodate a parte
+    # (riga 470 dello stesso file) e l'ordine non è garantito da nessuno.
+    stato_nel_batch = {m.task_id: m.nuovo_valore
+                       for m in req.modifiche if m.campo == "stato"}
+    dip_nel_batch = {m.task_id: m.nuovo_valore
+                     for m in req.modifiche if m.campo == "dipendente_id"}
+    # Un solo SELECT per tutti i task toccati sui due campi, invece di una
+    # query dentro il ciclo.
+    ids_da_controllare = set(stato_nel_batch) | set(dip_nel_batch)
+    stato_a_db = {}
+    if ids_da_controllare:
+        session = get_session()
+        try:
+            stato_a_db = {
+                r.id: (r.stato, r.dipendente_id)
+                for r in session.query(Task).filter(
+                    Task.id.in_(ids_da_controllare)
+                ).all()
+            }
+        finally:
+            session.close()
+
+    def _motivo_violazione(task_id):
+        """Perché il batch lascerebbe `task_id` "In corso" senza assegnatario.
+
+        Ritorna None se non c'è violazione. Due modi di romperlo, due motivi:
+        dire «aggiungi un assegnatario per avviarlo» a chi sta invece
+        DISASSEGNANDO un task già in corso manderebbe il PM a cercare una
+        transizione che non ha chiesto.
+
+        Task assente a DB → None: non è compito di questa guardia segnalarlo,
+        ci pensa `modifica_task` ritornando False (un solo posto per quel caso).
+        """
+        corrente = stato_a_db.get(task_id)
+        if corrente is None:
+            return None
+        stato_corrente, dip_corrente = corrente
+        stato_finale = stato_nel_batch.get(task_id, stato_corrente)
+        dip_finale = dip_nel_batch.get(task_id, dip_corrente)
+        if stato_finale != "In corso" or dip_finale:
+            return None
+        if stato_corrente != "In corso":
+            return ("Un task non entra in lavorazione senza assegnatario. "
+                    "Aggiungi una modifica 'dipendente_id' per questo task "
+                    "nello stesso invio, oppure non avviarlo.")
+        return ("Il task è 'In corso': non puoi rimuoverne l'assegnatario "
+                "senza indicarne un altro nello stesso invio.")
 
     # 1) Applica modifiche a task esistenti
     for mod in req.modifiche:
@@ -510,6 +628,24 @@ def applica_modifiche(req: ApplicaRequest, _: Utente = Depends(require_manager))
                           "Le dipendenze si modificano via endpoint dedicato.",
             })
             continue
+
+        # Guardia assegnatario (vedi pre-scan sopra). Si rifiuta il SINGOLO
+        # item, non l'intero batch: questo endpoint non è transazionale —
+        # `modifica_task` committa una modifica alla volta — quindi una
+        # HTTPException a metà lascerebbe applicate le precedenti e nessun
+        # modo per il client di sapere quali. Stesso trattamento riservato
+        # sopra al campo `predecessore`: applicato=False + motivo, e si tira
+        # dritto con le altre.
+        if mod.campo in ("stato", "dipendente_id"):
+            motivo = _motivo_violazione(mod.task_id)
+            if motivo:
+                risultati.append({
+                    "task_id": mod.task_id,
+                    "campo": mod.campo,
+                    "applicato": False,
+                    "motivo": motivo,
+                })
+                continue
 
         valore = mod.nuovo_valore
         if mod.campo in ("data_inizio", "data_fine"):

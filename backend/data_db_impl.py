@@ -913,6 +913,8 @@ def aggiungi_task(progetto_id, nome, fase, ore_stimate, data_inizio, data_fine,
     Errori:
       ValueError se:
         - la stringa `fase` non matcha nessuna Fase del progetto;
+        - `stato` è "In corso" e `dipendente_id` è vuoto (Step 4, 06/08/2026:
+          un task non entra in lavorazione senza assegnatario);
         - una delle dipendenze punta a un task inesistente (FK orfana);
         - una delle dipendenze ha task_predecessore_id == new_id (self-loop);
         - tipo_dipendenza non è in TIPI_DIPENDENZA;
@@ -948,6 +950,31 @@ def aggiungi_task(progetto_id, nome, fase, ore_stimate, data_inizio, data_fine,
         raise ValueError(
             f"Fase '{fase}' non trovata nel progetto '{progetto_id}'. "
             f"Le fasi vanno create prima dei task."
+        )
+
+    # Step 4 sottotask (06/08/2026): un task NON entra in lavorazione senza
+    # assegnatario. `stato` è client-settable (NuovoTask.stato, DTO dei router),
+    # quindi un task può NASCERE "In corso" saltando del tutto `modifica_task`:
+    # senza questo check la regola avrebbe una porta di servizio aperta.
+    #
+    # L'obbligo scatta SOLO su "In corso" e SOLO qui e nei due router del
+    # Cantiere. Non sta in `modifica_task` di proposito: quella funzione è
+    # chiamata anche dalla propagazione di `salva_consuntivo`, dove a scrivere
+    # è il DIPENDENTE che dichiara «ci sto lavorando». Bloccare lì punirebbe
+    # chi il lavoro lo sta facendo per una lacuna di pianificazione del PM.
+    # L'obbligo è di chi AVVIA il task, non di chi lo consuntiva.
+    #
+    # `not dipendente_id` copre insieme None e "" — il default del parametro è
+    # la stringa vuota e i router passano `nt.dipendente_id` grezzo (DTO
+    # `NuovoTask.dipendente_id: str = ""`): un `is None` mancherebbe il caso
+    # che si verifica davvero.
+    if stato == "In corso" and not dipendente_id:
+        session.close()
+        raise ValueError(
+            f"Il task '{nome}' non può nascere in stato 'In corso' senza "
+            f"assegnatario: un task che entra in lavorazione deve avere un "
+            f"responsabile. Assegna un dipendente, oppure crealo in "
+            f"'Da iniziare' e avvialo dopo averlo assegnato."
         )
 
     # Step 3.1: valida le dipendenze a monte — errori applicativi chiari,
