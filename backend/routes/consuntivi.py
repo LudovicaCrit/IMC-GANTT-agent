@@ -189,6 +189,18 @@ class SalvaConsuntivoRequest(BaseModel):
     # None = il chiamante non gestisce le note, non toccarle (stessa
     # convenzione di `spese`); chiave presente e vuota = cancella la nota.
     note_per_task: Optional[dict[str, str]] = None
+    # Avanzamento dichiarato sui SOTTOTASK: {sottotask_id: percentuale 0-100}.
+    # Step 4 (06/08/2026) — è l'input del motore ore-derivate: da qui NON
+    # arrivano ore, arrivano percentuali, e le ore le calcola il backend
+    # (Δpct × ore_stimate del sottotask) aggregandole sul task.
+    # Chiavi INT e non str come gli altri dizionari: `Sottotask.id` è un
+    # Integer, mentre task e progetti hanno id stringa. JSON manda comunque
+    # chiavi stringa e pydantic le converte — dichiararle int qui evita che la
+    # conversione la faccia a mano ogni lettore.
+    # Default {} e non None: a differenza di `note_per_task` e `spese` non
+    # esiste un «non gestisco questo campo, non toccarlo». Un avanzamento
+    # assente non è un dato da preservare, è un avanzamento non dichiarato.
+    avanzamenti_sottotask: dict[int, int] = {}
     # Presenze: None = «non gestisco questo campo, non toccarlo» (stessa
     # convenzione di `spese` e `note_per_task`). I default 3/2/0 di prima non
     # erano dati dichiarati ma un'ipotesi di comodo, e finivano scritti in DB a
@@ -240,6 +252,19 @@ class SalvaConsuntivoRequest(BaseModel):
                     f"(Da iniziare, Sospeso, Annullato) sono decisioni di "
                     f"pianificazione e si impostano dal Cantiere.",
                 )
+
+        # Range dell'avanzamento. Regola decidibile dal SOLO body → sta qui,
+        # per lo stesso criterio del blocco sopra. Senza, un 150 arriverebbe al
+        # CHECK ck_consuntivo_sottotask_percentuale come IntegrityError, cioè un
+        # 500 opaco su un errore del chiamante — la trappola che la nota di
+        # metodo qui sopra descrive per gli stati.
+        for sid, pct in self.avanzamenti_sottotask.items():
+            if pct < 0 or pct > 100:
+                raise HTTPException(
+                    400,
+                    f"Avanzamento {pct} non valido sul sottotask {sid}: "
+                    f"la percentuale va da 0 a 100.",
+                )
         return self
 
 
@@ -290,6 +315,121 @@ def _valida_blocchi_motivati(req: "SalvaConsuntivoRequest", settimana):
             f"salvata in questa settimana va bene: non serve rimandarla, ma "
             f"non si può svuotarla).",
         )
+
+
+def _valida_avanzamenti_sottotask(req: "SalvaConsuntivoRequest", settimana):
+    """Le due regole sull'avanzamento che il solo body non può decidere.
+
+    Step 4 (06/08/2026), motore ore-derivate. Stanno QUI e non nel DTO per il
+    criterio della nota di metodo sopra `SalvaConsuntivoRequest`: entrambe
+    hanno bisogno di sapere cosa c'è già in database. Il range 0-100, che
+    invece si decide dal solo payload, è rimasto nel DTO.
+
+    1. IL SOTTOTASK DEVE ESISTERE. Non è pedanteria: `ore_derivate_sottotask`
+       omette dal risultato le chiavi che non trova, quindi un id inventato
+       farebbe sparire l'avanzamento in silenzio, con un salvataggio che
+       risponde «ok» e non ha derivato niente.
+
+    2. NIENTE AVANZAMENTO SU UN SOTTOTASK ANNULLATO. Un pezzo annullato è
+       stato tolto dal piano — è la via che il Cantiere offre per cancellarlo
+       CONSERVANDO le dichiarazioni già fatte (vedi migration a3b4c5d6e7f8).
+       Dichiarare avanzamento sopra è contraddittorio, e soprattutto il form
+       non dovrebbe averlo proposto: è un errore del chiamante e prende 400.
+       I SOSPESI invece si accettano. La sospensione è una decisione di
+       pianificazione del PM; se il dipendente ci ha lavorato comunque, il
+       lavoro è successo, e rifiutarlo cancellerebbe ore reali per una scelta
+       presa da un altro. Stessa asimmetria di `scostamento_stime_sottotask`,
+       che esclude gli Annullati dalla somma e tiene i Sospesi.
+
+    3. MONOTONIA. Recuperare una settimana passata è ammesso
+       (`settimane_selezionabili` apre la precedente se incompleta), ma
+       l'avanzamento non può tornare indietro nel tempo: dichiarare oggi che
+       la settimana scorsa il pezzo era al 70% quando questa settimana risulta
+       al 40% descrive un lavoro che si è disfatto.
+       Serve la dichiarazione SUCCESSIVA, non la precedente — ed è la ragione
+       per cui la regola non può stare nel DTO né dentro il calcolo del Δ, che
+       guarda solo all'indietro.
+       È anche ciò che tiene il ricalcolo a costo fisso: con le percentuali
+       non-decrescenti, scrivere a W invalida la baseline di UNA sola settimana
+       (la prima dichiarata dopo W) e non innesca cascate.
+       Il confronto è per SOTTOTASK, non per dipendente, coerente con la
+       baseline del Δ: la percentuale descrive il pezzo, non chi la scrive.
+    """
+    if not req.avanzamenti_sottotask:
+        return
+
+    from models import Sottotask, ConsuntivoSottotask
+
+    ids = list(req.avanzamenti_sottotask)
+    session = get_session()
+    try:
+        noti = {
+            r.id: (r.nome, r.stato)
+            for r in session.query(Sottotask.id, Sottotask.nome, Sottotask.stato)
+            .filter(Sottotask.id.in_(ids)).all()
+        }
+
+        mancanti = [sid for sid in ids if sid not in noti]
+        if mancanti:
+            raise HTTPException(
+                400,
+                f"Sottotask inesistenti: {', '.join(map(str, sorted(mancanti)))}. "
+                f"L'avanzamento non può essere registrato su un pezzo che non "
+                f"c'è — ricarica il task e riprova.",
+            )
+
+        annullati = [f"{noti[sid][0]} (#{sid})" for sid in ids if noti[sid][1] == "Annullato"]
+        if annullati:
+            raise HTTPException(
+                400,
+                f"Avanzamento dichiarato su sottotask annullati: "
+                f"{', '.join(sorted(annullati))}. Un pezzo annullato è stato "
+                f"tolto dal piano e non si consuntiva. Se il lavoro è stato "
+                f"fatto davvero, il PM deve riportarlo in piano dal Cantiere.",
+            )
+
+        # Monotonia: la prima dichiarazione SUCCESSIVA con percentuale non-NULL.
+        # Una query sola per tutti i sottotask, ridotta in Python — stessa
+        # scelta (e stessa ragione) di `ore_derivate_sottotask`.
+        successive = (
+            session.query(
+                ConsuntivoSottotask.sottotask_id,
+                ConsuntivoSottotask.settimana,
+                ConsuntivoSottotask.percentuale,
+            )
+            .filter(
+                ConsuntivoSottotask.sottotask_id.in_(ids),
+                ConsuntivoSottotask.settimana > settimana,
+                ConsuntivoSottotask.percentuale.isnot(None),
+            )
+            .all()
+        )
+        # Il minimo fra le successive: se anche solo una è più indietro della
+        # percentuale in arrivo, la sequenza non è monotòna.
+        minimo_dopo = {}
+        for sid, sett, pct in successive:
+            if sid not in minimo_dopo or pct < minimo_dopo[sid][1]:
+                minimo_dopo[sid] = (sett, pct)
+
+        violazioni = []
+        for sid, pct in req.avanzamenti_sottotask.items():
+            dopo = minimo_dopo.get(sid)
+            if dopo is not None and pct > dopo[1]:
+                violazioni.append(
+                    f"'{noti[sid][0]}' al {pct}% mentre la settimana del "
+                    f"{dopo[0].isoformat()} è già dichiarata al {dopo[1]}%"
+                )
+
+        if violazioni:
+            raise HTTPException(
+                400,
+                f"Avanzamento incoerente col seguito: {'; '.join(violazioni)}. "
+                f"Una settimana passata non può risultare più avanti di una "
+                f"successiva: correggi la percentuale, oppure aggiorna prima "
+                f"la settimana più recente.",
+            )
+    finally:
+        session.close()
 
 
 # ── Router ───────────────────────────────────────────────────────────────
@@ -536,9 +676,10 @@ def salva_consuntivo_endpoint(
     # Dopo le guardie sulla settimana: la nota di un blocco si valuta sulla
     # settimana bersaglio, che qui è ormai decisa.
     _valida_blocchi_motivati(req, lun)
+    _valida_avanzamenti_sottotask(req, lun)
 
     if PERSISTENT_MODE:
-        ok = salva_consuntivo(
+        esito = salva_consuntivo(
             dipendente_id=req.dipendente_id,
             settimana=lun,
             ore_per_task=req.ore_per_task,
@@ -553,11 +694,21 @@ def salva_consuntivo_endpoint(
             # (vedi DTO). Il vecchio `req.spese if req.spese else None`
             # collassava [] su None, rendendo impossibile svuotare le spese.
             spese_lista=req.spese,
+            avanzamenti_sottotask=req.avanzamenti_sottotask,
         )
-        return {"salvato": ok, "dipendente": dip["nome"], "settimana": lun.isoformat()}
+        # `avvisi`: segnalazioni non bloccanti del motore ore-derivate (Step 4).
+        # Lista vuota nel caso normale — il campo c'è sempre, così il client non
+        # deve distinguere «assente» da «nessun avviso».
+        return {
+            "salvato": esito["ok"],
+            "dipendente": dip["nome"],
+            "settimana": lun.isoformat(),
+            "avvisi": esito["avvisi"],
+        }
     return {
         "salvato": True,
         "dipendente": dip["nome"],
         "settimana": lun.isoformat(),
+        "avvisi": [],
         "nota": "Dati non persistenti (db non attivo)",
     }

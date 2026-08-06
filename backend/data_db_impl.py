@@ -388,7 +388,7 @@ def scostamento_stime_sottotask(task_ids):
         session.close()
 
 
-def ore_derivate_sottotask(avanzamenti, settimana=None):
+def ore_derivate_sottotask(avanzamenti, settimana=None, session=None):
     """Ore derivate dall'avanzamento dichiarato su uno o più sottotask.
 
     Step 4 sottotask — STRATO 1 del motore ore-derivate (06/08/2026). Calcola e
@@ -437,6 +437,12 @@ def ore_derivate_sottotask(avanzamenti, settimana=None):
                  salvataggio la settimana è una, e il ricalcolo di una settimana
                  diversa (quella la cui baseline è stata invalidata) è una
                  SECONDA chiamata, non un caso da infilare qui.
+    session:     se fornita, si riusa quella e NON la si chiude — pattern di
+                 `genera_id_task_multipli`. Serve al caso transazionale: dentro
+                 `salva_consuntivo` le righe ConsuntivoSottotask appena scritte
+                 non sono ancora committate, e una sessione nuova (cioè
+                 un'altra connessione) non le vedrebbe. Il Δ si calcolerebbe
+                 sulla storia com'era PRIMA del salvataggio, in silenzio.
 
     FIRMA BATCH, come `scostamento_stime_sottotask` — una chiamata, due query,
     nessun N+1. Il motore vero processerà tutti i sottotask di un salvataggio in
@@ -493,7 +499,8 @@ def ore_derivate_sottotask(avanzamenti, settimana=None):
     sett = _lunedi(settimana)
     ids = list(avanzamenti)
 
-    session = get_session()
+    propria = session is None
+    session = session or get_session()
     try:
         # 1) Anagrafica dei sottotask: task padre e stima. Una query.
         righe = (
@@ -584,7 +591,10 @@ def ore_derivate_sottotask(avanzamenti, settimana=None):
             }
         return out
     finally:
-        session.close()
+        # Solo se l'abbiamo aperta noi: chiudere la sessione del chiamante
+        # farebbe scadere i suoi oggetti a metà transazione.
+        if propria:
+            session.close()
 
 
 def tasso_compilazione_progetto(pid):
@@ -1480,7 +1490,8 @@ def _nota_task(testo):
 def salva_consuntivo(dipendente_id, settimana, ore_per_task, stati_per_task,
                      giorni_sede=None, giorni_remoto=None,
                      ore_assenza=None, tipo_assenza=None, nota_assenza=None,
-                     spese_lista=None, note_per_task=None):
+                     spese_lista=None, note_per_task=None,
+                     avanzamenti_sottotask=None):
     """
     Salva il consuntivo settimanale completo di un dipendente.
 
@@ -1529,10 +1540,225 @@ def salva_consuntivo(dipendente_id, settimana, ore_per_task, stati_per_task,
     entrambe nel range lun..dom e si sommano: 6h corrette in 8h diventavano
     14h. Stesso meccanismo su PresenzaSettimanale (UNIQUE dip+settimana).
     """
-    from models import PresenzaSettimanale, Spesa
+    from models import PresenzaSettimanale, Spesa, Sottotask, ConsuntivoSottotask
 
     session = get_session()
     settimana_date = _lunedi(settimana)
+    avanzamenti_sottotask = avanzamenti_sottotask or {}
+    avvisi = []          # segnalazioni non bloccanti, tornano al chiamante
+
+    # 0) AVANZAMENTO SUI SOTTOTASK — si scrive PRIMA del ciclo sui task.
+    # L'ordine non è di comodo: le ore del task sono DERIVATE da queste righe,
+    # e il calcolo del Δ (`ore_derivate_sottotask`) deve poterle già leggere.
+    # Tutto nella stessa sessione e nello stesso commit del ciclo: se le
+    # dichiarazioni finissero in una transazione separata, un errore a metà
+    # lascerebbe scritto l'avanzamento e non le ore che ne discendono.
+    #
+    # Upsert manuale sulla UNIQUE (sottotask, dipendente, settimana), identico
+    # nella forma a quello su Consuntivo poco sotto: ricompilare la stessa
+    # settimana AGGIORNA la riga, non ne aggiunge una seconda. È lo stesso bug
+    # dei duplicati descritto in fondo a questa docstring, e la UNIQUE lo
+    # intercetta solo perché la settimana è già normalizzata al lunedì.
+    #
+    # `stato_dichiarato` e `nota` della riga-sottotask restano NULL: oggi il
+    # form manda solo l'avanzamento. Le colonne esistono (migration
+    # f2a3b4c5d6e7) e verranno riempite quando il form le porterà.
+    for sottotask_id, percentuale in avanzamenti_sottotask.items():
+        riga = session.query(ConsuntivoSottotask).filter(
+            ConsuntivoSottotask.sottotask_id == sottotask_id,
+            ConsuntivoSottotask.dipendente_id == dipendente_id,
+            ConsuntivoSottotask.settimana == settimana_date,
+        ).first()
+        if riga:
+            riga.percentuale = percentuale
+            riga.compilato = True
+            riga.data_compilazione = datetime.utcnow()
+        else:
+            session.add(ConsuntivoSottotask(
+                sottotask_id=sottotask_id,
+                dipendente_id=dipendente_id,
+                settimana=settimana_date,
+                percentuale=percentuale,
+                compilato=True,
+                data_compilazione=datetime.utcnow(),
+            ))
+
+    # Flush e non commit: le righe diventano visibili alle query successive
+    # DENTRO questa transazione — che è ciò che serve alla derivazione — senza
+    # rendere definitivo niente finché il salvataggio non è completo.
+    derivate_per_task = {}
+    if avanzamenti_sottotask:
+        session.flush()
+
+        # 0-bis) DERIVAZIONE E AGGREGAZIONE SUL TASK.
+        #
+        # SI RIPARTE DAL DATABASE, NON DAL PAYLOAD. Le ore del task si
+        # ricalcolano sommando TUTTE le dichiarazioni di questo dipendente su
+        # quel task in quella settimana, comprese quelle di salvataggi
+        # precedenti che il body corrente non ripete. È obbligatorio, non
+        # prudenziale: l'upsert sotto ASSEGNA (`existing.ore_dichiarate = ore`)
+        # invece di sommare, quindi aggregare i soli sottotask del payload
+        # cancellerebbe le ore derivate dagli altri. Compilo A (5h), poi
+        # ri-apro la settimana e tocco solo B (3h): senza questo, il task
+        # passerebbe da 5 a 3 invece che a 8.
+        task_dei_sottotask = {
+            r.task_id
+            for r in session.query(Sottotask.task_id)
+            .filter(Sottotask.id.in_(list(avanzamenti_sottotask))).all()
+        }
+        dichiarazioni = (
+            session.query(
+                ConsuntivoSottotask.sottotask_id,
+                ConsuntivoSottotask.percentuale,
+            )
+            .join(Sottotask, Sottotask.id == ConsuntivoSottotask.sottotask_id)
+            .filter(
+                Sottotask.task_id.in_(task_dei_sottotask),
+                ConsuntivoSottotask.dipendente_id == dipendente_id,
+                ConsuntivoSottotask.settimana == settimana_date,
+            )
+            .all()
+        )
+
+        derivate = ore_derivate_sottotask(
+            {sid: pct for sid, pct in dichiarazioni},
+            settimana_date,
+            session=session,
+        )
+
+        non_derivabili = []
+        for sottotask_id, calcolo in derivate.items():
+            if calcolo["ore"] is None:
+                # Avanzamento dichiarato su un pezzo senza stima: non si deriva
+                # nulla e NON si somma zero. Vedi la nota sul sentinella in
+                # `ore_derivate_sottotask` — sommare 0 farebbe sparire lavoro
+                # reale senza che nessuno se ne accorga.
+                non_derivabili.append(sottotask_id)
+                continue
+            tid = calcolo["task_id"]
+            derivate_per_task[tid] = derivate_per_task.get(tid, 0.0) + calcolo["ore"]
+
+        derivate_per_task = {t: round(o, 1) for t, o in derivate_per_task.items()}
+
+        if non_derivabili:
+            nomi = dict(
+                session.query(Sottotask.id, Sottotask.nome)
+                .filter(Sottotask.id.in_(non_derivabili)).all()
+            )
+            for sottotask_id in sorted(non_derivabili):
+                avvisi.append(
+                    f"Sottotask '{nomi.get(sottotask_id, sottotask_id)}': "
+                    f"avanzamento registrato ma ore non derivate, manca "
+                    f"`ore_stimate`. Chiedi al PM di stimare il pezzo dal "
+                    f"Cantiere; le ore si ricalcoleranno alla prossima "
+                    f"dichiarazione."
+                )
+
+        # 0-ter) RICALCOLO DELLA SETTIMANA A VALLE.
+        #
+        # Scrivere un avanzamento a W cambia la BASELINE di chi viene dopo, e
+        # le ore già derivate a valle diventano sbagliate. Il caso reale è il
+        # recupero: `settimane_selezionabili` riapre la settimana precedente se
+        # incompleta, quindi si compila W, poi si torna su W−1.
+        #   W dichiarato 60% con baseline 0   → 60% delle ore, scritto.
+        #   poi W−1 dichiarato 40%            → 40% delle ore.
+        #   ma ora il Δ giusto di W è 60−40 = 20%, non 60%.
+        # Senza questo blocco resterebbero in DB 60%+40% = 100% delle ore per
+        # un pezzo dichiarato al 60%. Non è un arrotondamento: è il 67% in più.
+        #
+        # SI RICALCOLA UNA SOLA SETTIMANA, non una cascata — ed è la MONOTONIA
+        # imposta in `routes/consuntivi._valida_avanzamenti_sottotask` a
+        # garantirlo. Inserire una dichiarazione a W invalida la baseline della
+        # PRIMA settimana dichiarata dopo W, e basta: le successive hanno per
+        # baseline quella, il cui VALORE non è cambiato (è cambiato solo il suo
+        # Δ). Niente propagazione, niente ricorsione.
+        #
+        # Il ricalcolo usa `ore_stimate` CORRENTE, non quella di allora: il
+        # motore è agnostico al passato, e la fotografia storica è compito del
+        # SAL (`_serializza_stato_progetto`), che è autocontenuto apposta.
+        successive = (
+            session.query(
+                ConsuntivoSottotask.sottotask_id,
+                ConsuntivoSottotask.settimana,
+                Sottotask.task_id,
+            )
+            .join(Sottotask, Sottotask.id == ConsuntivoSottotask.sottotask_id)
+            .filter(
+                ConsuntivoSottotask.sottotask_id.in_(list(avanzamenti_sottotask)),
+                ConsuntivoSottotask.settimana > settimana_date,
+                ConsuntivoSottotask.percentuale.isnot(None),
+            )
+            .all()
+        )
+        # La PRIMA settimana dichiarata dopo W, per sottotask → l'insieme delle
+        # coppie (task, settimana) da rifare. Due sottotask dello stesso task
+        # con la stessa settimana a valle collassano in una coppia sola.
+        prima_dopo = {}
+        for sid, sett_dopo, tid in successive:
+            if sid not in prima_dopo or sett_dopo < prima_dopo[sid][0]:
+                prima_dopo[sid] = (sett_dopo, tid)
+        da_rifare = {(tid, sett_dopo) for sett_dopo, tid in prima_dopo.values()}
+
+        for tid, sett_dopo in sorted(da_rifare):
+            # TUTTE le dichiarazioni su quel task in quella settimana, non solo
+            # quelle dei sottotask toccati oggi: la riga Consuntivo che stiamo
+            # per riscrivere le aggrega tutte, e ricalcolarne una parte
+            # cancellerebbe il resto (stessa ragione della rilettura dal DB
+            # nel blocco 0-bis).
+            righe_dopo = (
+                session.query(
+                    ConsuntivoSottotask.sottotask_id,
+                    ConsuntivoSottotask.dipendente_id,
+                    ConsuntivoSottotask.percentuale,
+                )
+                .join(Sottotask, Sottotask.id == ConsuntivoSottotask.sottotask_id)
+                .filter(
+                    Sottotask.task_id == tid,
+                    ConsuntivoSottotask.settimana == sett_dopo,
+                )
+                .all()
+            )
+            # Raggruppate per DIPENDENTE: la grana di Consuntivo è (task,
+            # dipendente, settimana), e chi ha dichiarato a valle può non essere
+            # chi sta salvando adesso — un sottotask può avere un assegnatario
+            # proprio in override (Sottotask.dipendente_id). Si riscrive la riga
+            # di ciascuno, non quella di chi ha in mano il form.
+            per_dipendente = {}
+            for sid, did, pct in righe_dopo:
+                per_dipendente.setdefault(did, {})[sid] = pct
+
+            for did, mappa in per_dipendente.items():
+                ricalcolo = ore_derivate_sottotask(mappa, sett_dopo, session=session)
+                totale = round(sum(
+                    c["ore"] for c in ricalcolo.values() if c["ore"] is not None
+                ), 1)
+
+                riga_cons = session.query(Consuntivo).filter(
+                    Consuntivo.task_id == tid,
+                    Consuntivo.dipendente_id == did,
+                    Consuntivo.settimana == sett_dopo,
+                ).first()
+                if riga_cons:
+                    riga_cons.ore_dichiarate = totale
+                else:
+                    # Non dovrebbe capitare — se ci sono dichiarazioni a valle
+                    # la riga esiste — ma se manca la si crea invece di perdere
+                    # le ore. `compilato=True` perché una dichiarazione sui
+                    # sottotask È una compilazione.
+                    session.add(Consuntivo(
+                        task_id=tid,
+                        dipendente_id=did,
+                        settimana=sett_dopo,
+                        ore_dichiarate=totale,
+                        compilato=True,
+                        data_compilazione=datetime.utcnow(),
+                    ))
+
+    # Le DERIVATE VINCONO sulle ore dichiarate a mano per lo stesso task: se un
+    # task è stato scomposto, la verità sulle sue ore è la somma dei pezzi.
+    # Dizionario NUOVO e non mutazione: `ore_per_task` appartiene al chiamante,
+    # e la route lo rilegge dal DTO.
+    ore_per_task = {**ore_per_task, **derivate_per_task}
 
     # 1) Salva/aggiorna ore, stato e nota per ogni task.
     # Si itera sull'UNIONE delle chiavi dei tre dizionari, non su ore_per_task:
@@ -1566,7 +1792,17 @@ def salva_consuntivo(dipendente_id, settimana, ore_per_task, stati_per_task,
         # La guardia serve ancora: il form manda a 0 anche i task su cui non
         # si è lavorato, e senza di essa ogni salvataggio creerebbe una riga
         # vuota per ciascuno.
-        if not stato and not nota_pervenuta and not ore:
+        #
+        # `task_id not in derivate_per_task` è il quarto termine (Step 4): un
+        # task le cui uniche dichiarazioni stanno sui SOTTOTASK deve entrare
+        # comunque. Le sue ore derivate valgono legittimamente 0.0 — Δ=0 vuol
+        # dire «questa settimana il pezzo non è avanzato», che è una
+        # dichiarazione, non un silenzio — e senza questo termine `not ore`
+        # sarebbe vero e la riga Consuntivo non verrebbe mai scritta. La
+        # settimana risulterebbe non compilata su quel task pur avendo il
+        # dipendente mosso (o volutamente non mosso) lo slider.
+        if (not stato and not nota_pervenuta and not ore
+                and task_id not in derivate_per_task):
             continue
 
         # motivo_fermo è un flag, non un archivio: va RIALLINEATO a ogni
@@ -1719,7 +1955,15 @@ def salva_consuntivo(dipendente_id, settimana, ore_per_task, stati_per_task,
             continue
         modifica_task(task_id, stato=stato)
 
-    return True
+    # Ritorno DICT e non più `True` (Step 4, 06/08/2026). Serviva un canale per
+    # gli avvisi non bloccanti — oggi: avanzamento dichiarato su un sottotask
+    # senza `ore_stimate`, che non si può derivare. Sono casi in cui il
+    # salvataggio RIESCE e va detto lo stesso: rifiutarlo con 400 farebbe
+    # pagare al dipendente una stima che manca al PM, e ingoiarli in silenzio
+    # farebbe sparire ore davvero lavorate.
+    # `ok` conserva esattamente la semantica del vecchio booleano, così la
+    # route continua a esporre `salvato` con lo stesso significato.
+    return {"ok": True, "avvisi": avvisi}
 
 # ══════════════════════════════════════════════════════════════════════
 # SAL — snapshot storico del GANTT (DESIGN_SAL.md)
