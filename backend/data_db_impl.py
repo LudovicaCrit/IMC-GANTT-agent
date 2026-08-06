@@ -388,6 +388,71 @@ def scostamento_stime_sottotask(task_ids):
         session.close()
 
 
+def _baseline_percentuali(session, sottotask_ids, settimana):
+    """{sottotask_id: percentuale} dell'ultima dichiarazione PRECEDENTE a `settimana`.
+
+    Step 4 (06/08/2026). È la definizione — unica — di «da dove riparte
+    l'avanzamento», e sta in una funzione a sé perché la usano in due:
+    `ore_derivate_sottotask`, che ci calcola il Δ, e `task_settimana_dipendente`,
+    che la manda al frontend come punto di partenza dello slider. Se le due
+    copie divergessero, il dipendente vedrebbe un cursore che parte da un valore
+    e ore calcolate da un altro — e non avrebbe alcun modo di accorgersene.
+
+    I sottotask senza storia non compaiono nel dict: il chiamante usa
+    `.get(sid, 0)`, cioè «prima dichiarazione, si parte da zero».
+
+    PER SOTTOTASK, NON PER DIPENDENTE. La percentuale descrive il PEZZO («a che
+    punto è»), non la persona. La grana di ConsuntivoSottotask include il
+    dipendente perché la DICHIARAZIONE ha un autore, ma il fatto dichiarato è
+    del pezzo: cercando la baseline per (sottotask, dipendente) ogni passaggio
+    di consegne produrrebbe una falsa prima dichiarazione, e su un pezzo già
+    portato al 60% il nuovo assegnatario rideriverebbe da zero.
+
+    Le righe con `percentuale` NULL non fanno baseline: sono di chi si è
+    espresso sullo stato e non sull'avanzamento. Senza il filtro diventerebbero
+    una baseline fantasma a 0.
+
+    Se nella settimana-baseline ci sono più dichiarazioni non-NULL (possibile:
+    la UNIQUE è per sottotask+dipendente+settimana), vince la percentuale PIÙ
+    ALTA — il pezzo è avanzato almeno quanto la dichiarazione più avanti, e una
+    baseline più alta dà un Δ più piccolo: sbaglia dalla parte di derivare MENO
+    ore, mai di più.
+
+    Una query sola, ridotta in Python: non una per sottotask (N+1) e non una
+    window function, che il fallback SQLite di `data.py` non garantisce. Le
+    righe in gioco sono poche — una per persona per settimana, sulla vita di un
+    sottotask.
+    """
+    from models import ConsuntivoSottotask
+
+    if not sottotask_ids:
+        return {}
+
+    storiche = (
+        session.query(
+            ConsuntivoSottotask.sottotask_id,
+            ConsuntivoSottotask.settimana,
+            ConsuntivoSottotask.percentuale,
+        )
+        .filter(
+            ConsuntivoSottotask.sottotask_id.in_(list(sottotask_ids)),
+            ConsuntivoSottotask.settimana < settimana,
+            ConsuntivoSottotask.percentuale.isnot(None),
+        )
+        .all()
+    )
+
+    migliore = {}      # sottotask_id → (settimana, percentuale)
+    for sid, sett_storica, pct in storiche:
+        corrente = migliore.get(sid)
+        if corrente is None or sett_storica > corrente[0]:
+            migliore[sid] = (sett_storica, pct)
+        elif sett_storica == corrente[0] and pct > corrente[1]:
+            migliore[sid] = (sett_storica, pct)
+
+    return {sid: pct for sid, (_sett, pct) in migliore.items()}
+
+
 def ore_derivate_sottotask(avanzamenti, settimana=None, session=None):
     """Ore derivate dall'avanzamento dichiarato su uno o più sottotask.
 
@@ -512,38 +577,11 @@ def ore_derivate_sottotask(avanzamenti, settimana=None, session=None):
         if not anagrafica:
             return {}
 
-        # 2) Baseline: tutte le dichiarazioni non-NULL PRECEDENTI, in una query
-        # sola, ridotte poi in Python. Non una query per sottotask (N+1), e non
-        # una window function: il fallback SQLite di `data.py` non è un dialetto
-        # su cui contare, e le righe in gioco sono poche — una per persona per
-        # settimana, sulla vita di un sottotask.
-        storiche = (
-            session.query(
-                ConsuntivoSottotask.sottotask_id,
-                ConsuntivoSottotask.settimana,
-                ConsuntivoSottotask.percentuale,
-            )
-            .filter(
-                ConsuntivoSottotask.sottotask_id.in_(list(anagrafica)),
-                ConsuntivoSottotask.settimana < sett,
-                # Una riga con percentuale NULL non è una baseline: è qualcuno
-                # che si è espresso sullo stato e non sull'avanzamento. Senza
-                # questo filtro diventerebbe una baseline fantasma a 0 e
-                # rideriverebbe da capo tutto l'avanzamento precedente.
-                ConsuntivoSottotask.percentuale.isnot(None),
-            )
-            .all()
-        )
-
-        # Riduzione: per ogni sottotask la settimana più recente, e dentro
-        # quella la percentuale più alta (vedi docstring).
-        baseline = {}      # sottotask_id → (settimana, percentuale)
-        for sid, sett_storica, pct in storiche:
-            corrente = baseline.get(sid)
-            if corrente is None or sett_storica > corrente[0]:
-                baseline[sid] = (sett_storica, pct)
-            elif sett_storica == corrente[0] and pct > corrente[1]:
-                baseline[sid] = (sett_storica, pct)
+        # 2) Baseline — la regola vive in `_baseline_percentuali`, condivisa con
+        # `task_settimana_dipendente`: il frontend deve mostrare allo slider
+        # ESATTAMENTE il punto da cui il motore calcolerà il Δ, e due copie
+        # della stessa riduzione finirebbero per rispondere due cose diverse.
+        baseline = _baseline_percentuali(session, list(anagrafica), sett)
 
         out = {}
         for sid in ids:
@@ -551,7 +589,7 @@ def ore_derivate_sottotask(avanzamenti, settimana=None, session=None):
                 continue                      # inesistente: chiave omessa
             task_id, stima = anagrafica[sid]
             pct = avanzamenti[sid]
-            base = baseline.get(sid, (None, 0))[1]
+            base = baseline.get(sid, 0)
 
             # Slider fermo: nessuna derivazione, e la stima mancante non si
             # segnala (vedi PRECEDENZA DEI CONTROLLI).
@@ -825,6 +863,7 @@ def task_settimana_dipendente(dipendente_id, settimana=None):
     """
     from sqlalchemy.orm import joinedload
     from sqlalchemy import func, or_, and_
+    from models import Sottotask, ConsuntivoSottotask
 
     lun = _lunedi(settimana)
     fine_sett = lun + timedelta(days=6)  # lun..dom, come /me e /settimana
@@ -875,8 +914,89 @@ def task_settimana_dipendente(dipendente_id, settimana=None):
                 .group_by(Consuntivo.task_id)
                 .all()
             )
+
+        # ── SOTTOTASK (Step 4, 06/08/2026) ───────────────────────────────
+        # Tre query per TUTTI i task insieme, non tre per task: la pagina di un
+        # dipendente con dieci task farebbe altrimenti trenta round-trip. Stesso
+        # pattern dell'aggregata `tot_rows` qui sopra e di
+        # `scostamento_stime_sottotask`.
+        #
+        # Gli ANNULLATI restano fuori dalla lista: `salva_consuntivo` rifiuta con
+        # 400 un avanzamento su un pezzo annullato, e mostrarlo nel form vorrebbe
+        # dire offrire uno slider che al salvataggio esplode. I SOSPESI invece
+        # restano — la sospensione è una decisione di piano del PM, ma se il
+        # dipendente ci ha lavorato le sue ore vanno dichiarabili (stessa
+        # asimmetria di `scostamento_stime_sottotask` e della validazione).
+        sottotask_rows = []
+        dich_sottotask = {}
+        baseline_sottotask = {}
+        if task_ids:
+            sottotask_rows = (
+                session.query(Sottotask)
+                .filter(
+                    Sottotask.task_id.in_(task_ids),
+                    Sottotask.stato != "Annullato",
+                )
+                .order_by(Sottotask.ordine, Sottotask.id)
+                .all()
+            )
+            sottotask_ids = [s.id for s in sottotask_rows]
+
+            if sottotask_ids:
+                # Dichiarazioni di QUESTO dipendente in QUESTA settimana: è ciò
+                # che ri-popola il form quando si riapre una settimana già
+                # compilata. Per dipendente e non per pezzo, a differenza della
+                # baseline: qui la domanda è «cosa ho scritto io», non «a che
+                # punto è il pezzo».
+                for r in (
+                    session.query(ConsuntivoSottotask)
+                    .filter(
+                        ConsuntivoSottotask.sottotask_id.in_(sottotask_ids),
+                        ConsuntivoSottotask.dipendente_id == dipendente_id,
+                        ConsuntivoSottotask.settimana >= lun,
+                        ConsuntivoSottotask.settimana <= fine_sett,
+                    )
+                    .all()
+                ):
+                    dich_sottotask[r.sottotask_id] = r
+
+                # Baseline: stessa identica funzione che il motore userà per
+                # calcolare il Δ al salvataggio. Il cursore deve partire dal
+                # punto da cui partirà il conto, non da un numero che gli
+                # somiglia.
+                baseline_sottotask = _baseline_percentuali(
+                    session, sottotask_ids, lun
+                )
     finally:
         session.close()
+
+    # Sottotask raggruppati per task padre, nell'ordine già stabilito dalla
+    # query (ordine, id): il dict conserva l'ordine di inserimento.
+    sottotask_per_task = {}
+    for s in sottotask_rows:
+        d = dich_sottotask.get(s.id)
+        sottotask_per_task.setdefault(s.task_id, []).append({
+            "id": s.id,
+            "nome": s.nome,
+            "ore_stimate": s.ore_stimate,
+            "ordine": s.ordine,
+            # stato di PIANIFICAZIONE (Da iniziare/Sospeso), non l'avanzamento:
+            # quello è `stato_dichiarato`, che sta due righe sotto ed è un asse
+            # diverso. Vedi il commento su Sottotask.stato in models.
+            "stato": s.stato,
+            # Assegnatario RISOLTO — `sottotask.dipendente_id or task.dipendente_id`.
+            # Si espone il risolto e non l'override grezzo perché la domanda del
+            # form è una sola: «questo pezzo è mio?». Chi ha l'override viene
+            # riempito nel ciclo sotto, dove il task padre è a portata di mano.
+            "assegnatario_id": s.dipendente_id,
+            # Dichiarazione di questa settimana, o None se non pervenuta.
+            "percentuale": d.percentuale if d else None,
+            "stato_dichiarato": d.stato_dichiarato if d else None,
+            "nota": d.nota if d else None,
+            "ore_effettive": d.ore_effettive if d else None,
+            # Da dove riparte l'avanzamento: 0 = mai dichiarato prima.
+            "baseline_pct": baseline_sottotask.get(s.id, 0),
+        })
 
     consumate_per_task = {}
     note_per_task = {}
@@ -964,6 +1084,24 @@ def task_settimana_dipendente(dipendente_id, settimana=None):
             # dichiarazione. Solo questo può essere attribuito a lui.
             "stato_dichiarato": stato_dichiarato_per_task.get(t.id),
         })
+
+        # `sottotask` compare SOLO sui task scomposti — la chiave assente è essa
+        # stessa l'informazione «questo task si compila come sempre», e il
+        # frontend distingue i due render dalla sua presenza. È la convenzione
+        # di `scostamento_stime_sottotask` (chiave assente = niente da dire), e
+        # tiene il payload dei task non scomposti IDENTICO a prima: nessun
+        # consumatore esistente vede comparire un campo nuovo.
+        pezzi = sottotask_per_task.get(t.id)
+        if pezzi:
+            # Risoluzione dell'assegnatario, qui e non nella comprehension
+            # sopra: serve `Task.dipendente_id`, che è disponibile solo dentro
+            # questo ciclo. `or` e non `if is None`: un override a stringa vuota
+            # (FK invalida per Postgres, ma scrivibile da un client distratto)
+            # deve ricadere sull'eredità come farebbe un NULL.
+            out[-1]["sottotask"] = [
+                {**p, "assegnatario_id": p["assegnatario_id"] or t.dipendente_id}
+                for p in pezzi
+            ]
     return out
 
 
