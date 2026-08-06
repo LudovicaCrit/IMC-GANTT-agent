@@ -449,8 +449,13 @@ def modifica_task_singolo(
     # Validazione coerenza date (Step 2.4-bis §14.2)
     # Se modifico almeno una delle due date, devo verificare la coerenza con la fase
     if "data_inizio" in kwargs or "data_fine" in kwargs:
-        from models import get_session as _gs, Task, Fase
-        session = _gs()
+        # Solo `Fase`: `Task` e `get_session` arrivano dall'import di modulo
+        # (riga 101). Reimportarli QUI li renderebbe locali all'INTERA funzione
+        # — Python decide lo scope per funzione, non per blocco — e la guardia
+        # assegnatario più sotto troverebbe `Task` non inizializzato ogni volta
+        # che questo ramo non gira, cioè su ogni PATCH senza date.
+        from models import Fase
+        session = get_session()
         try:
             task_row = session.query(Task).filter(Task.id == task_id).first()
             if not task_row:
