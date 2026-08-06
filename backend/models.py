@@ -528,7 +528,8 @@ class Sottotask(Base):
     Cosa NON ha, per scelta:
       - date proprie: eredita la finestra temporale del task padre.
       - assegnatario proprio: l'assegnazione resta a livello di task
-        (`Assegnazione`), il sottotask non ripartisce le persone.
+        (`Task.dipendente_id`, unica sorgente dallo Step 4 — 06/08/2026), il
+        sottotask non ripartisce le persone.
 
     `ore_stimate` porta lo stesso nome e la stessa filosofia di
     `Task.ore_stimate` (convenzione R1): stima del PM, ore intere, regno
@@ -564,6 +565,22 @@ class Sottotask(Base):
 # ══════════════════════════════════════════════════════════════════════
 
 class Assegnazione(Base):
+    """MONCONE — fuori dal giro dallo Step 4 sottotask (06/08/2026).
+
+    Era la seconda sorgente di «chi fa questo lavoro», accanto a
+    `Task.dipendente_id`. Due sorgenti per un fatto solo, e solo una mantenuta:
+    `modifica_task` aggiorna la colonna sul task e non ha mai toccato questa
+    tabella, quindi ogni riassegnazione dal Cantiere la faceva divergere.
+
+    Oggi `Task.dipendente_id` è l'unica verità. Nessuno legge più questa
+    tabella (l'unico lettore era `progetti_attivi_visibili`, spostato) e
+    nessuno la scrive più (`aggiungi_task`, i tre punti del wizard in
+    routes/progetti.py e il seed, tutti potati).
+
+    Le righe storiche restano dove sono, morte e innocue. Il DROP della
+    tabella — con la migration che serve — è rimandato a una sessione di
+    pulizia monconi dedicata: non tenerla in vita, non usarla per niente.
+    """
     __tablename__ = "assegnazioni"
 
     id = Column(Integer, primary_key=True, autoincrement=True)

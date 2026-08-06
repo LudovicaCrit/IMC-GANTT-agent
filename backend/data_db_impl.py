@@ -5,7 +5,7 @@ Stessa interfaccia pubblica di data_legacy.py.
 
 from datetime import datetime, timedelta, date
 from models import (
-    get_session, Dipendente, Progetto, Task, Assegnazione,
+    get_session, Dipendente, Progetto, Task,
     Consuntivo, Segnalazione,
 )
 
@@ -116,13 +116,28 @@ def progetti_attivi_visibili(current_user):
       - altrimenti → UNIONE (senza duplicati) di:
           a) progetti attivi di cui è PM (Progetto.pm_id == dipendente_id);
           b) progetti attivi con almeno un task assegnato a lui
-             (Assegnazione.dipendente_id == dipendente_id), anche se il PM è
-             un altro. Così un membro vede i progetti su cui lavora, non solo
-             quelli che dirige.
+             (Task.dipendente_id == dipendente_id), anche se il PM è un altro.
+             Così un membro vede i progetti su cui lavora, non solo quelli che
+             dirige.
 
     NB: il confronto è con `dipendente_id` (FK a dipendenti), NON con
     `current_user.id` (PK di utenti, dominio diverso): sbagliarlo darebbe un
     filtro che non matcha mai, silenziosamente.
+
+    Step 4 sottotask (06/08/2026) — il ramo (b) leggeva la tabella
+    `Assegnazione` con un secondo join. Ora legge `Task.dipendente_id`, che è
+    l'UNICA verità sull'assegnazione. Erano due sorgenti per lo stesso fatto e
+    solo una veniva mantenuta: `modifica_task` aggiorna `Task.dipendente_id` e
+    non tocca `Assegnazione`, quindi ogni riassegnazione dal Cantiere faceva
+    divergere il mirror — un dipendente continuava a "vedere" il progetto da
+    cui era stato tolto, e non vedeva quello su cui era stato messo. Al momento
+    del taglio le due sorgenti erano ancora allineate (114 coppie identiche):
+    il drift era latente, non ancora materializzato. Il rischio si chiude
+    togliendo il secondo termine, non riparando il mirror.
+
+    La tabella resta in schema ma è fuori dal giro: nessuno la legge più,
+    nessuno la scrive più. Il DROP è rimandato a una sessione di pulizia
+    monconi dedicata.
 
     Ritorna list[str] (gli id progetto sono String(10)).
     """
@@ -146,10 +161,9 @@ def progetti_attivi_visibili(current_user):
         membro_q = (
             session.query(Progetto.id)
             .join(Task, Task.progetto_id == Progetto.id)
-            .join(Assegnazione, Assegnazione.task_id == Task.id)
             .filter(
                 Progetto.stato.in_(STATI_PROGETTO_ATTIVI),
-                Assegnazione.dipendente_id == did,
+                Task.dipendente_id == did,
             )
         )
         # Unione senza duplicati (un progetto può matchare entrambi i rami).
@@ -932,8 +946,11 @@ def aggiungi_task(progetto_id, nome, fase, ore_stimate, data_inizio, data_fine,
            DipendenzaTask successive (anche se SQLAlchemy ordina gli INSERT
            correttamente, il flush rende la sequenza esplicita);
         5. per ogni d in dipendenze: session.add(DipendenzaTask(...));
-        6. eventuale assegnazione dipendente;
-        7. session.commit() → INSERT cumulativo, transazione singola.
+        6. session.commit() → INSERT cumulativo, transazione singola.
+
+      Il passo «eventuale assegnazione dipendente» che stava fra il 5 e il 6 è
+      stato rimosso (Step 4, 06/08/2026): l'assegnatario è già su
+      `Task.dipendente_id`, unica sorgente. Vedi il commento a fine funzione.
     """
     from models import Fase, DipendenzaTask, TIPI_DIPENDENZA  # import locale per evitare cicli
 
@@ -1043,16 +1060,14 @@ def aggiungi_task(progetto_id, nome, fase, ore_stimate, data_inizio, data_fine,
             tipo_dipendenza=d.get("tipo_dipendenza", "FS"),
         ))
 
-    if dipendente_id:
-        existing_assegn = session.query(Assegnazione).filter(
-            Assegnazione.task_id == new_id,
-            Assegnazione.dipendente_id == dipendente_id
-        ).first()
-        if not existing_assegn:
-            session.add(Assegnazione(
-                task_id=new_id, dipendente_id=dipendente_id,
-                ore_assegnate=ore_stimate, ruolo="responsabile",
-            ))
+    # Step 4 sottotask (06/08/2026): qui si scriveva anche una riga
+    # `Assegnazione` che duplicava `Task.dipendente_id`, appena impostato sopra.
+    # Rimossa: l'assegnazione ha UNA sola sorgente, la colonna sul task. Il
+    # mirror non veniva mantenuto da nessun'altra parte (`modifica_task`
+    # aggiorna solo la colonna), quindi era destinato a divergere appena il PM
+    # riassegnava un task dal Cantiere. La tabella resta in schema con le sue
+    # righe storiche, ma nessuno la scrive né la legge più — vedi
+    # `progetti_attivi_visibili`, che era il suo unico lettore.
     session.commit()
     session.close()
     return new_id

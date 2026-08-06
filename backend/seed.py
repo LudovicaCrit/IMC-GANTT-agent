@@ -8,7 +8,7 @@ import pandas as pd
 
 from models import (
     create_tables, get_session,
-    Azienda, Dipendente, Progetto, Task, DipendenzaTask, Assegnazione, Consuntivo,
+    Azienda, Dipendente, Progetto, Task, DipendenzaTask, Consuntivo,
     Segnalazione, Ruolo, Competenza, DipendentiCompetenze, FaseStandard,
     Fase, Utente,
 )
@@ -293,17 +293,15 @@ def seed():
     print(f"  ✓ {n_nonfs} dipendenze task non-FS (SS/FF)")
 
     # ══════════════════════════════════════════════════════════════
-    # 9. ASSEGNAZIONI
+    # 9. ASSEGNAZIONI — rimosse (Step 4 sottotask, 06/08/2026)
     # ══════════════════════════════════════════════════════════════
-    for _, row in TASKS.iterrows():
-        if row["dipendente_id"]:
-            session.add(Assegnazione(
-                task_id=row["id"],
-                dipendente_id=row["dipendente_id"],
-                ore_assegnate=int(row["ore_stimate"]),
-                ruolo="responsabile",
-            ))
-    print(f"  ✓ assegnazioni create")
+    # Questo blocco copiava `TASKS.dipendente_id` dentro la tabella
+    # `assegnazioni`, cioè seminava a mano il mirror di un dato che il task
+    # porta già in colonna. L'assegnazione ha una sola sorgente,
+    # `Task.dipendente_id`, valorizzata al punto 7 insieme al resto del task.
+    # La tabella resta in schema (il DROP è rimandato a una pulizia dedicata)
+    # ma un DB fresco nasce senza righe: se il seed continuasse a popolarla,
+    # "nessuno la scrive più" sarebbe falso al primo `python seed.py`.
 
     # ══════════════════════════════════════════════════════════════
     # 10. CONSUNTIVI

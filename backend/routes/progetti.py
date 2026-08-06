@@ -74,7 +74,7 @@ DIPENDENZE
 - `data_db_impl`: `_next_progetto_id`, `genera_id_task_multipli`,
   `_reload` (vedi sopra), `_to_dt` (per format ISO datetime).
 - `models`: `get_session`, `Utente`, `Progetto`, `Fase`, `Task`,
-  `Assegnazione`, `STATI_PROGETTO`, `STATI_PROGETTO_ATTIVI`.
+  `DipendenzaTask`, `STATI_PROGETTO`, `STATI_PROGETTO_ATTIVI`.
 - `deps`: `require_manager`.
 
 STORIA
@@ -97,7 +97,7 @@ from sqlalchemy import func, case
 
 from deps import require_manager
 from models import (
-    get_session, Utente, Progetto, Fase, Task, Assegnazione, DipendenzaTask,
+    get_session, Utente, Progetto, Fase, Task, DipendenzaTask,
     STATI_PROGETTO, STATI_PROGETTO_ATTIVI,
 )
 from data import ore_consuntivate_progetto, tasso_compilazione_progetto
@@ -476,13 +476,11 @@ def crea_progetto_completo(req: ProgettoCompletoCreate, _: Utente = Depends(requ
             )
             session.add(task)
 
-            # Assegnazione: stesso comportamento di aggiungi_task() in
-            # data_db_impl — se c'è un dipendente, gli si assegna il task.
-            if t.dipendente_id:
-                session.add(Assegnazione(
-                    task_id=task_id, dipendente_id=t.dipendente_id,
-                    ore_assegnate=t.ore_stimate, ruolo="responsabile",
-                ))
+            # Step 4 sottotask (06/08/2026): qui seguiva una riga `Assegnazione`
+            # che duplicava `Task.dipendente_id`, appena impostato sopra.
+            # Rimossa — l'assegnazione ha una sola sorgente, la colonna sul
+            # task. Stessa potatura in `aggiungi_task` (data_db_impl), di cui
+            # questo blocco replicava il comportamento.
 
         # ── 4. Commit unico: o tutto, o niente ───────────────────────────
         session.commit()
@@ -653,11 +651,8 @@ def completa_progetto(progetto_id: str, req: ProgettoCompletoCreate,
             )
             session.add(task)
 
-            if t.dipendente_id:
-                session.add(Assegnazione(
-                    task_id=task_id, dipendente_id=t.dipendente_id,
-                    ore_assegnate=t.ore_stimate, ruolo="responsabile",
-                ))
+            # Nessuna riga `Assegnazione`: rimossa allo Step 4 (06/08/2026),
+            # duplicava `Task.dipendente_id`. Vedi `crea_progetto` sopra.
 
         # ── 5. Commit unico ──────────────────────────────────────────────
         session.commit()
@@ -783,11 +778,8 @@ def aggiungi_task_multipli(progetto_id: str, req: StaffingRequest,
             session.add(task)
             if t.predecessore:
                 dipendenze_da_creare.append((t.predecessore, task_id))
-            if t.dipendente_id:
-                session.add(Assegnazione(
-                    task_id=task_id, dipendente_id=t.dipendente_id,
-                    ore_assegnate=t.ore_stimate, ruolo="responsabile",
-                ))
+            # Nessuna riga `Assegnazione`: rimossa allo Step 4 (06/08/2026),
+            # duplicava `Task.dipendente_id`. Vedi `crea_progetto` sopra.
             creati.append({"id": task_id, "nome": t.nome, "fase_id": t.fase_id})
 
         # Tutti i task del batch sono ora pending: flush per materializzarli e
