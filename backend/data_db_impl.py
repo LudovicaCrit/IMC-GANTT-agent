@@ -388,6 +388,205 @@ def scostamento_stime_sottotask(task_ids):
         session.close()
 
 
+def ore_derivate_sottotask(avanzamenti, settimana=None):
+    """Ore derivate dall'avanzamento dichiarato su uno o più sottotask.
+
+    Step 4 sottotask — STRATO 1 del motore ore-derivate (06/08/2026). Calcola e
+    basta: NON scrive niente, né su ConsuntivoSottotask né su Consuntivo. Dato
+    lo stato del database ritorna dei numeri, e chi la chiama decide cosa
+    farne. Isolarla così la rende testabile senza montare un salvataggio
+    completo, ed è la ragione per cui esiste come funzione a sé.
+
+    LA FORMULA
+    ----------
+        Δpct  = percentuale − baseline
+        ore   = (Δpct / 100) × Sottotask.ore_stimate       [clamp Δ<0 → 0 ore]
+
+    La `baseline` è l'ultima percentuale non-NULL dichiarata su QUEL SOTTOTASK
+    in una settimana PRECEDENTE — non il lunedì-calendario prima: l'ultima
+    settimana in cui qualcuno si è espresso. Se non esiste, è 0 (prima
+    dichiarazione: Δ = percentuale intera).
+
+    BASELINE PER SOTTOTASK, NON PER DIPENDENTE — è la scelta che regge tutto.
+    La percentuale descrive il PEZZO DI LAVORO («a che punto è questo
+    sottotask»), non la persona. La grana di ConsuntivoSottotask include il
+    dipendente perché la DICHIARAZIONE ha un autore, ma il fatto dichiarato è
+    del pezzo. Cercando la baseline per (sottotask, dipendente) ogni passaggio
+    di consegne produrrebbe una falsa prima dichiarazione: riassegnato il
+    sottotask da X a Y (override cambiato, o task riassegnato — vedi
+    Sottotask.dipendente_id), Y non ha storia propria, la sua baseline sarebbe
+    0, e su un pezzo già portato al 60% da X una dichiarazione al 70% di Y
+    deriverebbe il 70% delle ore invece del 10%. Si ri-deriverebbe lavoro già
+    derivato, e proprio nel momento in cui sbagliare costa di più.
+
+    Se nella settimana-baseline ci sono PIÙ dichiarazioni non-NULL (grana
+    unique per sottotask+dipendente+settimana: possibile se due collaboratori
+    si esprimono entrambi, anche se la regola vuole che scriva solo
+    l'assegnatario), si prende la percentuale PIÙ ALTA. Il pezzo è avanzato
+    almeno quanto la dichiarazione più avanti, e una baseline più alta produce
+    un Δ più piccolo: sbaglia dalla parte di derivare MENO ore, mai di più.
+
+    INPUT
+    -----
+    avanzamenti: dict {sottotask_id: percentuale}. La percentuale può essere
+                 None — è il caso «slider fermo» previsto dal design: il
+                 dipendente si è espresso sullo stato ma non sull'avanzamento,
+                 e da lì non si deriva nessuna ora. NON si inventa un default.
+    settimana:   la settimana della dichiarazione. Normalizzata al lunedì con
+                 `_lunedi`, come ovunque. Una sola per chiamata: in un
+                 salvataggio la settimana è una, e il ricalcolo di una settimana
+                 diversa (quella la cui baseline è stata invalidata) è una
+                 SECONDA chiamata, non un caso da infilare qui.
+
+    FIRMA BATCH, come `scostamento_stime_sottotask` — una chiamata, due query,
+    nessun N+1. Il motore vero processerà tutti i sottotask di un salvataggio in
+    un colpo; chi ne vuole uno solo passa un dict di un elemento.
+
+    OUTPUT — {sottotask_id: {...}}, una voce per ogni sottotask ESISTENTE:
+      task_id      : il task padre. Lo restituisce questa funzione perché lo ha
+                     già in mano: il chiamante deve aggregare le ore per task
+                     (su Consuntivo.ore_dichiarate) e senza questo dovrebbe
+                     rifare la stessa query.
+      ore          : float, le ore derivate. Oppure **None = NON DERIVABILE**,
+                     vedi sotto.
+      baseline_pct : la percentuale da cui si è partiti (0 se prima dichiarazione)
+      delta_pct    : Δ GREZZO, col segno. Un negativo resta visibile qui anche
+                     se `ore` è già 0: è il sintomo, e va potuto leggere.
+      ore_stimate  : la stima usata, per ricostruire il conto a posteriori.
+
+    `ore = None` È IL SENTINELLA, E NON È 0.0 — la distinzione è il punto.
+      - `ore = 0.0`  → derivato, e fa zero ore: nessun avanzamento (Δ=0), o
+                       regressione clampata, o slider non mosso. È un numero.
+      - `ore = None` → NON derivabile: il sottotask non ha `ore_stimate`, quindi
+                       Δpct × NULL non è definito. Il chiamante deve SEGNALARLO
+                       («sottotask non stimato, ore non derivate»), non sommare
+                       zero in silenzio: chi ha dichiarato ha lavorato davvero, e
+                       far sparire quelle ore senza dirlo è il modo peggiore di
+                       gestire una stima che manca al PM, non a lui.
+      Qui si diverge da `scostamento_stime_sottotask`, che il NULL lo tratta con
+      `coalesce(..., 0.0)` — e giustamente: lì la domanda è «il piano quadra?» e
+      0 è una risposta informativa («non stimato»). Qui la domanda è «quante ore
+      ha prodotto questo avanzamento?», e 0 sarebbe una bugia.
+
+    PRECEDENZA DEI CONTROLLI — `percentuale is None` viene PRIMA di
+    `ore_stimate is None`. Su un pezzo su cui nessuno ha dichiarato avanzamento
+    la stima mancante non è un problema di nessuno: segnalarla produrrebbe un
+    avviso per ogni sottotask non stimato toccato di striscio dal salvataggio,
+    cioè rumore che nasconde i pochi casi veri.
+
+    CHIAVE ASSENTE dal risultato = sottotask inesistente (stessa convenzione di
+    `scostamento_stime_sottotask`, dove la chiave manca quando non c'è niente da
+    dire). Le route validano l'esistenza a monte, come fa `_task_o_404` in
+    routes/sottotask.py; qui non si alza, si omette.
+
+    NON FA — e non per dimenticanza: la validazione della MONOTONIA (dipende
+    anche dalla dichiarazione SUCCESSIVA, è regola del data layer/route, non di
+    un calcolo puro), il ricalcolo della settimana la cui baseline è stata
+    invalidata, l'aggregazione per task, l'innesto in `salva_consuntivo`. Questa
+    funzione calcola una fotografia, non gestisce il tempo.
+    """
+    from models import Sottotask, ConsuntivoSottotask
+
+    if not avanzamenti:
+        return {}
+
+    sett = _lunedi(settimana)
+    ids = list(avanzamenti)
+
+    session = get_session()
+    try:
+        # 1) Anagrafica dei sottotask: task padre e stima. Una query.
+        righe = (
+            session.query(Sottotask.id, Sottotask.task_id, Sottotask.ore_stimate)
+            .filter(Sottotask.id.in_(ids))
+            .all()
+        )
+        anagrafica = {r.id: (r.task_id, r.ore_stimate) for r in righe}
+        if not anagrafica:
+            return {}
+
+        # 2) Baseline: tutte le dichiarazioni non-NULL PRECEDENTI, in una query
+        # sola, ridotte poi in Python. Non una query per sottotask (N+1), e non
+        # una window function: il fallback SQLite di `data.py` non è un dialetto
+        # su cui contare, e le righe in gioco sono poche — una per persona per
+        # settimana, sulla vita di un sottotask.
+        storiche = (
+            session.query(
+                ConsuntivoSottotask.sottotask_id,
+                ConsuntivoSottotask.settimana,
+                ConsuntivoSottotask.percentuale,
+            )
+            .filter(
+                ConsuntivoSottotask.sottotask_id.in_(list(anagrafica)),
+                ConsuntivoSottotask.settimana < sett,
+                # Una riga con percentuale NULL non è una baseline: è qualcuno
+                # che si è espresso sullo stato e non sull'avanzamento. Senza
+                # questo filtro diventerebbe una baseline fantasma a 0 e
+                # rideriverebbe da capo tutto l'avanzamento precedente.
+                ConsuntivoSottotask.percentuale.isnot(None),
+            )
+            .all()
+        )
+
+        # Riduzione: per ogni sottotask la settimana più recente, e dentro
+        # quella la percentuale più alta (vedi docstring).
+        baseline = {}      # sottotask_id → (settimana, percentuale)
+        for sid, sett_storica, pct in storiche:
+            corrente = baseline.get(sid)
+            if corrente is None or sett_storica > corrente[0]:
+                baseline[sid] = (sett_storica, pct)
+            elif sett_storica == corrente[0] and pct > corrente[1]:
+                baseline[sid] = (sett_storica, pct)
+
+        out = {}
+        for sid in ids:
+            if sid not in anagrafica:
+                continue                      # inesistente: chiave omessa
+            task_id, stima = anagrafica[sid]
+            pct = avanzamenti[sid]
+            base = baseline.get(sid, (None, 0))[1]
+
+            # Slider fermo: nessuna derivazione, e la stima mancante non si
+            # segnala (vedi PRECEDENZA DEI CONTROLLI).
+            if pct is None:
+                out[sid] = {
+                    "task_id": task_id, "ore": 0.0, "baseline_pct": base,
+                    "delta_pct": None, "ore_stimate": stima,
+                }
+                continue
+
+            delta = pct - base
+
+            if stima is None:
+                out[sid] = {
+                    "task_id": task_id, "ore": None, "baseline_pct": base,
+                    "delta_pct": delta, "ore_stimate": None,
+                }
+                continue
+
+            # Clamp sul Δ, non sulle ore: «l'avanzamento può tornare indietro,
+            # le ore no». Con la monotonia imposta a monte non dovrebbe mai
+            # scattare — se scatta, `delta_pct` resta negativo nel risultato ed
+            # è il sintomo di una dichiarazione entrata da un'altra porta.
+            ore = (max(delta, 0) / 100.0) * stima
+            out[sid] = {
+                "task_id": task_id,
+                # round a 1 decimale: è la precisione di TUTTE le ore di questo
+                # modulo (ore_settimanali_task, ore_dichiarate_settimana,
+                # lista_fasi_progetto...). Serve anche a tagliare il rumore
+                # float, che qui è tutt'altro che raro: un Δ del 10% su una
+                # stima da 3h vale 0.30000000000000004 senza arrotondamento, e
+                # le stime piccole sono la norma sui sottotask.
+                "ore": round(ore, 1),
+                "baseline_pct": base,
+                "delta_pct": delta,
+                "ore_stimate": stima,
+            }
+        return out
+    finally:
+        session.close()
+
+
 def tasso_compilazione_progetto(pid):
     session = get_session()
     base = session.query(Consuntivo).join(
