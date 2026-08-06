@@ -288,133 +288,22 @@ export default function ConsuntivazioneUser() {
                 </tr>
 
                 {/* Righe task */}
-                {g.task.map((t) => {
-                  const statoSel = valore(t, 'stato')
-                  const nota = valore(t, 'nota') ?? ''
-                  const haNota = nota.trim().length > 0
-                  const aperta = noteAperte[t.task_id]
-                  const statoNonDichiarabile = !STATI.includes(t.stato)
-
-                  return (
-                    <React.Fragment key={t.task_id}>
-                      <tr className={`border-t border-gray-800/60 ${
-                        modifiche[t.task_id] ? 'bg-amber-950/20' : ''
-                      }`}>
-                        {/* Task */}
-                        <td className="px-4 py-3">
-                          <p className="text-gray-200">{t.task_nome}</p>
-                          <p className="text-xs text-gray-600 flex items-center gap-2">
-                            <span>{t.task_id}</span>
-                            <span className="text-gray-500">· attualmente {t.stato}</span>
-                            {t.in_ritardo && (
-                              <span className="text-amber-500/80">· ⚠ oltre la data prevista</span>
-                            )}
-                          </p>
-                        </td>
-
-                        {/* Previste */}
-                        <td className="px-4 py-3 text-right">
-                          {t.ore_pianificate_settimana === null ? (
-                            <span className="text-gray-600">—</span>
-                          ) : (
-                            <>
-                              <span className="text-blue-300 font-medium">
-                                {t.ore_pianificate_settimana < 0.5 && t.ore_pianificate_settimana > 0
-                                  ? '<1h'
-                                  : fmtH(t.ore_pianificate_settimana)}
-                              </span>
-                              <p className="text-[11px] text-gray-600">
-                                su {fmtH(t.ore_pianificate)} totali
-                              </p>
-                            </>
-                          )}
-                        </td>
-
-                        {/* Stato — azione principale */}
-                        <td className="px-4 py-3">
-                          <div className="flex gap-1 justify-center">
-                            {STATI.map((s) => {
-                              const sel = statoSel === s
-                              const st = STATO_STYLE[s]
-                              return (
-                                <button
-                                  key={s}
-                                  disabled={soloLettura}
-                                  onClick={() => {
-                                    modifica(t.task_id, 'stato', sel ? null : s)
-                                    if (s === 'Bloccato' && !sel) {
-                                      setNoteAperte((p) => ({ ...p, [t.task_id]: true }))
-                                    }
-                                  }}
-                                  className={`px-2.5 py-1.5 rounded-md text-xs font-medium border transition-colors
-                                              ${sel ? st.on : st.off} ${soloLettura ? 'opacity-50 cursor-not-allowed' : ''}`}
-                                >
-                                  {s === 'Completato' ? 'Fatto' : s}
-                                </button>
-                              )
-                            })}
-                          </div>
-                        </td>
-
-                        {/* Ore — facoltative */}
-                        <td className="px-4 py-3 text-center">
-                          <input
-                            type="number" min="0" step="0.5"
-                            disabled={soloLettura}
-                            value={valore(t, 'ore')}
-                            onChange={(e) => modifica(t.task_id, 'ore', e.target.value)}
-                            placeholder="—"
-                            className="w-16 bg-gray-950 text-gray-200 rounded-md px-2 py-1.5 text-center
-                                       border border-gray-700 focus:outline-none focus:ring-2
-                                       focus:ring-blue-600 focus:border-blue-600
-                                       disabled:opacity-50 placeholder:text-gray-700"
-                          />
-                        </td>
-
-                        {/* Icona nota */}
-                        <td className="px-3 py-3 text-center">
-                          <button
-                            onClick={() => setNoteAperte((p) => ({ ...p, [t.task_id]: !aperta }))}
-                            title={haNota ? 'Nota presente' : 'Aggiungi una nota'}
-                            className={`w-7 h-7 rounded-md border transition-colors ${
-                              haNota
-                                ? 'bg-amber-900/30 border-amber-700/60 text-amber-300'
-                                : 'border-gray-700 text-gray-600 hover:text-gray-400'
-                            }`}
-                          >
-                            {haNota ? '✎' : '+'}
-                          </button>
-                        </td>
-                      </tr>
-
-                      {/* Riga nota espansa */}
-                      {aperta && (
-                        <tr className="border-t border-gray-800/30">
-                          <td colSpan={5} className="px-4 pb-3 pt-0 bg-gray-800/20">
-                            <textarea
-                              rows={2}
-                              disabled={soloLettura}
-                              value={nota}
-                              onChange={(e) => modifica(t.task_id, 'nota', e.target.value)}
-                              placeholder={
-                                statoSel === 'Bloccato'
-                                  ? 'Perché è bloccato? (obbligatorio)'
-                                  : 'A che punto sei? Cosa hai fatto?'
-                              }
-                              className={`w-full bg-gray-950 text-gray-200 rounded-md px-3 py-2 text-sm
-                                          border focus:outline-none focus:ring-2 focus:ring-blue-600
-                                          placeholder:text-gray-600 disabled:opacity-50 ${
-                                            statoSel === 'Bloccato' && !nota.trim()
-                                              ? 'border-red-800'
-                                              : 'border-gray-700'
-                                          }`}
-                            />
-                          </td>
-                        </tr>
-                      )}
-                    </React.Fragment>
-                  )
-                })}
+                {g.task.map((t) => (
+                  <RigaTask
+                    key={t.task_id}
+                    task={t}
+                    statoSel={valore(t, 'stato')}
+                    ore={valore(t, 'ore')}
+                    nota={valore(t, 'nota') ?? ''}
+                    modificata={Boolean(modifiche[t.task_id])}
+                    notaAperta={Boolean(noteAperte[t.task_id])}
+                    soloLettura={soloLettura}
+                    onModifica={(campo, val) => modifica(t.task_id, campo, val)}
+                    onNotaAperta={(v) =>
+                      setNoteAperte((p) => ({ ...p, [t.task_id]: v }))
+                    }
+                  />
+                ))}
               </React.Fragment>
             ))}
           </tbody>
@@ -455,5 +344,159 @@ export default function ConsuntivazioneUser() {
         </div>
       )}
     </div>
+  )
+}
+
+
+/* ── Riga di un task ──────────────────────────────────────────────────
+ * Il task e ciò che il dipendente dichiara su di esso: stato, ore, nota.
+ *
+ * COMPONENTE CONTROLLATO — non possiede stato proprio del form. Riceve i
+ * valori già risolti dal padre (che sa se viene dalla modifica pendente o dal
+ * server, vedi `valore`) e comunica ogni cambiamento all'insù. Lo stato resta
+ * uno solo, `modifiche`, e il submit continua a costruirci sopra il body di
+ * /salva senza sapere niente di questo componente.
+ *
+ * `onModifica(campo, valore)` — il padre chiude sul task_id, così qui non
+ * serve conoscerlo per scrivere.
+ * `onNotaAperta(bool)` — apre/chiude il riquadro nota. Un solo callback e non
+ * due (toggle + apri) perché sono la stessa azione con un valore diverso:
+ * l'icona passa `!notaAperta`, il pulsante "Bloccato" passa `true`.
+ *
+ * Restituisce un Fragment con DUE <tr>: la riga e la nota espansa. È anche il
+ * punto in cui, più avanti, si innesterà il blocco sottotask — un terzo <tr>
+ * dentro lo stesso Fragment, senza toccare la struttura della tabella.
+ */
+function RigaTask({
+  task: t,
+  statoSel,
+  ore,
+  nota,
+  modificata,
+  notaAperta,
+  soloLettura,
+  onModifica,
+  onNotaAperta,
+}) {
+  const haNota = nota.trim().length > 0
+
+  return (
+    <React.Fragment>
+      <tr className={`border-t border-gray-800/60 ${
+        modificata ? 'bg-amber-950/20' : ''
+      }`}>
+        {/* Task */}
+        <td className="px-4 py-3">
+          <p className="text-gray-200">{t.task_nome}</p>
+          <p className="text-xs text-gray-600 flex items-center gap-2">
+            <span>{t.task_id}</span>
+            <span className="text-gray-500">· attualmente {t.stato}</span>
+            {t.in_ritardo && (
+              <span className="text-amber-500/80">· ⚠ oltre la data prevista</span>
+            )}
+          </p>
+        </td>
+
+        {/* Previste */}
+        <td className="px-4 py-3 text-right">
+          {t.ore_pianificate_settimana === null ? (
+            <span className="text-gray-600">—</span>
+          ) : (
+            <>
+              <span className="text-blue-300 font-medium">
+                {t.ore_pianificate_settimana < 0.5 && t.ore_pianificate_settimana > 0
+                  ? '<1h'
+                  : fmtH(t.ore_pianificate_settimana)}
+              </span>
+              <p className="text-[11px] text-gray-600">
+                su {fmtH(t.ore_pianificate)} totali
+              </p>
+            </>
+          )}
+        </td>
+
+        {/* Stato — azione principale */}
+        <td className="px-4 py-3">
+          <div className="flex gap-1 justify-center">
+            {STATI.map((s) => {
+              const sel = statoSel === s
+              const st = STATO_STYLE[s]
+              return (
+                <button
+                  key={s}
+                  disabled={soloLettura}
+                  onClick={() => {
+                    onModifica('stato', sel ? null : s)
+                    if (s === 'Bloccato' && !sel) {
+                      onNotaAperta(true)
+                    }
+                  }}
+                  className={`px-2.5 py-1.5 rounded-md text-xs font-medium border transition-colors
+                              ${sel ? st.on : st.off} ${soloLettura ? 'opacity-50 cursor-not-allowed' : ''}`}
+                >
+                  {s === 'Completato' ? 'Fatto' : s}
+                </button>
+              )
+            })}
+          </div>
+        </td>
+
+        {/* Ore — facoltative */}
+        <td className="px-4 py-3 text-center">
+          <input
+            type="number" min="0" step="0.5"
+            disabled={soloLettura}
+            value={ore}
+            onChange={(e) => onModifica('ore', e.target.value)}
+            placeholder="—"
+            className="w-16 bg-gray-950 text-gray-200 rounded-md px-2 py-1.5 text-center
+                       border border-gray-700 focus:outline-none focus:ring-2
+                       focus:ring-blue-600 focus:border-blue-600
+                       disabled:opacity-50 placeholder:text-gray-700"
+          />
+        </td>
+
+        {/* Icona nota */}
+        <td className="px-3 py-3 text-center">
+          <button
+            onClick={() => onNotaAperta(!notaAperta)}
+            title={haNota ? 'Nota presente' : 'Aggiungi una nota'}
+            className={`w-7 h-7 rounded-md border transition-colors ${
+              haNota
+                ? 'bg-amber-900/30 border-amber-700/60 text-amber-300'
+                : 'border-gray-700 text-gray-600 hover:text-gray-400'
+            }`}
+          >
+            {haNota ? '✎' : '+'}
+          </button>
+        </td>
+      </tr>
+
+      {/* Riga nota espansa */}
+      {notaAperta && (
+        <tr className="border-t border-gray-800/30">
+          <td colSpan={5} className="px-4 pb-3 pt-0 bg-gray-800/20">
+            <textarea
+              rows={2}
+              disabled={soloLettura}
+              value={nota}
+              onChange={(e) => onModifica('nota', e.target.value)}
+              placeholder={
+                statoSel === 'Bloccato'
+                  ? 'Perché è bloccato? (obbligatorio)'
+                  : 'A che punto sei? Cosa hai fatto?'
+              }
+              className={`w-full bg-gray-950 text-gray-200 rounded-md px-3 py-2 text-sm
+                          border focus:outline-none focus:ring-2 focus:ring-blue-600
+                          placeholder:text-gray-600 disabled:opacity-50 ${
+                            statoSel === 'Bloccato' && !nota.trim()
+                              ? 'border-red-800'
+                              : 'border-gray-700'
+                          }`}
+            />
+          </td>
+        </tr>
+      )}
+    </React.Fragment>
   )
 }
