@@ -133,6 +133,7 @@ from data import (
     lunedi_settimana,
     settimane_selezionabili,
     note_consuntivi_settimana,
+    note_sottotask_settimana,
 )
 
 
@@ -209,6 +210,23 @@ class SalvaConsuntivoRequest(BaseModel):
     # settimana: non si somma. Chiave assente = nessuna ora effettiva, si
     # deriva; è la stessa distinzione NULL/0.0 della colonna.
     ore_effettive_sottotask: dict[int, float] = {}
+    # Quali sottotask il dipendente dichiara BLOCCATI questa settimana.
+    # È un flag ESPLICITO e non derivabile dall'avanzamento: un pezzo può
+    # essere bloccato al 40% (fermo lì, in attesa di qualcosa) e la percentuale
+    # da sola non lo direbbe mai — 40% e basta è indistinguibile da «avanza
+    # piano». Gli altri due stati dichiarabili invece SI derivano dallo slider,
+    # vedi `_stato_da_avanzamento` nel data layer.
+    # `set` e non lista: è un'appartenenza, e i duplicati non vogliono dire
+    # niente. Pydantic accetta un array JSON e lo converte.
+    bloccati_sottotask: set[int] = set()
+    # Nota per-sottotask, per-persona, per-settimana: il diario di quel pezzo.
+    # Stessa convenzione di `note_per_task`, che è la ragione per cui è
+    # Optional e non un dict vuoto: None = «non gestisco le note, non
+    # toccarle»; chiave presente con stringa vuota = cancella; chiave assente
+    # dentro un dict presente = lascia com'è. Il form manda solo le note
+    # MODIFICATE, e appiattire i tre casi su due cancellerebbe testo che
+    # nessuno ha chiesto di cancellare.
+    note_sottotask: Optional[dict[int, str]] = None
     # Presenze: None = «non gestisco questo campo, non toccarlo» (stessa
     # convenzione di `spese` e `note_per_task`). I default 3/2/0 di prima non
     # erano dati dichiarati ma un'ipotesi di comodo, e finivano scritti in DB a
@@ -339,13 +357,14 @@ def _valida_blocchi_motivati(req: "SalvaConsuntivoRequest", settimana):
         )
 
 
-def _valida_avanzamenti_sottotask(req: "SalvaConsuntivoRequest", settimana):
-    """Le due regole sull'avanzamento che il solo body non può decidere.
+def _valida_dichiarazioni_sottotask(req: "SalvaConsuntivoRequest", settimana):
+    """Le regole sulle dichiarazioni-sottotask che il solo body non può decidere.
 
     Step 4 (06/08/2026), motore ore-derivate. Stanno QUI e non nel DTO per il
-    criterio della nota di metodo sopra `SalvaConsuntivoRequest`: entrambe
-    hanno bisogno di sapere cosa c'è già in database. Il range 0-100, che
-    invece si decide dal solo payload, è rimasto nel DTO.
+    criterio della nota di metodo sopra `SalvaConsuntivoRequest`: tutte hanno
+    bisogno di sapere cosa c'è già in database. I range (0-100 sull'avanzamento,
+    ore effettive non negative), che si decidono dal solo payload, sono rimasti
+    nel DTO.
 
     1. IL SOTTOTASK DEVE ESISTERE. Non è pedanteria: `ore_derivate_sottotask`
        omette dal risultato le chiavi che non trova, quindi un id inventato
@@ -376,21 +395,36 @@ def _valida_avanzamenti_sottotask(req: "SalvaConsuntivoRequest", settimana):
        (la prima dichiarata dopo W) e non innesca cascate.
        Il confronto è per SOTTOTASK, non per dipendente, coerente con la
        baseline del Δ: la percentuale descrive il pezzo, non chi la scrive.
+
+    4. UN SOTTOTASK BLOCCATO RICHIEDE UNA NOTA. Gemella di
+       `_valida_blocchi_motivati`, che impone la stessa cosa un livello sopra —
+       e ne ricalca la struttura per la stessa ragione: il vincolo è che la
+       nota ESISTA, non che sia arrivata in questa richiesta. Il form manda le
+       sole note modificate, quindi ridichiarare bloccato un pezzo fermo da tre
+       settimane senza ritoccarne il testo è il caso normale. Da qui il
+       controllo in due tempi — prima il body, poi il DB solo per i sottotask
+       che nel body la nota non ce l'hanno.
+       Una stringa VUOTA non è «campo assente»: è una cancellazione esplicita, e
+       si rifiuta anche se in DB una nota c'era. Svuotare la spiegazione di un
+       blocco lascia il PM davanti a un pezzo fermo senza sapere perché — che è
+       precisamente l'informazione per cui il flag esiste.
     """
-    if not req.avanzamenti_sottotask and not req.ore_effettive_sottotask:
+    if not (req.avanzamenti_sottotask or req.ore_effettive_sottotask
+            or req.bloccati_sottotask or req.note_sottotask):
         return
 
     from models import Sottotask, ConsuntivoSottotask
 
-    # Esistenza e stato si controllano sull'UNIONE dei due dizionari: un
-    # sottotask può comparire solo fra le ore effettive (pezzo fermo, avanzamento
-    # invariato) e avrebbe comunque bisogno di esistere e di non essere
-    # annullato. Senza l'unione, un id inventato nelle sole ore effettive
-    # arriverebbe alla FK come IntegrityError, cioè un 500 su un errore del
-    # chiamante. La MONOTONIA invece resta sui soli avanzamenti — è una regola
-    # sulle percentuali, e le ore non hanno un ordine da rispettare.
+    # Esistenza e stato si controllano sull'UNIONE dei quattro campi: un
+    # sottotask può comparire solo fra le ore effettive (pezzo fermo,
+    # avanzamento invariato) o solo fra i bloccati, e avrebbe comunque bisogno
+    # di esistere e di non essere annullato. Senza l'unione, un id inventato in
+    # uno di quei campi arriverebbe alla FK come IntegrityError, cioè un 500 su
+    # un errore del chiamante. La MONOTONIA invece resta sui soli avanzamenti —
+    # è una regola sulle percentuali, e le ore non hanno un ordine da rispettare.
     ids = list(dict.fromkeys(
         list(req.avanzamenti_sottotask) + list(req.ore_effettive_sottotask)
+        + sorted(req.bloccati_sottotask) + list(req.note_sottotask or {})
     ))
     session = get_session()
     try:
@@ -422,6 +456,35 @@ def _valida_avanzamenti_sottotask(req: "SalvaConsuntivoRequest", settimana):
         # Monotonia: la prima dichiarazione SUCCESSIVA con percentuale non-NULL.
         # Una query sola per tutti i sottotask, ridotta in Python — stessa
         # scelta (e stessa ragione) di `ore_derivate_sottotask`.
+        # ── Un sottotask Bloccato richiede una nota ──────────────────────
+        # Struttura di `_valida_blocchi_motivati`, un livello più giù: prima si
+        # guarda il body, poi — e solo per chi nel body non porta nulla — si
+        # interroga il DB. La query parte una volta sola e solo se serve
+        # davvero: dichiarare bloccato con le note tutte in arrivo non la
+        # esegue.
+        da_motivare = []
+        note_esistenti = None
+        for sottotask_id in sorted(req.bloccati_sottotask):
+            if req.note_sottotask is not None and sottotask_id in req.note_sottotask:
+                if (req.note_sottotask[sottotask_id] or "").strip():
+                    continue                        # nota in arrivo: basta
+                da_motivare.append(sottotask_id)    # svuotamento esplicito
+                continue
+            if note_esistenti is None:
+                note_esistenti = note_sottotask_settimana(req.dipendente_id, settimana)
+            if not note_esistenti.get(sottotask_id):
+                da_motivare.append(sottotask_id)
+
+        if da_motivare:
+            elenco = ", ".join(f"'{noti[s][0]}'" for s in da_motivare)
+            raise HTTPException(
+                400,
+                f"Sottotask dichiarati bloccati senza una nota che spieghi "
+                f"cosa li blocca: {elenco}. Scrivi il motivo in "
+                f"note_sottotask — una nota già salvata in questa settimana va "
+                f"bene, non serve rimandarla, ma non si può svuotarla.",
+            )
+
         if not req.avanzamenti_sottotask:
             return                       # niente percentuali, niente monotonia
 
@@ -710,7 +773,7 @@ def salva_consuntivo_endpoint(
     # Dopo le guardie sulla settimana: la nota di un blocco si valuta sulla
     # settimana bersaglio, che qui è ormai decisa.
     _valida_blocchi_motivati(req, lun)
-    _valida_avanzamenti_sottotask(req, lun)
+    _valida_dichiarazioni_sottotask(req, lun)
 
     if PERSISTENT_MODE:
         esito = salva_consuntivo(
@@ -730,6 +793,8 @@ def salva_consuntivo_endpoint(
             spese_lista=req.spese,
             avanzamenti_sottotask=req.avanzamenti_sottotask,
             ore_effettive_sottotask=req.ore_effettive_sottotask,
+            bloccati_sottotask=req.bloccati_sottotask,
+            note_sottotask=req.note_sottotask,
         )
         # `avvisi`: segnalazioni non bloccanti del motore ore-derivate (Step 4).
         # Lista vuota nel caso normale — il campo c'è sempre, così il client non

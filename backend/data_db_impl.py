@@ -1016,6 +1016,44 @@ def note_consuntivi_settimana(dipendente_id, settimana=None):
     return {tid: nota for tid, nota in rows if (nota or "").strip()}
 
 
+def note_sottotask_settimana(dipendente_id, settimana=None):
+    """{sottotask_id: nota} delle note NON VUOTE già scritte dal dipendente su
+    un SOTTOTASK in quella settimana. I sottotask senza nota non compaiono.
+
+    Gemella di `note_consuntivi_settimana`, stessa forma e stesso scopo un
+    livello più giù: serve alla validazione «un sottotask Bloccato richiede una
+    nota», che deve guardare ciò che ESISTE e non solo ciò che è arrivato nel
+    body. Il form manda le sole note modificate, quindi ridichiarare bloccato un
+    pezzo che è fermo da tre settimane — senza ritoccarne il testo — è il caso
+    normale, non un errore da rifiutare.
+
+    Query sulla UNIQUE (sottotask, dipendente, settimana); il range lun..dom è
+    la stessa rete di sicurezza della gemella per righe con data non
+    normalizzata.
+    """
+    from models import ConsuntivoSottotask
+
+    lun = _lunedi(settimana)
+    fine_sett = lun + timedelta(days=6)
+
+    session = get_session()
+    try:
+        rows = (
+            session.query(ConsuntivoSottotask.sottotask_id, ConsuntivoSottotask.nota)
+            .filter(
+                ConsuntivoSottotask.dipendente_id == dipendente_id,
+                ConsuntivoSottotask.settimana >= lun,
+                ConsuntivoSottotask.settimana <= fine_sett,
+                ConsuntivoSottotask.nota.isnot(None),
+            )
+            .all()
+        )
+    finally:
+        session.close()
+
+    return {sid: nota for sid, nota in rows if (nota or "").strip()}
+
+
 _MESI_ABBR = ["gen", "feb", "mar", "apr", "mag", "giu",
               "lug", "ago", "set", "ott", "nov", "dic"]
 
@@ -1553,11 +1591,55 @@ def _nota_task(testo):
     return testo or None
 
 
+def _stato_da_avanzamento(percentuale, bloccato):
+    """Lo stato dichiarato di un sottotask: derivato dallo slider, tranne il blocco.
+
+    Step 4 (06/08/2026). Sul SOTTOTASK lo stato non è un input separato dallo
+    slider, come invece è sul task: chiedere due volte la stessa cosa — «a che
+    punto sei» e «che stato ha» — è il modo sicuro di raccogliere due risposte
+    che si contraddicono. Due dei tre stati dichiarabili sono già scritti nella
+    percentuale, e si leggono da lì.
+
+    BLOCCATO È L'ECCEZIONE, e per forza: non è derivabile. Un pezzo può essere
+    fermo al 40% in attesa di un fornitore, e il 40% da solo è indistinguibile
+    da «avanza piano». È l'unica informazione che lo slider non contiene, ed è
+    per questo l'unica che si chiede a parte.
+
+    100  → "Completato"
+    1-99 → "In corso"
+    0    → None
+    Lo ZERO NON è "In corso", ed è la scelta meno ovvia delle tre. I tre stati
+    dichiarabili fanno ciascuno un'affermazione positiva — sto lavorando, ho
+    finito, sono fermo — e lo 0% le nega tutte: niente è stato fatto, e se il
+    motivo fosse un impedimento esisterebbe il flag Bloccato per dirlo. Scrivere
+    "In corso" su una riga che deriva 0 ore e 0 avanzamento significherebbe
+    affermare un'attività che il dato stesso smentisce, e renderebbe quella riga
+    indistinguibile da un pezzo fermo che nessuno ha segnalato. `None` ha già in
+    questo modello il significato esatto che serve — «non si è espresso sullo
+    stato», vedi il commento su ConsuntivoSottotask.stato_dichiarato — ed è
+    un'assenza onesta invece di un'affermazione gonfiata.
+
+    `percentuale is None` senza blocco → None: non c'è niente da cui derivare.
+    Sta al chiamante decidere se scrivere quel None o non toccare la colonna;
+    qui si mappa e basta.
+    """
+    if bloccato:
+        return "Bloccato"
+    if percentuale is None:
+        return None
+    if percentuale >= 100:
+        return "Completato"
+    if percentuale > 0:
+        return "In corso"
+    return None
+
+
 def salva_consuntivo(dipendente_id, settimana, ore_per_task, stati_per_task,
                      giorni_sede=None, giorni_remoto=None,
                      ore_assenza=None, tipo_assenza=None, nota_assenza=None,
                      spese_lista=None, note_per_task=None,
-                     avanzamenti_sottotask=None, ore_effettive_sottotask=None):
+                     avanzamenti_sottotask=None, ore_effettive_sottotask=None,
+                     bloccati_sottotask=None, note_sottotask=None):
     """
     Salva il consuntivo settimanale completo di un dipendente.
 
@@ -1612,10 +1694,17 @@ def salva_consuntivo(dipendente_id, settimana, ore_per_task, stati_per_task,
     settimana_date = _lunedi(settimana)
     avanzamenti_sottotask = avanzamenti_sottotask or {}
     ore_effettive_sottotask = ore_effettive_sottotask or {}
-    # Un salvataggio «tocca i sottotask» se porta almeno uno dei due campi.
-    # Serve più volte sotto, e calcolarlo una volta evita che i due rami
-    # divergano quando qualcuno ne aggiungerà un terzo.
-    tocca_sottotask = bool(avanzamenti_sottotask or ore_effettive_sottotask)
+    bloccati_sottotask = set(bloccati_sottotask or ())
+    # `note_sottotask` NON si normalizza a {}: None e {} vogliono dire cose
+    # diverse (non gestisco le note / le gestisco e questa volta nessuna),
+    # esattamente come `note_per_task`.
+    # Un salvataggio «tocca i sottotask» se porta almeno uno dei quattro campi.
+    # Calcolato una volta sola: quando qualcuno ne aggiungerà un quinto, i rami
+    # non divergeranno.
+    tocca_sottotask = bool(
+        avanzamenti_sottotask or ore_effettive_sottotask
+        or bloccati_sottotask or note_sottotask
+    )
     avvisi = []          # segnalazioni non bloccanti, tornano al chiamante
 
     # 0) AVANZAMENTO SUI SOTTOTASK — si scrive PRIMA del ciclo sui task.
@@ -1646,6 +1735,7 @@ def salva_consuntivo(dipendente_id, settimana, ore_per_task, stati_per_task,
     # salvataggio parziale.
     sottotask_toccati = dict.fromkeys(
         list(avanzamenti_sottotask) + list(ore_effettive_sottotask)
+        + sorted(bloccati_sottotask) + list(note_sottotask or {})
     )
     for sottotask_id in sottotask_toccati:
         riga = session.query(ConsuntivoSottotask).filter(
@@ -1665,6 +1755,28 @@ def salva_consuntivo(dipendente_id, settimana, ore_per_task, stati_per_task,
             riga.percentuale = avanzamenti_sottotask[sottotask_id]
         if sottotask_id in ore_effettive_sottotask:
             riga.ore_effettive = ore_effettive_sottotask[sottotask_id]
+
+        # Nota: stesso trattamento delle note-task, `_nota_task` compreso —
+        # vuota o soli spazi diventa NULL, così `nota IS NOT NULL` significa
+        # davvero «ha scritto qualcosa» anche qui. La chiave assente NON tocca
+        # la nota esistente: il form manda solo quelle modificate, e riscrivere
+        # NULL a ogni salvataggio cancellerebbe il diario del pezzo.
+        if note_sottotask is not None and sottotask_id in note_sottotask:
+            riga.nota = _nota_task(note_sottotask[sottotask_id])
+
+        # Stato dichiarato: si RICALCOLA ogni volta che arriva uno dei suoi due
+        # input (la percentuale o il flag di blocco), invece di essere scritto
+        # una volta e lasciato lì. È un campo derivato, e un derivato che non
+        # segue la sua sorgente è solo una vecchia risposta: correggere il 100%
+        # in 60% e ritrovarsi la riga ancora "Completato" sarebbe una
+        # contraddizione scritta in tabella.
+        # Se non arriva nessuno dei due, la colonna non si tocca — un
+        # salvataggio di sole ore effettive non cancella lo stato dichiarato
+        # prima (stessa convenzione delle note e delle presenze).
+        if sottotask_id in avanzamenti_sottotask or sottotask_id in bloccati_sottotask:
+            riga.stato_dichiarato = _stato_da_avanzamento(
+                riga.percentuale, sottotask_id in bloccati_sottotask
+            )
 
         riga.compilato = True
         riga.data_compilazione = datetime.utcnow()
