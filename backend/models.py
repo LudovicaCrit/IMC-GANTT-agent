@@ -527,9 +527,15 @@ class Sottotask(Base):
 
     Cosa NON ha, per scelta:
       - date proprie: eredita la finestra temporale del task padre.
-      - assegnatario proprio: l'assegnazione resta a livello di task
-        (`Task.dipendente_id`, unica sorgente dallo Step 4 — 06/08/2026), il
-        sottotask non ripartisce le persone.
+
+    Cosa ha in via OPZIONALE (Step 4, 06/08/2026):
+      - `dipendente_id`: assegnatario PROPRIO, in override su quello del task.
+        NULL — il caso normale — vuol dire «lo fa chi fa il task». La
+        risoluzione è `sottotask.dipendente_id or task.dipendente_id`, e nel
+        caso normale è sempre risolvibile: un task in lavorazione ha sempre un
+        assegnatario (guardia sull'ingresso in "In corso", routes/tasks.py).
+        Non è una ripartizione delle persone sul task — è l'eccezione
+        dichiarata: «questo pezzo lo fa un altro».
 
     `ore_stimate` porta lo stesso nome e la stessa filosofia di
     `Task.ore_stimate` (convenzione R1): stima del PM, ore intere, regno
@@ -542,6 +548,16 @@ class Sottotask(Base):
     task_id = Column(String(10), ForeignKey("task.id", ondelete="CASCADE"), nullable=False)
     nome = Column(String(200), nullable=False)
     ore_stimate = Column(Integer, nullable=True)
+    # dipendente_id: OVERRIDE dell'assegnatario del task (Step 4, 06/08/2026).
+    #   NULL        → eredita da `Task.dipendente_id`. È il caso normale.
+    #   valorizzato → «questo pezzo lo fa un altro», impostabile dal Cantiere.
+    # Stessa forma di `Task.dipendente_id`: String(10), FK nuda senza ondelete
+    # e senza relationship ORM — è la convenzione di questo progetto per la
+    # colonna «chi fa il lavoro», e le due vanno lette insieme.
+    # nullable=True NON è una lacuna da riempire: il NULL È l'informazione
+    # («nessun override»), e un default inventato la cancellerebbe.
+    # Migration: alembic b4c5d6e7f8a9.
+    dipendente_id = Column(String(10), ForeignKey("dipendenti.id"), nullable=True)
     # stato: PIANIFICAZIONE, non avanzamento. Vedi STATI_PIANIFICAZIONE_SOTTOTASK
     # in cima al modulo — è il PM che sospende o annulla un pezzo del piano.
     # Come il dipendente sta andando su questo sottotask si legge invece dalle

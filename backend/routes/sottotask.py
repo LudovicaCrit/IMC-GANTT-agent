@@ -7,8 +7,10 @@ SCOPO
 ─────
 Espone il CRUD dei SOTTOTASK: i pezzi in cui il PM scompone un task dal
 Cantiere. Il sottotask è la DEFINIZIONE del lavoro, condivisa da tutti i
-collaboratori del task: non ha date proprie (eredita la finestra del task) né
-assegnatario proprio (l'assegnazione resta a livello di task).
+collaboratori del task: non ha date proprie (eredita la finestra del task).
+L'assegnatario di norma lo eredita anch'esso, ma può averne uno PROPRIO in
+override — «questo pezzo lo fa un altro» — dallo Step 4 (06/08/2026).
+Risoluzione: `sottotask.dipendente_id or task.dipendente_id`.
 
 Step 2 dei sottotask — Cantiere backend (30/07/2026, DESIGN_SOTTOTASK.md).
 Il modello è in `models.Sottotask` (migration f2a3b4c5d6e7) con lo stato di
@@ -29,8 +31,12 @@ ENDPOINT ESPOSTI
 DETTAGLIO ENDPOINT
 ──────────────────
 1. POST /api/sottotask
-   - Body: {task_id, nome, ore_stimate?, ordine?}
+   - Body: {task_id, nome, ore_stimate?, ordine?, dipendente_id?}
    - 404 se il task padre non esiste (come `crea_fase` col progetto padre).
+   - `dipendente_id` assente/null → NULL, il pezzo lo fa chi ha il task.
+     Valorizzato → override, e 404 se quel dipendente non esiste o non è
+     attivo (unica validazione di FK del CRUD sottotask, vedi
+     `_valida_override_assegnatario`).
    - `ordine` assente → (max(ordine) dei sottotask del task or 0) + 1, cioè si
      parte da 1. Pattern di `crea_fase_catalogo` in routes/configurazione.py.
      Nota: `Task.ordine` NON è un precedente utilizzabile — al 30/07/2026 tutti
@@ -74,8 +80,10 @@ motivazione delle scelte (Annullati esclusi dalla somma, Sospesi inclusi;
 riferimento `ore_pianificate` e non `ore_stimate`).
 
 3. PATCH /api/sottotask/{sottotask_id}
-   - Body: {nome?, ore_stimate?, ordine?, stato?}. Semantica PATCH.
+   - Body: {nome?, ore_stimate?, ordine?, stato?, dipendente_id?}. Semantica PATCH.
    - `stato` validato contro STATI_PIANIFICAZIONE_SOTTOTASK nel DTO → 400.
+   - `dipendente_id`: assente = non toccare; `null` = rimuovi l'override e
+     torna in eredità dal task; id = override, 404 se inesistente o non attivo.
    - 404 se il sottotask non esiste.
 
 4. PUT /api/sottotask/{task_id}/riordina
@@ -176,7 +184,7 @@ from sqlalchemy import func
 
 from deps import require_manager
 from models import (
-    get_session, Utente, Task, Sottotask, ConsuntivoSottotask,
+    get_session, Utente, Task, Sottotask, ConsuntivoSottotask, Dipendente,
     STATI_PIANIFICAZIONE_SOTTOTASK,
 )
 from data import scostamento_stime_sottotask
@@ -189,11 +197,18 @@ class SottotaskRequest(BaseModel):
     `stato` non c'è di proposito: un sottotask nasce sempre "Da iniziare",
     valorizzato server-side. Farlo scegliere al client permetterebbe di creare
     un pezzo di piano già Annullato, che non vuol dire niente.
+
+    `dipendente_id` invece c'è ed è OPZIONALE (Step 4, 06/08/2026): è l'override
+    dell'assegnatario del task. Ometterlo — il caso normale — lascia la colonna
+    NULL, cioè «lo fa chi fa il task». Non è un campo da riempire per scrupolo:
+    valorizzarlo con la stessa persona del task creerebbe un override finto,
+    che sopravvivrebbe a una riassegnazione del task e lo farebbe divergere.
     """
     task_id: str = Field(..., min_length=1, max_length=10)
     nome: str = Field(..., min_length=1, max_length=200)
     ore_stimate: Optional[int] = Field(default=None, ge=0)
     ordine: Optional[int] = Field(default=None, ge=1)
+    dipendente_id: Optional[str] = Field(default=None, max_length=10)
 
 
 class SottotaskUpdate(BaseModel):
@@ -205,11 +220,18 @@ class SottotaskUpdate(BaseModel):
     `setattr` e poi al vincolo NOT NULL come IntegrityError, cioè un 500 opaco
     su un errore del client. `ore_stimate` e `ordine` sono invece colonne
     nullable: per loro `null` vuol dire davvero «azzera», ed è legittimo.
+
+    `dipendente_id` è nullable come quelle due, ma il suo `null` non è «azzera»:
+    è «RIMETTI IN EREDITÀ», cioè togli l'override e torna all'assegnatario del
+    task. Non si perde niente — si smette di dire una cosa in più. Come per gli
+    altri campi vale la distinzione di `exclude_unset`: campo assente = non
+    toccare l'override esistente, `null` esplicito = rimuoverlo.
     """
     nome: Optional[str] = Field(default=None, min_length=1, max_length=200)
     ore_stimate: Optional[int] = Field(default=None, ge=0)
     ordine: Optional[int] = Field(default=None, ge=1)
     stato: Optional[str] = Field(default=None, max_length=20)
+    dipendente_id: Optional[str] = Field(default=None, max_length=10)
 
     @model_validator(mode="after")
     def _valida_stato_pianificazione(self):
@@ -336,6 +358,39 @@ def _sottotask_o_404(session, sottotask_id: int) -> Sottotask:
     return st
 
 
+def _valida_override_assegnatario(session, dipendente_id: str) -> None:
+    """Verifica che l'assegnatario in override esista e sia attivo (Step 4).
+
+    Chiamare SOLO con un id valorizzato: `None` non è un errore da segnalare ma
+    il caso normale (eredità dal task), e passarlo qui lo farebbe diventare un
+    404 su un'assenza legittima.
+
+    È l'UNICA validazione di FK del CRUD sottotask, ed è deliberato. Le altre
+    colonne o non sono FK, o — come `task_id` — sono già presidiate a monte
+    (`_task_o_404`). Senza questo check un id inesistente arriverebbe alla FK
+    `sottotask_dipendente_id_fkey` come IntegrityError al commit, cioè un 500
+    opaco su un errore del client: la stessa ragione per cui `crea_fase`
+    verifica il progetto padre invece di affidarsi al vincolo.
+
+    Il filtro su `attivo` segue il pattern di `carico_dipendente` in
+    routes/risorse.py: un dipendente disattivato non è un assegnatario valido,
+    e affidargli un pezzo di lavoro oggi è un errore, non una scelta.
+    """
+    d = session.query(Dipendente).filter(
+        Dipendente.id == dipendente_id,
+        Dipendente.attivo == True,
+    ).first()
+    if d is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"Dipendente '{dipendente_id}' non trovato o non attivo: non "
+                f"può essere l'assegnatario del sottotask. Ometti il campo "
+                f"per lasciare il pezzo a chi ha il task."
+            ),
+        )
+
+
 @router.post("", status_code=201)
 def crea_sottotask(req: SottotaskRequest, _: Utente = Depends(require_manager)):
     """Crea un sottotask sotto un task esistente.
@@ -350,6 +405,13 @@ def crea_sottotask(req: SottotaskRequest, _: Utente = Depends(require_manager)):
     try:
         _task_o_404(session, req.task_id)
 
+        # Stringa vuota → None: Postgres rifiuta '' come valore FK, e un client
+        # che manda "" da una select svuotata intende «nessun override», non un
+        # id. Stessa normalizzazione di CAMPI_FK in routes/tasks.py.
+        dip_override = req.dipendente_id or None
+        if dip_override:
+            _valida_override_assegnatario(session, dip_override)
+
         ordine = req.ordine
         if ordine is None:
             max_ordine = session.query(func.max(Sottotask.ordine)).filter(
@@ -363,6 +425,7 @@ def crea_sottotask(req: SottotaskRequest, _: Utente = Depends(require_manager)):
             ore_stimate=req.ore_stimate,
             ordine=ordine,
             stato="Da iniziare",
+            dipendente_id=dip_override,
         )
         session.add(st)
         session.commit()
@@ -373,6 +436,7 @@ def crea_sottotask(req: SottotaskRequest, _: Utente = Depends(require_manager)):
             "ore_stimate": st.ore_stimate,
             "ordine": st.ordine,
             "stato": st.stato,
+            "dipendente_id": st.dipendente_id,
         }
     finally:
         session.close()
@@ -427,6 +491,11 @@ def lista_sottotask_task(task_id: str, _: Utente = Depends(require_manager)):
                 "ore_stimate": s.ore_stimate,
                 "ordine": s.ordine,
                 "stato": s.stato,
+                # NULL = eredita dal task. Il Cantiere lo distingue da un id
+                # per mostrare «(dal task)» invece di un nome: sono due cose
+                # diverse e appiattirle sul nome dell'assegnatario del task
+                # nasconderebbe quali pezzi hanno un override esplicito.
+                "dipendente_id": s.dipendente_id,
                 "n_dichiarazioni": conteggi.get(s.id, 0),
             }
             for s in sottotask
@@ -470,6 +539,20 @@ def modifica_sottotask(
     try:
         st = _sottotask_o_404(session, sottotask_id)
 
+        # Override dell'assegnatario. `exclude_unset` sopra ha già separato i
+        # due casi che contano, e qui vanno tenuti distinti fino in fondo:
+        #   campo ASSENTE  → la chiave non è in update_data, non si tocca nulla;
+        #   `null` (o "")  → si scrive None, cioè si RIMUOVE l'override e il
+        #                    pezzo torna in eredità dal task. È un'operazione
+        #                    legittima, non un errore da rifiutare come per
+        #                    `nome`/`stato` (quelli sono NOT NULL, questo no);
+        #   id valorizzato → si valida che esista e sia attivo, prima di
+        #                    scrivere: la FK da sola darebbe un 500 al commit.
+        if "dipendente_id" in update_data:
+            update_data["dipendente_id"] = update_data["dipendente_id"] or None
+            if update_data["dipendente_id"]:
+                _valida_override_assegnatario(session, update_data["dipendente_id"])
+
         for campo, valore in update_data.items():
             setattr(st, campo, valore)
 
@@ -481,6 +564,7 @@ def modifica_sottotask(
             "ore_stimate": st.ore_stimate,
             "ordine": st.ordine,
             "stato": st.stato,
+            "dipendente_id": st.dipendente_id,
             "aggiornato": True,
         }
     finally:
