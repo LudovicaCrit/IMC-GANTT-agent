@@ -201,6 +201,14 @@ class SalvaConsuntivoRequest(BaseModel):
     # esiste un «non gestisco questo campo, non toccarlo». Un avanzamento
     # assente non è un dato da preservare, è un avanzamento non dichiarato.
     avanzamenti_sottotask: dict[int, int] = {}
+    # Ore REALI dichiarate a mano su un sottotask, per questa settimana
+    # (Step 4 strato 2, 06/08/2026): {sottotask_id: ore}. Serve quando
+    # l'avanzamento non cattura il costo — pezzo fermo che è comunque costato
+    # tempo, o pezzo finito che è costato più della stima.
+    # Quando arriva, SOSTITUISCE la derivata per quel sottotask in quella
+    # settimana: non si somma. Chiave assente = nessuna ora effettiva, si
+    # deriva; è la stessa distinzione NULL/0.0 della colonna.
+    ore_effettive_sottotask: dict[int, float] = {}
     # Presenze: None = «non gestisco questo campo, non toccarlo» (stessa
     # convenzione di `spese` e `note_per_task`). I default 3/2/0 di prima non
     # erano dati dichiarati ma un'ipotesi di comodo, e finivano scritti in DB a
@@ -264,6 +272,20 @@ class SalvaConsuntivoRequest(BaseModel):
                     400,
                     f"Avanzamento {pct} non valido sul sottotask {sid}: "
                     f"la percentuale va da 0 a 100.",
+                )
+
+        # Ore effettive non negative. Nessun massimo: le ore non hanno un
+        # dominio chiuso come la percentuale, e infatti la colonna non ha un
+        # CHECK (segue `consuntivi.ore_dichiarate`, non `percentuale`). Il
+        # minimo però va imposto, e qui invece che a livello DB perché così
+        # diventa un 400 leggibile e non un IntegrityError opaco.
+        for sid, ore in self.ore_effettive_sottotask.items():
+            if ore < 0:
+                raise HTTPException(
+                    400,
+                    f"Ore effettive {ore} non valide sul sottotask {sid}: "
+                    f"non possono essere negative. Zero è ammesso e significa "
+                    f"«questa settimana non è costato niente».",
                 )
         return self
 
@@ -355,12 +377,21 @@ def _valida_avanzamenti_sottotask(req: "SalvaConsuntivoRequest", settimana):
        Il confronto è per SOTTOTASK, non per dipendente, coerente con la
        baseline del Δ: la percentuale descrive il pezzo, non chi la scrive.
     """
-    if not req.avanzamenti_sottotask:
+    if not req.avanzamenti_sottotask and not req.ore_effettive_sottotask:
         return
 
     from models import Sottotask, ConsuntivoSottotask
 
-    ids = list(req.avanzamenti_sottotask)
+    # Esistenza e stato si controllano sull'UNIONE dei due dizionari: un
+    # sottotask può comparire solo fra le ore effettive (pezzo fermo, avanzamento
+    # invariato) e avrebbe comunque bisogno di esistere e di non essere
+    # annullato. Senza l'unione, un id inventato nelle sole ore effettive
+    # arriverebbe alla FK come IntegrityError, cioè un 500 su un errore del
+    # chiamante. La MONOTONIA invece resta sui soli avanzamenti — è una regola
+    # sulle percentuali, e le ore non hanno un ordine da rispettare.
+    ids = list(dict.fromkeys(
+        list(req.avanzamenti_sottotask) + list(req.ore_effettive_sottotask)
+    ))
     session = get_session()
     try:
         noti = {
@@ -391,6 +422,9 @@ def _valida_avanzamenti_sottotask(req: "SalvaConsuntivoRequest", settimana):
         # Monotonia: la prima dichiarazione SUCCESSIVA con percentuale non-NULL.
         # Una query sola per tutti i sottotask, ridotta in Python — stessa
         # scelta (e stessa ragione) di `ore_derivate_sottotask`.
+        if not req.avanzamenti_sottotask:
+            return                       # niente percentuali, niente monotonia
+
         successive = (
             session.query(
                 ConsuntivoSottotask.sottotask_id,
@@ -398,7 +432,7 @@ def _valida_avanzamenti_sottotask(req: "SalvaConsuntivoRequest", settimana):
                 ConsuntivoSottotask.percentuale,
             )
             .filter(
-                ConsuntivoSottotask.sottotask_id.in_(ids),
+                ConsuntivoSottotask.sottotask_id.in_(list(req.avanzamenti_sottotask)),
                 ConsuntivoSottotask.settimana > settimana,
                 ConsuntivoSottotask.percentuale.isnot(None),
             )
@@ -695,6 +729,7 @@ def salva_consuntivo_endpoint(
             # collassava [] su None, rendendo impossibile svuotare le spese.
             spese_lista=req.spese,
             avanzamenti_sottotask=req.avanzamenti_sottotask,
+            ore_effettive_sottotask=req.ore_effettive_sottotask,
         )
         # `avvisi`: segnalazioni non bloccanti del motore ore-derivate (Step 4).
         # Lista vuota nel caso normale — il campo c'è sempre, così il client non

@@ -597,6 +597,72 @@ def ore_derivate_sottotask(avanzamenti, settimana=None, session=None):
             session.close()
 
 
+def _aggrega_ore_sottotask(session, righe, settimana):
+    """Ore per task da un insieme di dichiarazioni-sottotask di una settimana.
+
+    Step 4 STRATO 2 (06/08/2026). È il punto — l'UNICO — dove si applica la
+    regola «le ore effettive sostituiscono la derivata». Sta in una funzione a
+    sé perché serve in due posti dentro `salva_consuntivo` (l'aggregazione
+    della settimana in corso e il ricalcolo di quella a valle) e una regola
+    scritta due volte è una regola che prima o poi diverge: basterebbe
+    correggere un ramo solo e le ore di una settimana ricalcolata comincerebbero
+    a raccontare una storia diversa da quelle appena salvate.
+
+    righe: iterabile di (sottotask_id, percentuale, ore_effettive) — le
+           dichiarazioni di UNA settimana, già lette dal DB.
+    settimana: quella delle righe. Serve al calcolo del Δ per cercare la
+           baseline all'indietro.
+
+    LA PRECEDENZA, e perché è in quest'ordine:
+      1. `ore_effettive` non NULL  → vince, sempre. È un dato esplicito
+         scritto da chi ha lavorato; la derivata è una stima calcolata da una
+         percentuale. Non si sommano: sono due risposte alla stessa domanda.
+      2. altrimenti la derivata (Δpct × ore_stimate).
+      3. derivata non calcolabile (manca `ore_stimate`) → il sottotask finisce
+         fra i `non_derivabili` e NON contribuisce: sommare 0 farebbe sparire
+         lavoro vero in silenzio.
+
+    Il controllo su `ore_effettive` viene PRIMA di quello sulla derivabilità, e
+    non è un dettaglio: un pezzo NON STIMATO ma con ore dichiarate a mano è uno
+    dei casi per cui lo strato 2 esiste. Segnalarlo come «non derivabile»
+    sarebbe un avviso su un problema che il dipendente ha già risolto — gli si
+    direbbe che le sue ore non sono state contate proprio mentre vengono
+    contate.
+
+    Ritorna (per_task, non_derivabili):
+      per_task       : {task_id: ore}, già arrotondate a 1 decimale
+      non_derivabili : [sottotask_id] su cui il chiamante costruisce gli avvisi
+    """
+    righe = list(righe)
+    if not righe:
+        return {}, []
+
+    effettive = {
+        sottotask_id: ore
+        for sottotask_id, _pct, ore in righe
+        if ore is not None
+    }
+    derivate = ore_derivate_sottotask(
+        {sottotask_id: pct for sottotask_id, pct, _ore in righe},
+        settimana,
+        session=session,
+    )
+
+    per_task = {}
+    non_derivabili = []
+    for sottotask_id, calcolo in derivate.items():
+        task_id = calcolo["task_id"]
+        if sottotask_id in effettive:
+            per_task[task_id] = per_task.get(task_id, 0.0) + effettive[sottotask_id]
+            continue
+        if calcolo["ore"] is None:
+            non_derivabili.append(sottotask_id)
+            continue
+        per_task[task_id] = per_task.get(task_id, 0.0) + calcolo["ore"]
+
+    return {t: round(o, 1) for t, o in per_task.items()}, non_derivabili
+
+
 def tasso_compilazione_progetto(pid):
     session = get_session()
     base = session.query(Consuntivo).join(
@@ -1491,7 +1557,7 @@ def salva_consuntivo(dipendente_id, settimana, ore_per_task, stati_per_task,
                      giorni_sede=None, giorni_remoto=None,
                      ore_assenza=None, tipo_assenza=None, nota_assenza=None,
                      spese_lista=None, note_per_task=None,
-                     avanzamenti_sottotask=None):
+                     avanzamenti_sottotask=None, ore_effettive_sottotask=None):
     """
     Salva il consuntivo settimanale completo di un dipendente.
 
@@ -1545,6 +1611,11 @@ def salva_consuntivo(dipendente_id, settimana, ore_per_task, stati_per_task,
     session = get_session()
     settimana_date = _lunedi(settimana)
     avanzamenti_sottotask = avanzamenti_sottotask or {}
+    ore_effettive_sottotask = ore_effettive_sottotask or {}
+    # Un salvataggio «tocca i sottotask» se porta almeno uno dei due campi.
+    # Serve più volte sotto, e calcolarlo una volta evita che i due rami
+    # divergano quando qualcuno ne aggiungerà un terzo.
+    tocca_sottotask = bool(avanzamenti_sottotask or ore_effettive_sottotask)
     avvisi = []          # segnalazioni non bloccanti, tornano al chiamante
 
     # 0) AVANZAMENTO SUI SOTTOTASK — si scrive PRIMA del ciclo sui task.
@@ -1563,31 +1634,46 @@ def salva_consuntivo(dipendente_id, settimana, ore_per_task, stati_per_task,
     # `stato_dichiarato` e `nota` della riga-sottotask restano NULL: oggi il
     # form manda solo l'avanzamento. Le colonne esistono (migration
     # f2a3b4c5d6e7) e verranno riempite quando il form le porterà.
-    for sottotask_id, percentuale in avanzamenti_sottotask.items():
+    # Si itera sull'UNIONE dei due dizionari, non su uno dei due: avanzamento e
+    # ore effettive sono campi INDIPENDENTI della stessa riga e possono arrivare
+    # insieme, separatamente, o in salvataggi diversi. Un pezzo fermo porta solo
+    # le ore (la percentuale non si muove), un pezzo che avanza nei tempi porta
+    # solo l'avanzamento.
+    # Ciascun campo si scrive SOLO se pervenuto — la convenzione «chiave assente
+    # = non toccare» già usata per `note_per_task` e per le presenze. Senza,
+    # dichiarare l'avanzamento la settimana dopo azzererebbe le ore effettive
+    # scritte prima, e viceversa: due campi che si cancellano a vicenda a ogni
+    # salvataggio parziale.
+    sottotask_toccati = dict.fromkeys(
+        list(avanzamenti_sottotask) + list(ore_effettive_sottotask)
+    )
+    for sottotask_id in sottotask_toccati:
         riga = session.query(ConsuntivoSottotask).filter(
             ConsuntivoSottotask.sottotask_id == sottotask_id,
             ConsuntivoSottotask.dipendente_id == dipendente_id,
             ConsuntivoSottotask.settimana == settimana_date,
         ).first()
-        if riga:
-            riga.percentuale = percentuale
-            riga.compilato = True
-            riga.data_compilazione = datetime.utcnow()
-        else:
-            session.add(ConsuntivoSottotask(
+        if riga is None:
+            riga = ConsuntivoSottotask(
                 sottotask_id=sottotask_id,
                 dipendente_id=dipendente_id,
                 settimana=settimana_date,
-                percentuale=percentuale,
-                compilato=True,
-                data_compilazione=datetime.utcnow(),
-            ))
+            )
+            session.add(riga)
+
+        if sottotask_id in avanzamenti_sottotask:
+            riga.percentuale = avanzamenti_sottotask[sottotask_id]
+        if sottotask_id in ore_effettive_sottotask:
+            riga.ore_effettive = ore_effettive_sottotask[sottotask_id]
+
+        riga.compilato = True
+        riga.data_compilazione = datetime.utcnow()
 
     # Flush e non commit: le righe diventano visibili alle query successive
     # DENTRO questa transazione — che è ciò che serve alla derivazione — senza
     # rendere definitivo niente finché il salvataggio non è completo.
     derivate_per_task = {}
-    if avanzamenti_sottotask:
+    if tocca_sottotask:
         session.flush()
 
         # 0-bis) DERIVAZIONE E AGGREGAZIONE SUL TASK.
@@ -1604,12 +1690,13 @@ def salva_consuntivo(dipendente_id, settimana, ore_per_task, stati_per_task,
         task_dei_sottotask = {
             r.task_id
             for r in session.query(Sottotask.task_id)
-            .filter(Sottotask.id.in_(list(avanzamenti_sottotask))).all()
+            .filter(Sottotask.id.in_(list(sottotask_toccati))).all()
         }
         dichiarazioni = (
             session.query(
                 ConsuntivoSottotask.sottotask_id,
                 ConsuntivoSottotask.percentuale,
+                ConsuntivoSottotask.ore_effettive,
             )
             .join(Sottotask, Sottotask.id == ConsuntivoSottotask.sottotask_id)
             .filter(
@@ -1620,25 +1707,9 @@ def salva_consuntivo(dipendente_id, settimana, ore_per_task, stati_per_task,
             .all()
         )
 
-        derivate = ore_derivate_sottotask(
-            {sid: pct for sid, pct in dichiarazioni},
-            settimana_date,
-            session=session,
+        derivate_per_task, non_derivabili = _aggrega_ore_sottotask(
+            session, dichiarazioni, settimana_date
         )
-
-        non_derivabili = []
-        for sottotask_id, calcolo in derivate.items():
-            if calcolo["ore"] is None:
-                # Avanzamento dichiarato su un pezzo senza stima: non si deriva
-                # nulla e NON si somma zero. Vedi la nota sul sentinella in
-                # `ore_derivate_sottotask` — sommare 0 farebbe sparire lavoro
-                # reale senza che nessuno se ne accorga.
-                non_derivabili.append(sottotask_id)
-                continue
-            tid = calcolo["task_id"]
-            derivate_per_task[tid] = derivate_per_task.get(tid, 0.0) + calcolo["ore"]
-
-        derivate_per_task = {t: round(o, 1) for t, o in derivate_per_task.items()}
 
         if non_derivabili:
             nomi = dict(
@@ -1710,6 +1781,7 @@ def salva_consuntivo(dipendente_id, settimana, ore_per_task, stati_per_task,
                     ConsuntivoSottotask.sottotask_id,
                     ConsuntivoSottotask.dipendente_id,
                     ConsuntivoSottotask.percentuale,
+                    ConsuntivoSottotask.ore_effettive,
                 )
                 .join(Sottotask, Sottotask.id == ConsuntivoSottotask.sottotask_id)
                 .filter(
@@ -1724,14 +1796,18 @@ def salva_consuntivo(dipendente_id, settimana, ore_per_task, stati_per_task,
             # proprio in override (Sottotask.dipendente_id). Si riscrive la riga
             # di ciascuno, non quella di chi ha in mano il form.
             per_dipendente = {}
-            for sid, did, pct in righe_dopo:
-                per_dipendente.setdefault(did, {})[sid] = pct
+            for sid, did, pct, ore_eff in righe_dopo:
+                per_dipendente.setdefault(did, []).append((sid, pct, ore_eff))
 
-            for did, mappa in per_dipendente.items():
-                ricalcolo = ore_derivate_sottotask(mappa, sett_dopo, session=session)
-                totale = round(sum(
-                    c["ore"] for c in ricalcolo.values() if c["ore"] is not None
-                ), 1)
+            for did, righe_dip in per_dipendente.items():
+                # Stesso helper dell'aggregazione sopra, quindi stessa regola:
+                # dove ci sono ore effettive, il ricalcolo NON le tocca. Sono un
+                # dato esplicito e non una derivata, e una baseline cambiata a
+                # monte non ha voce in capitolo su quante ore è costato davvero
+                # quel pezzo. È la differenza fra correggere un calcolo e
+                # riscrivere una dichiarazione.
+                per_task_dopo, _ = _aggrega_ore_sottotask(session, righe_dip, sett_dopo)
+                totale = per_task_dopo.get(tid, 0.0)
 
                 riga_cons = session.query(Consuntivo).filter(
                     Consuntivo.task_id == tid,

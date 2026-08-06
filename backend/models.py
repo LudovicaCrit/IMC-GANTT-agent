@@ -677,6 +677,26 @@ class ConsuntivoSottotask(Base):
     # trovando NULL, deriverà l'avanzamento dallo STATO.
     # Range 0-100 imposto da CHECK a livello DB: ck_consuntivo_sottotask_percentuale.
     percentuale = Column(Integer, nullable=True)
+    # ore_effettive: le ore REALI di questa settimana su questo pezzo, scritte a
+    # mano dal dipendente quando l'avanzamento non le cattura (Step 4 strato 2,
+    # 06/08/2026). Tre casi: pezzo fermo che è comunque costato tempo, pezzo
+    # finito che è costato più della stima, soccorso a un collega.
+    #
+    # Quando è valorizzata SOSTITUISCE la derivata (Δpct × Sottotask.ore_stimate)
+    # per quel sottotask in quella settimana — non ci si somma. Sono due
+    # risposte alla stessa domanda «quante ore è costato questo pezzo questa
+    # settimana», e quella esplicita vince su quella calcolata.
+    #
+    # PER SETTIMANA, non cumulativa: 8h questa e 5h la prossima si scrivono 8 e
+    # poi 5. È la grana di tutto il resto del sistema, e gli 11 lettori di
+    # Consuntivo.ore_dichiarate sommano già per settimana.
+    #
+    # Float come `Consuntivo.ore_dichiarate` (mezze giornate, quarti d'ora), ma
+    # nullable=True mentre quella è NOT NULL default 0 — ed è la differenza che
+    # conta: qui NULL significa «non dichiarate, deriva pure», che è tutt'altro
+    # da 0.0 = «zero ore effettive, e lo sto dicendo io». Un default a 0
+    # spegnerebbe la derivazione su ogni riga.
+    ore_effettive = Column(Float, nullable=True)
     # nota: la nota-sottotask vive TUTTA qui, attaccata al pezzo che descrive.
     # «Obbligatoria se Bloccato» è validazione della route, non della colonna.
     nota = Column(Text, nullable=True)
