@@ -677,15 +677,6 @@ function PezzoSottotask({
   // Non compilabile: settimana chiusa, oppure pezzo affidato a un altro.
   const bloccatoInput = soloLettura || !mio
   const haNota = (nota ?? '').trim().length > 0
-  // Lo stato non si chiede: si legge dallo slider. Solo "Bloccato" è un flag a
-  // parte, perché è l'unica cosa che una percentuale non può dire — un pezzo
-  // fermo al 40% è indistinguibile da uno che avanza piano.
-  const statoMostrato = bloccato
-    ? 'Bloccato'
-    : pct >= 100 ? 'Completato'
-    : pct > 0 ? 'In corso'
-    : null
-
   return (
     <>
       <div className="flex items-center gap-3 py-1.5">
@@ -703,71 +694,17 @@ function PezzoSottotask({
           </p>
         </div>
 
-        {/* Avanzamento: cursore + casella. Due controlli sullo stesso valore
-            perché servono a due gesti diversi — il cursore per la stima a
-            occhio, la casella per scrivere «65» senza inseguire il pixel. */}
-        <div className="flex items-center gap-2 flex-1 min-w-0">
-          <input
-            type="range"
-            min={p.baseline_pct} max={100} step={5}
-            disabled={bloccatoInput}
-            value={pct}
-            onChange={(e) => onModifica('percentuale', Number(e.target.value))}
-            title={p.baseline_pct > 0 ? `Non sotto il ${p.baseline_pct}% già dichiarato` : undefined}
-            className="flex-1 min-w-0 accent-blue-500 disabled:opacity-40 disabled:cursor-not-allowed"
-          />
-          <input
-            type="number"
-            min={p.baseline_pct} max={100} step={5}
-            disabled={bloccatoInput}
-            value={pct}
-            onChange={(e) => onModifica('percentuale', Number(e.target.value))}
-            className="w-14 bg-gray-950 text-gray-200 rounded-md px-1.5 py-1 text-center text-sm
-                       border border-gray-700 focus:outline-none focus:ring-2
-                       focus:ring-blue-600 focus:border-blue-600 disabled:opacity-40"
-          />
-          <span className="text-[11px] text-gray-600 w-14 shrink-0">
-            {p.baseline_pct > 0 ? `da ${p.baseline_pct}%` : ''}
-          </span>
-        </div>
-
-        {/* Ore reali, quando l'avanzamento non le cattura */}
-        <input
-          type="number" min="0" step="0.5"
-          disabled={bloccatoInput}
-          value={oreEffettive}
-          onChange={(e) => onModifica('ore_effettive', e.target.value)}
-          placeholder="—"
-          title={TOOLTIP.oreEffettive}
-          className="w-16 bg-gray-950 text-gray-200 rounded-md px-2 py-1 text-center text-sm
-                     border border-gray-700 focus:outline-none focus:ring-2
-                     focus:ring-blue-600 focus:border-blue-600
-                     disabled:opacity-40 placeholder:text-gray-700"
+        <ControlliAvanzamento
+          pct={pct}
+          baseline={p.baseline_pct}
+          oreEffettive={oreEffettive}
+          bloccato={bloccato}
+          disabilitato={bloccatoInput}
+          titoloBloccato="Il pezzo è fermo: dovrai scrivere perché"
+          titoloOreEffettive={TOOLTIP.oreEffettive}
+          onModifica={onModifica}
+          onNotaAperta={onNotaAperta}
         />
-
-        {/* Bloccato */}
-        <button
-          disabled={bloccatoInput}
-          onClick={() => {
-            onModifica('bloccato', !bloccato)
-            if (!bloccato) onNotaAperta(true)   // la nota diventa obbligatoria
-          }}
-          title="Il pezzo è fermo: dovrai scrivere perché"
-          className={`px-2 py-1 rounded-md text-xs font-medium border transition-colors shrink-0 ${
-            bloccato ? STATO_STYLE['Bloccato'].on : STATO_STYLE['Bloccato'].off
-          } ${bloccatoInput ? 'opacity-40 cursor-not-allowed' : ''}`}
-        >
-          Bloccato
-        </button>
-
-        {/* Stato derivato, in sola lettura: è il riflesso dello slider */}
-        <div className="w-20 text-center shrink-0">
-          {statoMostrato && (
-            <span className={`px-2 py-0.5 rounded text-[10px] font-medium border ${STATO_STYLE[statoMostrato].on}`}>
-              {statoMostrato === 'Completato' ? 'Fatto' : statoMostrato}
-            </span>
-          )}
-        </div>
 
         {/* Nota */}
         <button
@@ -799,6 +736,120 @@ function PezzoSottotask({
           />
         </div>
       )}
+    </>
+  )
+}
+
+
+/* ── I controlli dell'avanzamento ──────────────────────────────────────
+ * Cursore + casella numerica sulla stessa percentuale, ore effettive, toggle
+ * Bloccato, e lo stato derivato mostrato in sola lettura.
+ *
+ * Condivisi fra il PEZZO e il TASK non scomposto, perché sono la stessa
+ * domanda posta sulla stessa cosa: un'unità di lavoro. Il backend li tratta
+ * già così (`ore_derivate_unita`, `_baseline_percentuali` col tipo), e due
+ * copie di questi controlli finirebbero per divergere — un cursore a passi di
+ * 5 e uno a passi di 1, un minimo rispettato e uno no — facendo comportare la
+ * stessa dichiarazione in due modi a seconda di dove la si scrive.
+ *
+ * COSA NON È QUI, e non per dimenticanza: l'involucro (il pezzo vive in un
+ * <div> dentro un colSpan, il task renderà <td> dentro un <tr>), il nome e la
+ * stima, e la nota — che entrambi hanno ma resa in forme diverse. Restano di
+ * chi lo usa.
+ *
+ * `onNotaAperta` invece serve: «Bloccato» apre la nota, e non è un dettaglio
+ * di layout ma parte di cosa significa bloccare — la nota diventa obbligatoria
+ * nello stesso istante. Il componente non la rende, ma la apre.
+ *
+ * Controllato come i suoi due chiamanti: nessuno stato proprio.
+ */
+function ControlliAvanzamento({
+  pct,
+  baseline,
+  oreEffettive,
+  bloccato,
+  disabilitato,
+  titoloBloccato,
+  titoloOreEffettive,
+  onModifica,
+  onNotaAperta,
+}) {
+  // Lo stato non si chiede: si legge dallo slider. Solo "Bloccato" è un flag a
+  // parte, perché è l'unica cosa che una percentuale non può dire — un lavoro
+  // fermo al 40% è indistinguibile da uno che avanza piano.
+  const statoMostrato = bloccato
+    ? 'Bloccato'
+    : pct >= 100 ? 'Completato'
+    : pct > 0 ? 'In corso'
+    : null
+
+  return (
+    <>
+      {/* Avanzamento: cursore + casella. Due controlli sullo stesso valore
+          perché servono a due gesti diversi — il cursore per la stima a
+          occhio, la casella per scrivere «65» senza inseguire il pixel. */}
+      <div className="flex items-center gap-2 flex-1 min-w-0">
+        <input
+          type="range"
+          min={baseline} max={100} step={5}
+          disabled={disabilitato}
+          value={pct}
+          onChange={(e) => onModifica('percentuale', Number(e.target.value))}
+          title={baseline > 0 ? `Non sotto il ${baseline}% già dichiarato` : undefined}
+          className="flex-1 min-w-0 accent-blue-500 disabled:opacity-40 disabled:cursor-not-allowed"
+        />
+        <input
+          type="number"
+          min={baseline} max={100} step={5}
+          disabled={disabilitato}
+          value={pct}
+          onChange={(e) => onModifica('percentuale', Number(e.target.value))}
+          className="w-14 bg-gray-950 text-gray-200 rounded-md px-1.5 py-1 text-center text-sm
+                     border border-gray-700 focus:outline-none focus:ring-2
+                     focus:ring-blue-600 focus:border-blue-600 disabled:opacity-40"
+        />
+        <span className="text-[11px] text-gray-600 w-14 shrink-0">
+          {baseline > 0 ? `da ${baseline}%` : ''}
+        </span>
+      </div>
+
+      {/* Ore reali, quando l'avanzamento non le cattura */}
+      <input
+        type="number" min="0" step="0.5"
+        disabled={disabilitato}
+        value={oreEffettive}
+        onChange={(e) => onModifica('ore_effettive', e.target.value)}
+        placeholder="—"
+        title={titoloOreEffettive}
+        className="w-16 bg-gray-950 text-gray-200 rounded-md px-2 py-1 text-center text-sm
+                   border border-gray-700 focus:outline-none focus:ring-2
+                   focus:ring-blue-600 focus:border-blue-600
+                   disabled:opacity-40 placeholder:text-gray-700"
+      />
+
+      {/* Bloccato */}
+      <button
+        disabled={disabilitato}
+        onClick={() => {
+          onModifica('bloccato', !bloccato)
+          if (!bloccato) onNotaAperta(true)   // la nota diventa obbligatoria
+        }}
+        title={titoloBloccato}
+        className={`px-2 py-1 rounded-md text-xs font-medium border transition-colors shrink-0 ${
+          bloccato ? STATO_STYLE['Bloccato'].on : STATO_STYLE['Bloccato'].off
+        } ${disabilitato ? 'opacity-40 cursor-not-allowed' : ''}`}
+      >
+        Bloccato
+      </button>
+
+      {/* Stato derivato, in sola lettura: è il riflesso dello slider */}
+      <div className="w-20 text-center shrink-0">
+        {statoMostrato && (
+          <span className={`px-2 py-0.5 rounded text-[10px] font-medium border ${STATO_STYLE[statoMostrato].on}`}>
+            {statoMostrato === 'Completato' ? 'Fatto' : statoMostrato}
+          </span>
+        )}
+      </div>
     </>
   )
 }
