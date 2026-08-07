@@ -4,6 +4,9 @@ Ruoli, Competenze, FasiStandard, Fasi per progetto, Utenti.
 Eseguire UNA VOLTA per inizializzare il db.
 """
 
+import json
+from pathlib import Path
+
 import pandas as pd
 
 from models import (
@@ -12,8 +15,52 @@ from models import (
     Segnalazione, Ruolo, Competenza, DipendentiCompetenze, FaseStandard,
     Fase, Utente,
 )
-from data import DIPENDENTI, PROGETTI, TASKS, CONSUNTIVI
 from auth import hash_password
+
+
+# ── Dati sintetici del seed ───────────────────────────────────────────────
+# Vengono da `seed_data.json`, non più da `data.py` (che li prendeva da
+# `data_legacy.py`). Il motivo non è di stile: `data.py` è un dispatcher che
+# sceglie a runtime fra Postgres e i DataFrame in memoria, e il seed poteva
+# leggerli SOLO nel ramo di fallback — cioè solo a database vuoto. Bastava
+# popolare il db perché `import seed` smettesse di funzionare. I dati stanno
+# ora in un file che è dati e basta, e il seed non dipende più da quale ramo
+# il dispatcher abbia scelto.
+#
+# Si ricostruiscono come DataFrame perché è la forma che il resto di questo
+# file già consuma — `.iterrows()`, accesso per nome di colonna, un
+# `.dropna().unique()` e un filtro booleano composto. Cambiare la sorgente
+# senza cambiare la forma tiene il diff su una manciata di righe invece che
+# sull'intero seed.
+#
+# NB: le date qui sono ASSOLUTE, congelate al giorno dell'estrazione
+# (`_meta.ancorato_a` nel JSON). `data_legacy.py` le ri-ancorava a
+# `date.today()` a ogni import, così il seed restava sempre "attuale"; un file
+# statico non può farlo. Per dati sintetici e usa-e-getta va bene, ma se un
+# domani il seed dovesse tornare a produrre un db temporalmente centrato su
+# oggi, la strada è salvare offset in giorni invece di date assolute.
+_SEED_DATA = Path(__file__).parent / "seed_data.json"
+
+with open(_SEED_DATA, encoding="utf-8") as _f:
+    _BLOB = json.load(_f)
+
+_COLONNE_DATA = _BLOB["_meta"]["colonne_data"]
+
+
+def _dataframe(nome):
+    """Ricostruisce un DataFrame dal JSON, riportando le colonne-data a
+    `datetime64` — JSON non ha un tipo data, e il resto del seed le passa a
+    SQLAlchemy aspettandosi dei Timestamp."""
+    df = pd.DataFrame(_BLOB[nome])
+    for col in _COLONNE_DATA.get(nome, []):
+        df[col] = pd.to_datetime(df[col])
+    return df
+
+
+DIPENDENTI = _dataframe("DIPENDENTI")
+PROGETTI = _dataframe("PROGETTI")
+TASKS = _dataframe("TASKS")
+CONSUNTIVI = _dataframe("CONSUNTIVI")
 
 
 def seed():
