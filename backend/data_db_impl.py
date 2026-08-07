@@ -353,24 +353,50 @@ def scostamento_stime_sottotask(task_ids):
         session.close()
 
 
-def _baseline_percentuali(session, sottotask_ids, settimana):
-    """{sottotask_id: percentuale} dell'ultima dichiarazione PRECEDENTE a `settimana`.
+TIPI_UNITA = ("task", "sottotask")
 
-    Step 4 (06/08/2026). È la definizione — unica — di «da dove riparte
-    l'avanzamento», e sta in una funzione a sé perché la usano in due:
-    `ore_derivate_sottotask`, che ci calcola il Δ, e `task_settimana_dipendente`,
-    che la manda al frontend come punto di partenza dello slider. Se le due
-    copie divergessero, il dipendente vedrebbe un cursore che parte da un valore
-    e ore calcolate da un altro — e non avrebbe alcun modo di accorgersene.
 
-    I sottotask senza storia non compaiono nel dict: il chiamante usa
-    `.get(sid, 0)`, cioè «prima dichiarazione, si parte da zero».
+def _baseline_percentuali(session, tipo, ids, settimana):
+    """{id: percentuale} dell'ultima dichiarazione PRECEDENTE a `settimana`.
 
-    PER SOTTOTASK, NON PER DIPENDENTE. La percentuale descrive il PEZZO («a che
-    punto è»), non la persona. La grana di ConsuntivoSottotask include il
-    dipendente perché la DICHIARAZIONE ha un autore, ma il fatto dichiarato è
-    del pezzo: cercando la baseline per (sottotask, dipendente) ogni passaggio
-    di consegne produrrebbe una falsa prima dichiarazione, e su un pezzo già
+    Step 4 (06/08/2026, generalizzata il 07/08). È la definizione — unica — di
+    «da dove riparte l'avanzamento», e sta in una funzione a sé perché la usano
+    in due: `ore_derivate_sottotask`, che ci calcola il Δ, e
+    `task_settimana_dipendente`, che la manda al frontend come punto di partenza
+    dello slider. Se le due copie divergessero, il dipendente vedrebbe un
+    cursore che parte da un valore e ore calcolate da un altro — e non avrebbe
+    alcun modo di accorgersene.
+
+    UNITÀ DI LAVORO, NON SOLO SOTTOTASK
+    -----------------------------------
+    `tipo` dice su cosa si cerca:
+      "sottotask" → ConsuntivoSottotask.percentuale, per sottotask_id
+      "task"      → Consuntivo.percentuale, per task_id  (task NON scomposto,
+                    che dichiara l'avanzamento come farebbe un pezzo)
+
+    Due tabelle, ma UNA regola. Nel codice sotto l'`if` sceglie SOLO la coppia
+    (tabella, colonna-che-identifica-l'unità): il filtro e la riduzione sono
+    scritti una volta e attraversati da entrambi i tipi. È deliberato, ed è la
+    ragione per cui non ci sono due funzioni: se la regola che decide QUALE
+    riga vince divergesse fra task e sottotask, il bug sarebbe invisibile —
+    nessuna query fallirebbe, nessun test di forma se ne accorgerebbe, e le ore
+    derivate sarebbero semplicemente sbagliate per metà del sistema.
+
+    `tipo` è obbligatorio e senza default di proposito. Un default "sottotask"
+    sarebbe comodo e pericoloso: un chiamante nuovo che se lo dimentica non
+    prende un errore, prende la semantica sbagliata in silenzio — che è
+    esattamente il modo in cui questa funzione può fare danno.
+
+    LE REGOLE, identiche per entrambi i tipi
+    ----------------------------------------
+    Le unità senza storia NON compaiono nel dict: il chiamante usa
+    `.get(id, 0)`, cioè «prima dichiarazione, si parte da zero».
+
+    PER UNITÀ, NON PER DIPENDENTE. La percentuale descrive il LAVORO («a che
+    punto è»), non la persona. Entrambe le tabelle hanno il dipendente nella
+    grana perché la DICHIARAZIONE ha un autore, ma il fatto dichiarato è del
+    lavoro: cercando la baseline per (unità, dipendente) ogni passaggio di
+    consegne produrrebbe una falsa prima dichiarazione, e su un pezzo già
     portato al 60% il nuovo assegnatario rideriverebbe da zero.
 
     Le righe con `percentuale` NULL non fanno baseline: sono di chi si è
@@ -378,44 +404,61 @@ def _baseline_percentuali(session, sottotask_ids, settimana):
     una baseline fantasma a 0.
 
     Se nella settimana-baseline ci sono più dichiarazioni non-NULL (possibile:
-    la UNIQUE è per sottotask+dipendente+settimana), vince la percentuale PIÙ
-    ALTA — il pezzo è avanzato almeno quanto la dichiarazione più avanti, e una
-    baseline più alta dà un Δ più piccolo: sbaglia dalla parte di derivare MENO
-    ore, mai di più.
+    la UNIQUE include il dipendente in entrambe le tabelle), vince la
+    percentuale PIÙ ALTA — il lavoro è avanzato almeno quanto la dichiarazione
+    più avanti, e una baseline più alta dà un Δ più piccolo: sbaglia dalla parte
+    di derivare MENO ore, mai di più.
 
-    Una query sola, ridotta in Python: non una per sottotask (N+1) e non una
-    window function, che il fallback SQLite di `data.py` non garantisce. Le
-    righe in gioco sono poche — una per persona per settimana, sulla vita di un
-    sottotask.
+    Una query sola, ridotta in Python. Non una per unità (N+1); e non una
+    window function pur essendo ora possibile — Postgres è obbligatorio dal
+    07/08/2026 e il vincolo SQLite che la sconsigliava è caduto — perché su un
+    punto di fallimento SILENZIOSO due rami leggibili a occhio valgono più di
+    una query più elegante. Le righe in gioco sono comunque poche: una per
+    persona per settimana, sulla vita di un'unità di lavoro.
     """
     from models import ConsuntivoSottotask
 
-    if not sottotask_ids:
+    if not ids:
         return {}
+
+    # ── L'UNICO punto in cui i due tipi divergono ────────────────────────
+    # Da qui in giù non si sa più se si stia parlando di task o di sottotask,
+    # e non deve importare: la regola è la stessa.
+    if tipo == "sottotask":
+        Dichiarazione = ConsuntivoSottotask
+        colonna_unita = ConsuntivoSottotask.sottotask_id
+    elif tipo == "task":
+        Dichiarazione = Consuntivo
+        colonna_unita = Consuntivo.task_id
+    else:
+        raise ValueError(
+            f"tipo '{tipo}' non ammesso per la baseline: attesi {TIPI_UNITA}."
+        )
 
     storiche = (
         session.query(
-            ConsuntivoSottotask.sottotask_id,
-            ConsuntivoSottotask.settimana,
-            ConsuntivoSottotask.percentuale,
+            colonna_unita,
+            Dichiarazione.settimana,
+            Dichiarazione.percentuale,
         )
         .filter(
-            ConsuntivoSottotask.sottotask_id.in_(list(sottotask_ids)),
-            ConsuntivoSottotask.settimana < settimana,
-            ConsuntivoSottotask.percentuale.isnot(None),
+            colonna_unita.in_(list(ids)),
+            Dichiarazione.settimana < settimana,
+            Dichiarazione.percentuale.isnot(None),
         )
         .all()
     )
 
-    migliore = {}      # sottotask_id → (settimana, percentuale)
-    for sid, sett_storica, pct in storiche:
-        corrente = migliore.get(sid)
+    # ── La riduzione: scritta UNA volta, per entrambi i tipi ─────────────
+    migliore = {}      # id unità → (settimana, percentuale)
+    for unita_id, sett_storica, pct in storiche:
+        corrente = migliore.get(unita_id)
         if corrente is None or sett_storica > corrente[0]:
-            migliore[sid] = (sett_storica, pct)
+            migliore[unita_id] = (sett_storica, pct)
         elif sett_storica == corrente[0] and pct > corrente[1]:
-            migliore[sid] = (sett_storica, pct)
+            migliore[unita_id] = (sett_storica, pct)
 
-    return {sid: pct for sid, (_sett, pct) in migliore.items()}
+    return {unita_id: pct for unita_id, (_sett, pct) in migliore.items()}
 
 
 def ore_derivate_sottotask(avanzamenti, settimana=None, session=None):
@@ -546,7 +589,7 @@ def ore_derivate_sottotask(avanzamenti, settimana=None, session=None):
         # `task_settimana_dipendente`: il frontend deve mostrare allo slider
         # ESATTAMENTE il punto da cui il motore calcolerà il Δ, e due copie
         # della stessa riduzione finirebbero per rispondere due cose diverse.
-        baseline = _baseline_percentuali(session, list(anagrafica), sett)
+        baseline = _baseline_percentuali(session, "sottotask", list(anagrafica), sett)
 
         out = {}
         for sid in ids:
@@ -930,7 +973,7 @@ def task_settimana_dipendente(dipendente_id, settimana=None):
                 # punto da cui partirà il conto, non da un numero che gli
                 # somiglia.
                 baseline_sottotask = _baseline_percentuali(
-                    session, sottotask_ids, lun
+                    session, "sottotask", sottotask_ids, lun
                 )
     finally:
         session.close()
