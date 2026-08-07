@@ -461,6 +461,105 @@ def _baseline_percentuali(session, tipo, ids, settimana):
     return {unita_id: pct for unita_id, (_sett, pct) in migliore.items()}
 
 
+def _prima_settimana_dopo(session, tipo, ids, settimana):
+    """{id: settimana} della PRIMA dichiarazione con percentuale dopo `settimana`.
+
+    Serve al ricalcolo a valle: scrivere un avanzamento a W cambia la baseline
+    di chi viene dopo, e la sola settimana da rifare è la prima dichiarata dopo
+    W (le successive hanno per baseline quella, il cui VALORE non cambia).
+
+    Generalizzata all'unità di lavoro come le sorelle `_baseline_percentuali` e
+    `percentuali_successive`: stesso `if` che sceglie solo (tabella, colonna),
+    stessa riduzione scritta una volta.
+    """
+    from models import ConsuntivoSottotask
+
+    ids = list(ids)
+    if not ids:
+        return {}
+
+    if tipo == "sottotask":
+        Dichiarazione = ConsuntivoSottotask
+        colonna_unita = ConsuntivoSottotask.sottotask_id
+    elif tipo == "task":
+        Dichiarazione = Consuntivo
+        colonna_unita = Consuntivo.task_id
+    else:
+        raise ValueError(
+            f"tipo '{tipo}' non ammesso per il ricalcolo: attesi {TIPI_UNITA}."
+        )
+
+    righe = (
+        session.query(colonna_unita, Dichiarazione.settimana)
+        .filter(
+            colonna_unita.in_(ids),
+            Dichiarazione.settimana > settimana,
+            Dichiarazione.percentuale.isnot(None),
+        )
+        .all()
+    )
+
+    prima = {}
+    for unita_id, sett in righe:
+        if unita_id not in prima or sett < prima[unita_id]:
+            prima[unita_id] = sett
+    return prima
+
+
+def percentuali_successive(session, tipo, ids, settimana):
+    """{id: (settimana, percentuale)} della dichiarazione SUCCESSIVA più bassa.
+
+    Gemella in avanti di `_baseline_percentuali`, e come quella generalizzata
+    all'unità di lavoro (Step 4, 07/08/2026): "sottotask" guarda
+    ConsuntivoSottotask, "task" guarda Consuntivo, e l'`if` sceglie SOLO la
+    coppia (tabella, colonna) — filtro e riduzione sono scritti una volta.
+
+    Serve alla MONOTONIA: recuperare una settimana passata è ammesso, ma non
+    può risultare più avanti di una successiva già dichiarata. La regola guarda
+    quindi in AVANTI, ed è per questo che non può stare né nel DTO né dentro il
+    calcolo del Δ, che guarda solo all'indietro.
+
+    Si tiene il MINIMO fra le percentuali successive: se anche solo una è più
+    indietro di quella in arrivo, la sequenza non è monotòna. Le unità senza
+    dichiarazioni successive non compaiono nel dict — nessun tetto.
+
+    Come per la baseline: solo percentuali non-NULL, e la ricerca è per UNITÀ e
+    non per dipendente (la percentuale descrive il lavoro, non la persona).
+    """
+    from models import ConsuntivoSottotask
+
+    ids = list(ids)
+    if not ids:
+        return {}
+
+    if tipo == "sottotask":
+        Dichiarazione = ConsuntivoSottotask
+        colonna_unita = ConsuntivoSottotask.sottotask_id
+    elif tipo == "task":
+        Dichiarazione = Consuntivo
+        colonna_unita = Consuntivo.task_id
+    else:
+        raise ValueError(
+            f"tipo '{tipo}' non ammesso per la monotonia: attesi {TIPI_UNITA}."
+        )
+
+    righe = (
+        session.query(colonna_unita, Dichiarazione.settimana, Dichiarazione.percentuale)
+        .filter(
+            colonna_unita.in_(ids),
+            Dichiarazione.settimana > settimana,
+            Dichiarazione.percentuale.isnot(None),
+        )
+        .all()
+    )
+
+    minimo_dopo = {}
+    for unita_id, sett, pct in righe:
+        if unita_id not in minimo_dopo or pct < minimo_dopo[unita_id][1]:
+            minimo_dopo[unita_id] = (sett, pct)
+    return minimo_dopo
+
+
 def ore_derivate_unita(tipo, avanzamenti, settimana=None, session=None):
     """Ore derivate dall'avanzamento dichiarato su una o più UNITÀ DI LAVORO.
 
@@ -1886,7 +1985,8 @@ def salva_consuntivo(dipendente_id, settimana, ore_per_task, stati_per_task,
                      ore_assenza=None, tipo_assenza=None, nota_assenza=None,
                      spese_lista=None, note_per_task=None,
                      avanzamenti_sottotask=None, ore_effettive_sottotask=None,
-                     bloccati_sottotask=None, note_sottotask=None):
+                     bloccati_sottotask=None, note_sottotask=None,
+                     percentuale_per_task=None, ore_effettive_per_task=None):
     """
     Salva il consuntivo settimanale completo di un dipendente.
 
@@ -1942,6 +2042,8 @@ def salva_consuntivo(dipendente_id, settimana, ore_per_task, stati_per_task,
     avanzamenti_sottotask = avanzamenti_sottotask or {}
     ore_effettive_sottotask = ore_effettive_sottotask or {}
     bloccati_sottotask = set(bloccati_sottotask or ())
+    percentuale_per_task = percentuale_per_task or {}
+    ore_effettive_per_task = ore_effettive_per_task or {}
     # `note_sottotask` NON si normalizza a {}: None e {} vogliono dire cose
     # diverse (non gestisco le note / le gestisco e questa volta nessuna),
     # esattamente come `note_per_task`.
@@ -2189,6 +2291,55 @@ def salva_consuntivo(dipendente_id, settimana, ore_per_task, stati_per_task,
                         data_compilazione=datetime.utcnow(),
                     ))
 
+    # ── 0-quater) IL TASK COME UNITÀ DI LAVORO ──────────────────────────
+    # Stessa derivazione dei pezzi, su un'entità diversa: `tipo="task"` fa
+    # leggere la percentuale da `Consuntivo.percentuale` e la stima da
+    # `Task.ore_pianificate`. Non c'è aggregazione da fare — le ore che ne
+    # escono sono già del task — e infatti `_aggrega_ore_unita` non ha un ramo
+    # per questo: la somma di un elemento solo È il passaggio diretto.
+    #
+    # MUTUA ESCLUSIONE: si deriva SOLO per i task che `tipo_unita_per_task`
+    # classifica come unità. Su un task scomposto la percentuale-task viene
+    # ignorata e nemmeno scritta: lasciarla sulla riga creerebbe una seconda
+    # verità sulle ore dello stesso task, che è il conflitto già risolto una
+    # volta fra derivate e manuali. Chi l'ha mandata lo scopre dagli `avvisi`,
+    # non in silenzio.
+    task_unita = set()
+    if percentuale_per_task or ore_effettive_per_task:
+        candidati = list(dict.fromkeys(
+            list(percentuale_per_task) + list(ore_effettive_per_task)
+        ))
+        tipi = tipo_unita_per_task(session, candidati)
+        task_unita = {t for t in candidati if tipi.get(t) == "task"}
+
+        scartati = [t for t in candidati if tipi.get(t) == "sottotask"]
+        for task_id in sorted(scartati):
+            avvisi.append(
+                f"Task '{task_id}': è scomposto in sottotask, quindi le sue ore "
+                f"vengono dai pezzi. L'avanzamento dichiarato sul task è stato "
+                f"ignorato — dichiaralo sui singoli sottotask."
+            )
+
+        if task_unita:
+            righe_task = [
+                (task_id,
+                 percentuale_per_task.get(task_id),
+                 ore_effettive_per_task.get(task_id))
+                for task_id in sorted(task_unita)
+            ]
+            derivate_task, non_derivabili_task = _aggrega_ore_unita(
+                session, "task", righe_task, settimana_date
+            )
+            derivate_per_task.update(derivate_task)
+
+            for task_id in sorted(non_derivabili_task):
+                avvisi.append(
+                    f"Task '{task_id}': avanzamento registrato ma ore non "
+                    f"derivate, manca `ore_pianificate`. Chiedi al PM di "
+                    f"pianificare il task dal Cantiere; le ore si "
+                    f"ricalcoleranno alla prossima dichiarazione."
+                )
+
     # Le DERIVATE VINCONO sulle ore dichiarate a mano per lo stesso task: se un
     # task è stato scomposto, la verità sulle sue ore è la somma dei pezzi.
     # Dizionario NUOVO e non mutazione: `ore_per_task` appartiene al chiamante,
@@ -2207,6 +2358,7 @@ def salva_consuntivo(dipendente_id, settimana, ore_per_task, stati_per_task,
     # restano deterministiche e i test riproducibili.
     task_toccati = dict.fromkeys(
         list(ore_per_task) + list(stati_per_task) + list(note_per_task or {})
+        + sorted(task_unita)
     )
     stati_dichiarati = {}   # task_id → stato, da propagare dopo il commit
     for task_id in task_toccati:
@@ -2237,24 +2389,50 @@ def salva_consuntivo(dipendente_id, settimana, ore_per_task, stati_per_task,
         # settimana risulterebbe non compilata su quel task pur avendo il
         # dipendente mosso (o volutamente non mosso) lo slider.
         if (not stato and not nota_pervenuta and not ore
-                and task_id not in derivate_per_task):
+                and task_id not in derivate_per_task
+                and task_id not in task_unita):
             continue
 
         # motivo_fermo è un flag, non un archivio: va RIALLINEATO a ogni
         # salvataggio, non solo popolato. Prima il ramo `else` non esisteva e
         # un task sbloccato la settimana dopo restava marcato «bloccato» per
         # sempre. Il perché del blocco lo scrive il dipendente in `nota`.
-        motivo = "Segnalato come bloccato dal dipendente" if stato == "Bloccato" else None
-
         existing = session.query(Consuntivo).filter(
             Consuntivo.task_id == task_id,
             Consuntivo.dipendente_id == dipendente_id,
             Consuntivo.settimana == settimana_date,
         ).first()
 
+        # Step 4 (07/08/2026): su un task-UNITÀ che porta un avanzamento, lo
+        # stato non si prende da `stati_per_task` — si DERIVA dal cursore, come
+        # sul sottotask. Di `stati_per_task` resta significativo il solo
+        # «Bloccato», l'unica cosa che una percentuale non può dire.
+        # Fuori da questo caso `stato` resta esattamente quello di prima: un
+        # task senza percentuale (o scomposto) continua a dichiarare lo stato a
+        # mano, e il comportamento storico non si muove di una virgola.
+        if task_id in task_unita:
+            bloccato = (stato == "Bloccato")
+            if task_id in percentuale_per_task or bloccato:
+                pct_finale = percentuale_per_task.get(
+                    task_id, existing.percentuale if existing else None
+                )
+                stato = _stato_da_avanzamento(pct_finale, bloccato)
+
+        # motivo_fermo è un flag, non un archivio: va RIALLINEATO a ogni
+        # salvataggio. Si calcola DOPO l'eventuale derivazione, altrimenti un
+        # blocco derivato non lo accenderebbe.
+        motivo = "Segnalato come bloccato dal dipendente" if stato == "Bloccato" else None
+
         if existing:
             if ore is not None:
                 existing.ore_dichiarate = ore
+            # I due campi dell'unità di lavoro, con la convenzione «chiave
+            # assente = non toccare» degli altri: dichiarare le ore effettive
+            # non deve cancellare la percentuale scritta prima, né viceversa.
+            if task_id in percentuale_per_task:
+                existing.percentuale = percentuale_per_task[task_id]
+            if task_id in ore_effettive_per_task:
+                existing.ore_effettive = ore_effettive_per_task[task_id]
             existing.compilato = True
             existing.data_compilazione = datetime.utcnow()
             existing.motivo_fermo = motivo
@@ -2280,10 +2458,56 @@ def salva_consuntivo(dipendente_id, settimana, ore_per_task, stati_per_task,
                 # None se il task non è in stati_per_task: la riga nasce da
                 # sole ore o sola nota e nessuno si è espresso sullo stato.
                 stato_dichiarato=stato,
+                percentuale=percentuale_per_task.get(task_id),
+                ore_effettive=ore_effettive_per_task.get(task_id),
             ))
 
         if stato:
             stati_dichiarati[task_id] = stato
+
+    # 1-bis) RICALCOLO A VALLE, per i task-unità.
+    #
+    # Stessa logica del blocco 0-ter sui sottotask, su un'altra tabella: la
+    # dichiarazione di W cambia la baseline della prima settimana dichiarata
+    # dopo, e le ore già derivate lì vanno rifatte. Una settimana sola, per la
+    # stessa ragione (monotonia imposta a monte, niente cascata).
+    #
+    # STA QUI E NON ACCANTO ALLA DERIVAZIONE, a differenza del gemello sui
+    # sottotask, e la ragione è l'ordine di scrittura: le righe
+    # ConsuntivoSottotask si scrivono e si flushano PRIMA di derivare, mentre la
+    # percentuale del TASK finisce sulla riga Consuntivo che il ciclo qui sopra
+    # ha appena scritto. Ricalcolando prima, la baseline della settimana a valle
+    # non vedrebbe la dichiarazione appena inserita e ricalcolerebbe lo stesso
+    # numero di prima — cioè non ricalcolerebbe affatto, in silenzio.
+    # La query sotto fa autoflush della riga nuova, che è ciò che serve.
+    if task_unita:
+        for task_id, sett_dopo in sorted(
+            _prima_settimana_dopo(
+                session, "task", sorted(task_unita), settimana_date
+            ).items()
+        ):
+            # Tutte le righe di quel task in quella settimana: la percentuale è
+            # per (task, dipendente, settimana), quindi più persone possono
+            # averne una — ciascuna con la propria riga da riscrivere, come per
+            # i pezzi con assegnatario diverso.
+            righe_dopo = (
+                session.query(Consuntivo)
+                .filter(
+                    Consuntivo.task_id == task_id,
+                    Consuntivo.settimana == sett_dopo,
+                )
+                .all()
+            )
+            for riga in righe_dopo:
+                ricalcolo, _ = _aggrega_ore_unita(
+                    session, "task",
+                    [(task_id, riga.percentuale, riga.ore_effettive)],
+                    sett_dopo,
+                )
+                # `.get` con default 0.0: se il ricalcolo non produce nulla
+                # (percentuale sparita, o stima mancante) la riga va a zero, non
+                # resta col valore vecchio che ora è falso.
+                riga.ore_dichiarate = ricalcolo.get(task_id, 0.0)
 
     # 2) Presenze settimanali (smart working + assenze) — SOLO SE PERVENUTE.
     # Ogni campo è aggiornato singolarmente e solo se non è None: il blocco non

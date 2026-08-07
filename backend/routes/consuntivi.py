@@ -134,6 +134,7 @@ from data import (
     settimane_selezionabili,
     note_consuntivi_settimana,
     note_sottotask_settimana,
+    percentuali_successive,
 )
 
 
@@ -190,6 +191,24 @@ class SalvaConsuntivoRequest(BaseModel):
     # None = il chiamante non gestisce le note, non toccarle (stessa
     # convenzione di `spese`); chiave presente e vuota = cancella la nota.
     note_per_task: Optional[dict[str, str]] = None
+    # ── Il TASK come unità di lavoro (Step 4, 07/08/2026) ────────────────
+    # Un task NON scomposto dichiara l'avanzamento come lo dichiara un pezzo.
+    # Sono i due campi che mancavano: gli altri due di una dichiarazione — lo
+    # stato e la nota — il task li ha GIÀ in `stati_per_task` e `note_per_task`,
+    # e non si duplicano.
+    #
+    # Quando arriva `percentuale_per_task`, lo `stato_dichiarato` del task NON
+    # viene più preso da `stati_per_task`: si DERIVA dal cursore (100→Completato,
+    # 1-99→In corso, 0→nessuno stato), esattamente come sul sottotask. Di
+    # `stati_per_task` resta significativo il solo «Bloccato», che è l'unica
+    # cosa che una percentuale non può dire — un task fermo al 40% è
+    # indistinguibile da uno che avanza piano.
+    #
+    # Su un task SCOMPOSTO questi due campi vengono IGNORATI: le sue ore vengono
+    # dai pezzi (mutua esclusione, `tipo_unita_per_task`). Il chiamante lo scopre
+    # dagli `avvisi` in risposta, non in silenzio.
+    percentuale_per_task: dict[str, int] = {}
+    ore_effettive_per_task: dict[str, float] = {}
     # Avanzamento dichiarato sui SOTTOTASK: {sottotask_id: percentuale 0-100}.
     # Step 4 (06/08/2026) — è l'input del motore ore-derivate: da qui NON
     # arrivano ore, arrivano percentuali, e le ore le calcola il backend
@@ -284,6 +303,23 @@ class SalvaConsuntivoRequest(BaseModel):
         # CHECK ck_consuntivo_sottotask_percentuale come IntegrityError, cioè un
         # 500 opaco su un errore del chiamante — la trappola che la nota di
         # metodo qui sopra descrive per gli stati.
+        # Gli stessi due range valgono per il TASK come unità di lavoro: la
+        # regola è della DICHIARAZIONE, non dell'entità che la porta.
+        for tid, pct in self.percentuale_per_task.items():
+            if pct < 0 or pct > 100:
+                raise HTTPException(
+                    400,
+                    f"Avanzamento {pct} non valido sul task {tid}: "
+                    f"la percentuale va da 0 a 100.",
+                )
+        for tid, ore in self.ore_effettive_per_task.items():
+            if ore < 0:
+                raise HTTPException(
+                    400,
+                    f"Ore effettive {ore} non valide sul task {tid}: "
+                    f"non possono essere negative.",
+                )
+
         for sid, pct in self.avanzamenti_sottotask.items():
             if pct < 0 or pct > 100:
                 raise HTTPException(
@@ -488,25 +524,13 @@ def _valida_dichiarazioni_sottotask(req: "SalvaConsuntivoRequest", settimana):
         if not req.avanzamenti_sottotask:
             return                       # niente percentuali, niente monotonia
 
-        successive = (
-            session.query(
-                ConsuntivoSottotask.sottotask_id,
-                ConsuntivoSottotask.settimana,
-                ConsuntivoSottotask.percentuale,
-            )
-            .filter(
-                ConsuntivoSottotask.sottotask_id.in_(list(req.avanzamenti_sottotask)),
-                ConsuntivoSottotask.settimana > settimana,
-                ConsuntivoSottotask.percentuale.isnot(None),
-            )
-            .all()
+        # La regola vive in `percentuali_successive` (data layer), gemella in
+        # avanti di `_baseline_percentuali`: la stessa funzione serve i
+        # sottotask qui e i task in `_valida_avanzamento_task`, così la
+        # monotonia non ha due definizioni.
+        minimo_dopo = percentuali_successive(
+            session, "sottotask", list(req.avanzamenti_sottotask), settimana
         )
-        # Il minimo fra le successive: se anche solo una è più indietro della
-        # percentuale in arrivo, la sequenza non è monotòna.
-        minimo_dopo = {}
-        for sid, sett, pct in successive:
-            if sid not in minimo_dopo or pct < minimo_dopo[sid][1]:
-                minimo_dopo[sid] = (sett, pct)
 
         violazioni = []
         for sid, pct in req.avanzamenti_sottotask.items():
@@ -527,6 +551,54 @@ def _valida_dichiarazioni_sottotask(req: "SalvaConsuntivoRequest", settimana):
             )
     finally:
         session.close()
+
+
+def _valida_avanzamento_task(req: "SalvaConsuntivoRequest", settimana):
+    """Monotonia sull'avanzamento dichiarato a livello TASK.
+
+    Gemella della regola 3 di `_valida_dichiarazioni_sottotask`, e ne riusa la
+    STESSA funzione di ricerca (`percentuali_successive`, che prende il tipo):
+    la monotonia ha una definizione sola, non una per entità.
+
+    Le altre tre regole dei sottotask NON si generalizzano, e non per pigrizia:
+      - «il sottotask deve esistere» → l'esistenza del task è già garantita a
+        monte (la FK di `consuntivi` e il fatto che il payload nasce da /me);
+      - «niente avanzamento su un sottotask Annullato» → il task ha sì uno stato
+        "Annullato", ma è di pianificazione del PM su un'altra scala: un task
+        annullato non compare in /me (`task_settimana_dipendente` lo filtra) e
+        non è il caso che questa regola descrive;
+      - «un Bloccato richiede una nota» → per il TASK esiste già, ed è
+        `_valida_blocchi_motivati` qui sopra. Riscriverla sarebbe la
+        duplicazione che tutto questo Step ha evitato.
+    """
+    if not req.percentuale_per_task:
+        return
+
+    session = get_session()
+    try:
+        minimo_dopo = percentuali_successive(
+            session, "task", list(req.percentuale_per_task), settimana
+        )
+    finally:
+        session.close()
+
+    violazioni = []
+    for task_id, pct in req.percentuale_per_task.items():
+        dopo = minimo_dopo.get(task_id)
+        if dopo is not None and pct > dopo[1]:
+            violazioni.append(
+                f"'{task_id}' al {pct}% mentre la settimana del "
+                f"{dopo[0].isoformat()} è già dichiarata al {dopo[1]}%"
+            )
+
+    if violazioni:
+        raise HTTPException(
+            400,
+            f"Avanzamento incoerente col seguito: {'; '.join(violazioni)}. "
+            f"Una settimana passata non può risultare più avanti di una "
+            f"successiva: correggi la percentuale, oppure aggiorna prima "
+            f"la settimana più recente.",
+        )
 
 
 # ── Router ───────────────────────────────────────────────────────────────
@@ -774,6 +846,7 @@ def salva_consuntivo_endpoint(
     # settimana bersaglio, che qui è ormai decisa.
     _valida_blocchi_motivati(req, lun)
     _valida_dichiarazioni_sottotask(req, lun)
+    _valida_avanzamento_task(req, lun)
 
     if PERSISTENT_MODE:
         esito = salva_consuntivo(
@@ -795,6 +868,8 @@ def salva_consuntivo_endpoint(
             ore_effettive_sottotask=req.ore_effettive_sottotask,
             bloccati_sottotask=req.bloccati_sottotask,
             note_sottotask=req.note_sottotask,
+            percentuale_per_task=req.percentuale_per_task,
+            ore_effettive_per_task=req.ore_effettive_per_task,
         )
         # `avvisi`: segnalazioni non bloccanti del motore ore-derivate (Step 4).
         # Lista vuota nel caso normale — il campo c'è sempre, così il client non
