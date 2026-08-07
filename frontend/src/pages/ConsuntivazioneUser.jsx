@@ -180,15 +180,18 @@ export default function ConsuntivazioneUser() {
   const salva = async () => {
     if (!haPendenti || soloLettura) return
 
-    // Validazione: Bloccato richiede nota
+    // Validazione: Bloccato richiede nota. Si legge `bloccato` e non più
+    // `stato`: dal 5c il blocco del task è un flag come sul pezzo, e `stato`
+    // ricadrebbe sul valore del server ignorando uno sblocco appena fatto.
+    // E si controllano solo i task TOCCATI, come per i pezzi: un task già
+    // bloccato senza nota, che non ho aperto, non deve impedirmi di salvare.
     for (const t of dati.task_settimana) {
-      const stato = valore(t, 'stato')
-      const nota = (valore(t, 'nota') ?? '').trim()
-      if (stato === 'Bloccato' && !nota) {
-        setSalvataggio(`"${t.task_nome}" è bloccato: scrivi perché nella nota.`)
-        setNoteAperte((p) => ({ ...p, [t.task_id]: true }))
-        return
-      }
+      if (!modifiche[t.task_id]) continue
+      if (!valore(t, 'bloccato')) continue
+      if ((valore(t, 'nota') ?? '').trim()) continue
+      setSalvataggio(`"${t.task_nome}" è bloccato: scrivi perché nella nota.`)
+      setNoteAperte((p) => ({ ...p, [t.task_id]: true }))
+      return
     }
 
     // Stessa regola sui PEZZI. Si controllano solo quelli TOCCATI: un pezzo
@@ -257,6 +260,45 @@ export default function ConsuntivazioneUser() {
       if (m.nota !== undefined) note_sottotask[id] = m.nota
     }
 
+    /* ── I due dizionari del TASK come unità di lavoro ──────────────────
+     * Stessa logica dei pezzi qui sopra, applicata al task: la condizione su
+     * QUANDO mandare la percentuale è identica, e non è una scelta di stile —
+     * il backend ricalcola `stato_dichiarato` solo se il task compare fra i
+     * `percentuale_per_task` (che è ciò che lo mette fra le «unità» del
+     * salvataggio). Sbloccare senza mandare la percentuale lascerebbe il task
+     * Bloccato per sempre; mandarla mentre si ritocca solo la nota di un task
+     * fermo lo sbloccherebbe in silenzio.
+     *
+     * Il BLOCCO del task non ha un dizionario suo: il backend lo legge da
+     * `stati_per_task[task_id] === 'Bloccato'`, che è dove il task ha sempre
+     * dichiarato il proprio stato. Dopo il 5c è l'unico valore che quel
+     * dizionario porta ancora — gli altri due stati li deriva il cursore.
+     *
+     * SOLO i task NON scomposti: su un task con pezzi la percentuale vive sui
+     * pezzi, e mandargliene una sarebbe la doppia verità che il backend già
+     * scarta con un avviso. Meglio non mandargliela affatto.
+     */
+    const percentuale_per_task = {}
+    const ore_effettive_per_task = {}
+
+    for (const t of dati.task_settimana ?? []) {
+      const m = modifiche[t.task_id]
+      if (!m) continue
+      if ((t.sottotask ?? []).length > 0) continue   // scomposto: sta ai pezzi
+
+      if (m.percentuale !== undefined || m.bloccato === false) {
+        percentuale_per_task[t.task_id] = Number(valore(t, 'percentuale'))
+      }
+      // Campo svuotato = niente da mandare: la chiave assente lascia in pace
+      // le ore già salvate. Azzerarle davvero non è esprimibile — 0.0 per il
+      // backend significa «zero ore effettive, e lo dico io», che spegne la
+      // derivazione invece di riattivarla.
+      if (m.ore_effettive !== undefined && String(m.ore_effettive).trim() !== '') {
+        ore_effettive_per_task[t.task_id] = parseFloat(m.ore_effettive)
+      }
+      if (valore(t, 'bloccato')) stati_per_task[t.task_id] = 'Bloccato'
+    }
+
     try {
       await apiFetch('/api/consuntivi/salva', {
         method: 'POST',
@@ -266,6 +308,8 @@ export default function ConsuntivazioneUser() {
           ore_per_task,
           stati_per_task,
           note_per_task,
+          percentuale_per_task,
+          ore_effettive_per_task,
           avanzamenti_sottotask,
           ore_effettive_sottotask,
           bloccati_sottotask,
