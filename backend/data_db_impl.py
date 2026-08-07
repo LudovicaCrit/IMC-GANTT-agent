@@ -2038,565 +2038,579 @@ def salva_consuntivo(dipendente_id, settimana, ore_per_task, stati_per_task,
     from models import PresenzaSettimanale, Spesa, Sottotask, ConsuntivoSottotask
 
     session = get_session()
-    settimana_date = _lunedi(settimana)
-    avanzamenti_sottotask = avanzamenti_sottotask or {}
-    ore_effettive_sottotask = ore_effettive_sottotask or {}
-    bloccati_sottotask = set(bloccati_sottotask or ())
-    percentuale_per_task = percentuale_per_task or {}
-    ore_effettive_per_task = ore_effettive_per_task or {}
-    # `note_sottotask` NON si normalizza a {}: None e {} vogliono dire cose
-    # diverse (non gestisco le note / le gestisco e questa volta nessuna),
-    # esattamente come `note_per_task`.
-    # Un salvataggio «tocca i sottotask» se porta almeno uno dei quattro campi.
-    # Calcolato una volta sola: quando qualcuno ne aggiungerà un quinto, i rami
-    # non divergeranno.
-    tocca_sottotask = bool(
-        avanzamenti_sottotask or ore_effettive_sottotask
-        or bloccati_sottotask or note_sottotask
-    )
-    avvisi = []          # segnalazioni non bloccanti, tornano al chiamante
+    try:
+        settimana_date = _lunedi(settimana)
+        avanzamenti_sottotask = avanzamenti_sottotask or {}
+        ore_effettive_sottotask = ore_effettive_sottotask or {}
+        bloccati_sottotask = set(bloccati_sottotask or ())
+        percentuale_per_task = percentuale_per_task or {}
+        ore_effettive_per_task = ore_effettive_per_task or {}
+        # `note_sottotask` NON si normalizza a {}: None e {} vogliono dire cose
+        # diverse (non gestisco le note / le gestisco e questa volta nessuna),
+        # esattamente come `note_per_task`.
+        # Un salvataggio «tocca i sottotask» se porta almeno uno dei quattro campi.
+        # Calcolato una volta sola: quando qualcuno ne aggiungerà un quinto, i rami
+        # non divergeranno.
+        tocca_sottotask = bool(
+            avanzamenti_sottotask or ore_effettive_sottotask
+            or bloccati_sottotask or note_sottotask
+        )
+        avvisi = []          # segnalazioni non bloccanti, tornano al chiamante
 
-    # 0) AVANZAMENTO SUI SOTTOTASK — si scrive PRIMA del ciclo sui task.
-    # L'ordine non è di comodo: le ore del task sono DERIVATE da queste righe,
-    # e il calcolo del Δ (`ore_derivate_sottotask`) deve poterle già leggere.
-    # Tutto nella stessa sessione e nello stesso commit del ciclo: se le
-    # dichiarazioni finissero in una transazione separata, un errore a metà
-    # lascerebbe scritto l'avanzamento e non le ore che ne discendono.
-    #
-    # Upsert manuale sulla UNIQUE (sottotask, dipendente, settimana), identico
-    # nella forma a quello su Consuntivo poco sotto: ricompilare la stessa
-    # settimana AGGIORNA la riga, non ne aggiunge una seconda. È lo stesso bug
-    # dei duplicati descritto in fondo a questa docstring, e la UNIQUE lo
-    # intercetta solo perché la settimana è già normalizzata al lunedì.
-    #
-    # `stato_dichiarato` e `nota` della riga-sottotask restano NULL: oggi il
-    # form manda solo l'avanzamento. Le colonne esistono (migration
-    # f2a3b4c5d6e7) e verranno riempite quando il form le porterà.
-    # Si itera sull'UNIONE dei due dizionari, non su uno dei due: avanzamento e
-    # ore effettive sono campi INDIPENDENTI della stessa riga e possono arrivare
-    # insieme, separatamente, o in salvataggi diversi. Un pezzo fermo porta solo
-    # le ore (la percentuale non si muove), un pezzo che avanza nei tempi porta
-    # solo l'avanzamento.
-    # Ciascun campo si scrive SOLO se pervenuto — la convenzione «chiave assente
-    # = non toccare» già usata per `note_per_task` e per le presenze. Senza,
-    # dichiarare l'avanzamento la settimana dopo azzererebbe le ore effettive
-    # scritte prima, e viceversa: due campi che si cancellano a vicenda a ogni
-    # salvataggio parziale.
-    sottotask_toccati = dict.fromkeys(
-        list(avanzamenti_sottotask) + list(ore_effettive_sottotask)
-        + sorted(bloccati_sottotask) + list(note_sottotask or {})
-    )
-    for sottotask_id in sottotask_toccati:
-        riga = session.query(ConsuntivoSottotask).filter(
-            ConsuntivoSottotask.sottotask_id == sottotask_id,
-            ConsuntivoSottotask.dipendente_id == dipendente_id,
-            ConsuntivoSottotask.settimana == settimana_date,
-        ).first()
-        if riga is None:
-            riga = ConsuntivoSottotask(
-                sottotask_id=sottotask_id,
-                dipendente_id=dipendente_id,
-                settimana=settimana_date,
-            )
-            session.add(riga)
-
-        if sottotask_id in avanzamenti_sottotask:
-            riga.percentuale = avanzamenti_sottotask[sottotask_id]
-        if sottotask_id in ore_effettive_sottotask:
-            riga.ore_effettive = ore_effettive_sottotask[sottotask_id]
-
-        # Nota: stesso trattamento delle note-task, `_nota_task` compreso —
-        # vuota o soli spazi diventa NULL, così `nota IS NOT NULL` significa
-        # davvero «ha scritto qualcosa» anche qui. La chiave assente NON tocca
-        # la nota esistente: il form manda solo quelle modificate, e riscrivere
-        # NULL a ogni salvataggio cancellerebbe il diario del pezzo.
-        if note_sottotask is not None and sottotask_id in note_sottotask:
-            riga.nota = _nota_task(note_sottotask[sottotask_id])
-
-        # Stato dichiarato: si RICALCOLA ogni volta che arriva uno dei suoi due
-        # input (la percentuale o il flag di blocco), invece di essere scritto
-        # una volta e lasciato lì. È un campo derivato, e un derivato che non
-        # segue la sua sorgente è solo una vecchia risposta: correggere il 100%
-        # in 60% e ritrovarsi la riga ancora "Completato" sarebbe una
-        # contraddizione scritta in tabella.
-        # Se non arriva nessuno dei due, la colonna non si tocca — un
-        # salvataggio di sole ore effettive non cancella lo stato dichiarato
-        # prima (stessa convenzione delle note e delle presenze).
-        if sottotask_id in avanzamenti_sottotask or sottotask_id in bloccati_sottotask:
-            riga.stato_dichiarato = _stato_da_avanzamento(
-                riga.percentuale, sottotask_id in bloccati_sottotask
-            )
-
-        riga.compilato = True
-        riga.data_compilazione = datetime.utcnow()
-
-    # Flush e non commit: le righe diventano visibili alle query successive
-    # DENTRO questa transazione — che è ciò che serve alla derivazione — senza
-    # rendere definitivo niente finché il salvataggio non è completo.
-    derivate_per_task = {}
-    if tocca_sottotask:
-        session.flush()
-
-        # 0-bis) DERIVAZIONE E AGGREGAZIONE SUL TASK.
+        # 0) AVANZAMENTO SUI SOTTOTASK — si scrive PRIMA del ciclo sui task.
+        # L'ordine non è di comodo: le ore del task sono DERIVATE da queste righe,
+        # e il calcolo del Δ (`ore_derivate_sottotask`) deve poterle già leggere.
+        # Tutto nella stessa sessione e nello stesso commit del ciclo: se le
+        # dichiarazioni finissero in una transazione separata, un errore a metà
+        # lascerebbe scritto l'avanzamento e non le ore che ne discendono.
         #
-        # SI RIPARTE DAL DATABASE, NON DAL PAYLOAD. Le ore del task si
-        # ricalcolano sommando TUTTE le dichiarazioni di questo dipendente su
-        # quel task in quella settimana, comprese quelle di salvataggi
-        # precedenti che il body corrente non ripete. È obbligatorio, non
-        # prudenziale: l'upsert sotto ASSEGNA (`existing.ore_dichiarate = ore`)
-        # invece di sommare, quindi aggregare i soli sottotask del payload
-        # cancellerebbe le ore derivate dagli altri. Compilo A (5h), poi
-        # ri-apro la settimana e tocco solo B (3h): senza questo, il task
-        # passerebbe da 5 a 3 invece che a 8.
-        task_dei_sottotask = {
-            r.task_id
-            for r in session.query(Sottotask.task_id)
-            .filter(Sottotask.id.in_(list(sottotask_toccati))).all()
-        }
-        dichiarazioni = (
-            session.query(
-                ConsuntivoSottotask.sottotask_id,
-                ConsuntivoSottotask.percentuale,
-                ConsuntivoSottotask.ore_effettive,
-            )
-            .join(Sottotask, Sottotask.id == ConsuntivoSottotask.sottotask_id)
-            .filter(
-                Sottotask.task_id.in_(task_dei_sottotask),
+        # Upsert manuale sulla UNIQUE (sottotask, dipendente, settimana), identico
+        # nella forma a quello su Consuntivo poco sotto: ricompilare la stessa
+        # settimana AGGIORNA la riga, non ne aggiunge una seconda. È lo stesso bug
+        # dei duplicati descritto in fondo a questa docstring, e la UNIQUE lo
+        # intercetta solo perché la settimana è già normalizzata al lunedì.
+        #
+        # `stato_dichiarato` e `nota` della riga-sottotask restano NULL: oggi il
+        # form manda solo l'avanzamento. Le colonne esistono (migration
+        # f2a3b4c5d6e7) e verranno riempite quando il form le porterà.
+        # Si itera sull'UNIONE dei due dizionari, non su uno dei due: avanzamento e
+        # ore effettive sono campi INDIPENDENTI della stessa riga e possono arrivare
+        # insieme, separatamente, o in salvataggi diversi. Un pezzo fermo porta solo
+        # le ore (la percentuale non si muove), un pezzo che avanza nei tempi porta
+        # solo l'avanzamento.
+        # Ciascun campo si scrive SOLO se pervenuto — la convenzione «chiave assente
+        # = non toccare» già usata per `note_per_task` e per le presenze. Senza,
+        # dichiarare l'avanzamento la settimana dopo azzererebbe le ore effettive
+        # scritte prima, e viceversa: due campi che si cancellano a vicenda a ogni
+        # salvataggio parziale.
+        sottotask_toccati = dict.fromkeys(
+            list(avanzamenti_sottotask) + list(ore_effettive_sottotask)
+            + sorted(bloccati_sottotask) + list(note_sottotask or {})
+        )
+        for sottotask_id in sottotask_toccati:
+            riga = session.query(ConsuntivoSottotask).filter(
+                ConsuntivoSottotask.sottotask_id == sottotask_id,
                 ConsuntivoSottotask.dipendente_id == dipendente_id,
                 ConsuntivoSottotask.settimana == settimana_date,
-            )
-            .all()
-        )
+            ).first()
+            if riga is None:
+                riga = ConsuntivoSottotask(
+                    sottotask_id=sottotask_id,
+                    dipendente_id=dipendente_id,
+                    settimana=settimana_date,
+                )
+                session.add(riga)
 
-        derivate_per_task, non_derivabili = _aggrega_ore_unita(
-            session, "sottotask", dichiarazioni, settimana_date
-        )
+            if sottotask_id in avanzamenti_sottotask:
+                riga.percentuale = avanzamenti_sottotask[sottotask_id]
+            if sottotask_id in ore_effettive_sottotask:
+                riga.ore_effettive = ore_effettive_sottotask[sottotask_id]
 
-        if non_derivabili:
-            nomi = dict(
-                session.query(Sottotask.id, Sottotask.nome)
-                .filter(Sottotask.id.in_(non_derivabili)).all()
-            )
-            for sottotask_id in sorted(non_derivabili):
-                avvisi.append(
-                    f"Sottotask '{nomi.get(sottotask_id, sottotask_id)}': "
-                    f"avanzamento registrato ma ore non derivate, manca "
-                    f"`ore_stimate`. Chiedi al PM di stimare il pezzo dal "
-                    f"Cantiere; le ore si ricalcoleranno alla prossima "
-                    f"dichiarazione."
+            # Nota: stesso trattamento delle note-task, `_nota_task` compreso —
+            # vuota o soli spazi diventa NULL, così `nota IS NOT NULL` significa
+            # davvero «ha scritto qualcosa» anche qui. La chiave assente NON tocca
+            # la nota esistente: il form manda solo quelle modificate, e riscrivere
+            # NULL a ogni salvataggio cancellerebbe il diario del pezzo.
+            if note_sottotask is not None and sottotask_id in note_sottotask:
+                riga.nota = _nota_task(note_sottotask[sottotask_id])
+
+            # Stato dichiarato: si RICALCOLA ogni volta che arriva uno dei suoi due
+            # input (la percentuale o il flag di blocco), invece di essere scritto
+            # una volta e lasciato lì. È un campo derivato, e un derivato che non
+            # segue la sua sorgente è solo una vecchia risposta: correggere il 100%
+            # in 60% e ritrovarsi la riga ancora "Completato" sarebbe una
+            # contraddizione scritta in tabella.
+            # Se non arriva nessuno dei due, la colonna non si tocca — un
+            # salvataggio di sole ore effettive non cancella lo stato dichiarato
+            # prima (stessa convenzione delle note e delle presenze).
+            if sottotask_id in avanzamenti_sottotask or sottotask_id in bloccati_sottotask:
+                riga.stato_dichiarato = _stato_da_avanzamento(
+                    riga.percentuale, sottotask_id in bloccati_sottotask
                 )
 
-        # 0-ter) RICALCOLO DELLA SETTIMANA A VALLE.
-        #
-        # Scrivere un avanzamento a W cambia la BASELINE di chi viene dopo, e
-        # le ore già derivate a valle diventano sbagliate. Il caso reale è il
-        # recupero: `settimane_selezionabili` riapre la settimana precedente se
-        # incompleta, quindi si compila W, poi si torna su W−1.
-        #   W dichiarato 60% con baseline 0   → 60% delle ore, scritto.
-        #   poi W−1 dichiarato 40%            → 40% delle ore.
-        #   ma ora il Δ giusto di W è 60−40 = 20%, non 60%.
-        # Senza questo blocco resterebbero in DB 60%+40% = 100% delle ore per
-        # un pezzo dichiarato al 60%. Non è un arrotondamento: è il 67% in più.
-        #
-        # SI RICALCOLA UNA SOLA SETTIMANA, non una cascata — ed è la MONOTONIA
-        # imposta in `routes/consuntivi._valida_avanzamenti_sottotask` a
-        # garantirlo. Inserire una dichiarazione a W invalida la baseline della
-        # PRIMA settimana dichiarata dopo W, e basta: le successive hanno per
-        # baseline quella, il cui VALORE non è cambiato (è cambiato solo il suo
-        # Δ). Niente propagazione, niente ricorsione.
-        #
-        # Il ricalcolo usa `ore_stimate` CORRENTE, non quella di allora: il
-        # motore è agnostico al passato, e la fotografia storica è compito del
-        # SAL (`_serializza_stato_progetto`), che è autocontenuto apposta.
-        successive = (
-            session.query(
-                ConsuntivoSottotask.sottotask_id,
-                ConsuntivoSottotask.settimana,
-                Sottotask.task_id,
-            )
-            .join(Sottotask, Sottotask.id == ConsuntivoSottotask.sottotask_id)
-            .filter(
-                ConsuntivoSottotask.sottotask_id.in_(list(avanzamenti_sottotask)),
-                ConsuntivoSottotask.settimana > settimana_date,
-                ConsuntivoSottotask.percentuale.isnot(None),
-            )
-            .all()
-        )
-        # La PRIMA settimana dichiarata dopo W, per sottotask → l'insieme delle
-        # coppie (task, settimana) da rifare. Due sottotask dello stesso task
-        # con la stessa settimana a valle collassano in una coppia sola.
-        prima_dopo = {}
-        for sid, sett_dopo, tid in successive:
-            if sid not in prima_dopo or sett_dopo < prima_dopo[sid][0]:
-                prima_dopo[sid] = (sett_dopo, tid)
-        da_rifare = {(tid, sett_dopo) for sett_dopo, tid in prima_dopo.values()}
+            riga.compilato = True
+            riga.data_compilazione = datetime.utcnow()
 
-        for tid, sett_dopo in sorted(da_rifare):
-            # TUTTE le dichiarazioni su quel task in quella settimana, non solo
-            # quelle dei sottotask toccati oggi: la riga Consuntivo che stiamo
-            # per riscrivere le aggrega tutte, e ricalcolarne una parte
-            # cancellerebbe il resto (stessa ragione della rilettura dal DB
-            # nel blocco 0-bis).
-            righe_dopo = (
+        # Flush e non commit: le righe diventano visibili alle query successive
+        # DENTRO questa transazione — che è ciò che serve alla derivazione — senza
+        # rendere definitivo niente finché il salvataggio non è completo.
+        derivate_per_task = {}
+        if tocca_sottotask:
+            session.flush()
+
+            # 0-bis) DERIVAZIONE E AGGREGAZIONE SUL TASK.
+            #
+            # SI RIPARTE DAL DATABASE, NON DAL PAYLOAD. Le ore del task si
+            # ricalcolano sommando TUTTE le dichiarazioni di questo dipendente su
+            # quel task in quella settimana, comprese quelle di salvataggi
+            # precedenti che il body corrente non ripete. È obbligatorio, non
+            # prudenziale: l'upsert sotto ASSEGNA (`existing.ore_dichiarate = ore`)
+            # invece di sommare, quindi aggregare i soli sottotask del payload
+            # cancellerebbe le ore derivate dagli altri. Compilo A (5h), poi
+            # ri-apro la settimana e tocco solo B (3h): senza questo, il task
+            # passerebbe da 5 a 3 invece che a 8.
+            task_dei_sottotask = {
+                r.task_id
+                for r in session.query(Sottotask.task_id)
+                .filter(Sottotask.id.in_(list(sottotask_toccati))).all()
+            }
+            dichiarazioni = (
                 session.query(
                     ConsuntivoSottotask.sottotask_id,
-                    ConsuntivoSottotask.dipendente_id,
                     ConsuntivoSottotask.percentuale,
                     ConsuntivoSottotask.ore_effettive,
                 )
                 .join(Sottotask, Sottotask.id == ConsuntivoSottotask.sottotask_id)
                 .filter(
-                    Sottotask.task_id == tid,
-                    ConsuntivoSottotask.settimana == sett_dopo,
+                    Sottotask.task_id.in_(task_dei_sottotask),
+                    ConsuntivoSottotask.dipendente_id == dipendente_id,
+                    ConsuntivoSottotask.settimana == settimana_date,
                 )
                 .all()
             )
-            # Raggruppate per DIPENDENTE: la grana di Consuntivo è (task,
-            # dipendente, settimana), e chi ha dichiarato a valle può non essere
-            # chi sta salvando adesso — un sottotask può avere un assegnatario
-            # proprio in override (Sottotask.dipendente_id). Si riscrive la riga
-            # di ciascuno, non quella di chi ha in mano il form.
-            per_dipendente = {}
-            for sid, did, pct, ore_eff in righe_dopo:
-                per_dipendente.setdefault(did, []).append((sid, pct, ore_eff))
 
-            for did, righe_dip in per_dipendente.items():
-                # Stesso helper dell'aggregazione sopra, quindi stessa regola:
-                # dove ci sono ore effettive, il ricalcolo NON le tocca. Sono un
-                # dato esplicito e non una derivata, e una baseline cambiata a
-                # monte non ha voce in capitolo su quante ore è costato davvero
-                # quel pezzo. È la differenza fra correggere un calcolo e
-                # riscrivere una dichiarazione.
-                per_task_dopo, _ = _aggrega_ore_unita(session, "sottotask", righe_dip, sett_dopo)
-                totale = per_task_dopo.get(tid, 0.0)
-
-                riga_cons = session.query(Consuntivo).filter(
-                    Consuntivo.task_id == tid,
-                    Consuntivo.dipendente_id == did,
-                    Consuntivo.settimana == sett_dopo,
-                ).first()
-                if riga_cons:
-                    riga_cons.ore_dichiarate = totale
-                else:
-                    # Non dovrebbe capitare — se ci sono dichiarazioni a valle
-                    # la riga esiste — ma se manca la si crea invece di perdere
-                    # le ore. `compilato=True` perché una dichiarazione sui
-                    # sottotask È una compilazione.
-                    session.add(Consuntivo(
-                        task_id=tid,
-                        dipendente_id=did,
-                        settimana=sett_dopo,
-                        ore_dichiarate=totale,
-                        compilato=True,
-                        data_compilazione=datetime.utcnow(),
-                    ))
-
-    # ── 0-quater) IL TASK COME UNITÀ DI LAVORO ──────────────────────────
-    # Stessa derivazione dei pezzi, su un'entità diversa: `tipo="task"` fa
-    # leggere la percentuale da `Consuntivo.percentuale` e la stima da
-    # `Task.ore_pianificate`. Non c'è aggregazione da fare — le ore che ne
-    # escono sono già del task — e infatti `_aggrega_ore_unita` non ha un ramo
-    # per questo: la somma di un elemento solo È il passaggio diretto.
-    #
-    # MUTUA ESCLUSIONE: si deriva SOLO per i task che `tipo_unita_per_task`
-    # classifica come unità. Su un task scomposto la percentuale-task viene
-    # ignorata e nemmeno scritta: lasciarla sulla riga creerebbe una seconda
-    # verità sulle ore dello stesso task, che è il conflitto già risolto una
-    # volta fra derivate e manuali. Chi l'ha mandata lo scopre dagli `avvisi`,
-    # non in silenzio.
-    task_unita = set()
-    if percentuale_per_task or ore_effettive_per_task:
-        candidati = list(dict.fromkeys(
-            list(percentuale_per_task) + list(ore_effettive_per_task)
-        ))
-        tipi = tipo_unita_per_task(session, candidati)
-        task_unita = {t for t in candidati if tipi.get(t) == "task"}
-
-        scartati = [t for t in candidati if tipi.get(t) == "sottotask"]
-        for task_id in sorted(scartati):
-            avvisi.append(
-                f"Task '{task_id}': è scomposto in sottotask, quindi le sue ore "
-                f"vengono dai pezzi. L'avanzamento dichiarato sul task è stato "
-                f"ignorato — dichiaralo sui singoli sottotask."
+            derivate_per_task, non_derivabili = _aggrega_ore_unita(
+                session, "sottotask", dichiarazioni, settimana_date
             )
 
-        if task_unita:
-            righe_task = [
-                (task_id,
-                 percentuale_per_task.get(task_id),
-                 ore_effettive_per_task.get(task_id))
-                for task_id in sorted(task_unita)
-            ]
-            derivate_task, non_derivabili_task = _aggrega_ore_unita(
-                session, "task", righe_task, settimana_date
-            )
-            derivate_per_task.update(derivate_task)
-
-            for task_id in sorted(non_derivabili_task):
-                avvisi.append(
-                    f"Task '{task_id}': avanzamento registrato ma ore non "
-                    f"derivate, manca `ore_pianificate`. Chiedi al PM di "
-                    f"pianificare il task dal Cantiere; le ore si "
-                    f"ricalcoleranno alla prossima dichiarazione."
+            if non_derivabili:
+                nomi = dict(
+                    session.query(Sottotask.id, Sottotask.nome)
+                    .filter(Sottotask.id.in_(non_derivabili)).all()
                 )
+                for sottotask_id in sorted(non_derivabili):
+                    avvisi.append(
+                        f"Sottotask '{nomi.get(sottotask_id, sottotask_id)}': "
+                        f"avanzamento registrato ma ore non derivate, manca "
+                        f"`ore_stimate`. Chiedi al PM di stimare il pezzo dal "
+                        f"Cantiere; le ore si ricalcoleranno alla prossima "
+                        f"dichiarazione."
+                    )
 
-    # Le DERIVATE VINCONO sulle ore dichiarate a mano per lo stesso task: se un
-    # task è stato scomposto, la verità sulle sue ore è la somma dei pezzi.
-    # Dizionario NUOVO e non mutazione: `ore_per_task` appartiene al chiamante,
-    # e la route lo rilegge dal DTO.
-    ore_per_task = {**ore_per_task, **derivate_per_task}
-
-    # 1) Salva/aggiorna ore, stato e nota per ogni task.
-    # Si itera sull'UNIONE delle chiavi dei tre dizionari, non su ore_per_task:
-    # le ore non sono più il campo che decide se un task è stato compilato. Il
-    # campo primario è lo stato — «a che punto sono», non «quanto ho lavorato»
-    # — e le ore sono facoltative. Ciclando su ore_per_task, una compilazione
-    # di soli stati (caso ormai normale) non entrava mai nel ciclo: la funzione
-    # tornava True senza aver scritto una riga. Residuo di quando le ore erano
-    # obbligatorie.
-    # dict.fromkeys e non set(): preserva l'ordine di arrivo, così le scritture
-    # restano deterministiche e i test riproducibili.
-    task_toccati = dict.fromkeys(
-        list(ore_per_task) + list(stati_per_task) + list(note_per_task or {})
-        + sorted(task_unita)
-    )
-    stati_dichiarati = {}   # task_id → stato, da propagare dopo il commit
-    for task_id in task_toccati:
-        # `ore is None` = ore non dichiarate: diverso da 0 («non ci ho
-        # lavorato»). Sulla riga esistente le ore non si toccano, sulla nuova
-        # si parte da 0.
-        ore = ore_per_task.get(task_id)
-        stato = stati_per_task.get(task_id)
-        # La nota conta come pervenuta anche se è la stringa vuota: cancellare
-        # una nota è un ATTO del dipendente, non un non-evento, e va scritto.
-        nota_pervenuta = note_per_task is not None and task_id in note_per_task
-        # Salta solo i task che non portano NIENTE: né stato, né nota, né ore.
-        # `not ore` copre insieme None (ore non dichiarate) e 0 («non ci ho
-        # lavorato»): l'intenzione non dipende più dal fatto accidentale che
-        # `None == 0` sia False, che è ciò che teneva in piedi il caso
-        # «solo nota» — un `or 0` aggiunto a monte lo avrebbe rotto in
-        # silenzio, facendo sparire le note senza errori.
-        # La guardia serve ancora: il form manda a 0 anche i task su cui non
-        # si è lavorato, e senza di essa ogni salvataggio creerebbe una riga
-        # vuota per ciascuno.
-        #
-        # `task_id not in derivate_per_task` è il quarto termine (Step 4): un
-        # task le cui uniche dichiarazioni stanno sui SOTTOTASK deve entrare
-        # comunque. Le sue ore derivate valgono legittimamente 0.0 — Δ=0 vuol
-        # dire «questa settimana il pezzo non è avanzato», che è una
-        # dichiarazione, non un silenzio — e senza questo termine `not ore`
-        # sarebbe vero e la riga Consuntivo non verrebbe mai scritta. La
-        # settimana risulterebbe non compilata su quel task pur avendo il
-        # dipendente mosso (o volutamente non mosso) lo slider.
-        if (not stato and not nota_pervenuta and not ore
-                and task_id not in derivate_per_task
-                and task_id not in task_unita):
-            continue
-
-        # motivo_fermo è un flag, non un archivio: va RIALLINEATO a ogni
-        # salvataggio, non solo popolato. Prima il ramo `else` non esisteva e
-        # un task sbloccato la settimana dopo restava marcato «bloccato» per
-        # sempre. Il perché del blocco lo scrive il dipendente in `nota`.
-        existing = session.query(Consuntivo).filter(
-            Consuntivo.task_id == task_id,
-            Consuntivo.dipendente_id == dipendente_id,
-            Consuntivo.settimana == settimana_date,
-        ).first()
-
-        # Step 4 (07/08/2026): su un task-UNITÀ che porta un avanzamento, lo
-        # stato non si prende da `stati_per_task` — si DERIVA dal cursore, come
-        # sul sottotask. Di `stati_per_task` resta significativo il solo
-        # «Bloccato», l'unica cosa che una percentuale non può dire.
-        # Fuori da questo caso `stato` resta esattamente quello di prima: un
-        # task senza percentuale (o scomposto) continua a dichiarare lo stato a
-        # mano, e il comportamento storico non si muove di una virgola.
-        if task_id in task_unita:
-            bloccato = (stato == "Bloccato")
-            if task_id in percentuale_per_task or bloccato:
-                pct_finale = percentuale_per_task.get(
-                    task_id, existing.percentuale if existing else None
+            # 0-ter) RICALCOLO DELLA SETTIMANA A VALLE.
+            #
+            # Scrivere un avanzamento a W cambia la BASELINE di chi viene dopo, e
+            # le ore già derivate a valle diventano sbagliate. Il caso reale è il
+            # recupero: `settimane_selezionabili` riapre la settimana precedente se
+            # incompleta, quindi si compila W, poi si torna su W−1.
+            #   W dichiarato 60% con baseline 0   → 60% delle ore, scritto.
+            #   poi W−1 dichiarato 40%            → 40% delle ore.
+            #   ma ora il Δ giusto di W è 60−40 = 20%, non 60%.
+            # Senza questo blocco resterebbero in DB 60%+40% = 100% delle ore per
+            # un pezzo dichiarato al 60%. Non è un arrotondamento: è il 67% in più.
+            #
+            # SI RICALCOLA UNA SOLA SETTIMANA, non una cascata — ed è la MONOTONIA
+            # imposta in `routes/consuntivi._valida_avanzamenti_sottotask` a
+            # garantirlo. Inserire una dichiarazione a W invalida la baseline della
+            # PRIMA settimana dichiarata dopo W, e basta: le successive hanno per
+            # baseline quella, il cui VALORE non è cambiato (è cambiato solo il suo
+            # Δ). Niente propagazione, niente ricorsione.
+            #
+            # Il ricalcolo usa `ore_stimate` CORRENTE, non quella di allora: il
+            # motore è agnostico al passato, e la fotografia storica è compito del
+            # SAL (`_serializza_stato_progetto`), che è autocontenuto apposta.
+            successive = (
+                session.query(
+                    ConsuntivoSottotask.sottotask_id,
+                    ConsuntivoSottotask.settimana,
+                    Sottotask.task_id,
                 )
-                stato = _stato_da_avanzamento(pct_finale, bloccato)
-
-        # motivo_fermo è un flag, non un archivio: va RIALLINEATO a ogni
-        # salvataggio. Si calcola DOPO l'eventuale derivazione, altrimenti un
-        # blocco derivato non lo accenderebbe.
-        motivo = "Segnalato come bloccato dal dipendente" if stato == "Bloccato" else None
-
-        if existing:
-            if ore is not None:
-                existing.ore_dichiarate = ore
-            # I due campi dell'unità di lavoro, con la convenzione «chiave
-            # assente = non toccare» degli altri: dichiarare le ore effettive
-            # non deve cancellare la percentuale scritta prima, né viceversa.
-            if task_id in percentuale_per_task:
-                existing.percentuale = percentuale_per_task[task_id]
-            if task_id in ore_effettive_per_task:
-                existing.ore_effettive = ore_effettive_per_task[task_id]
-            existing.compilato = True
-            existing.data_compilazione = datetime.utcnow()
-            existing.motivo_fermo = motivo
-            # Lo stato dichiarato resta anche sulla riga della settimana, non
-            # solo su Task.stato: quest'ultimo è a sovrascrittura e non dice né
-            # chi né quando. `stato` assente = non pervenuto, la colonna non si
-            # tocca (stessa convenzione di note e presenze): un salvataggio di
-            # sole ore non cancella la dichiarazione fatta prima.
-            if stato:
-                existing.stato_dichiarato = stato
-            if note_per_task is not None and task_id in note_per_task:
-                existing.nota = _nota_task(note_per_task[task_id])
-        else:
-            session.add(Consuntivo(
-                task_id=task_id,
-                dipendente_id=dipendente_id,
-                settimana=settimana_date,
-                ore_dichiarate=ore if ore is not None else 0,
-                compilato=True,
-                data_compilazione=datetime.utcnow(),
-                motivo_fermo=motivo,
-                nota=_nota_task((note_per_task or {}).get(task_id)),
-                # None se il task non è in stati_per_task: la riga nasce da
-                # sole ore o sola nota e nessuno si è espresso sullo stato.
-                stato_dichiarato=stato,
-                percentuale=percentuale_per_task.get(task_id),
-                ore_effettive=ore_effettive_per_task.get(task_id),
-            ))
-
-        if stato:
-            stati_dichiarati[task_id] = stato
-
-    # 1-bis) RICALCOLO A VALLE, per i task-unità.
-    #
-    # Stessa logica del blocco 0-ter sui sottotask, su un'altra tabella: la
-    # dichiarazione di W cambia la baseline della prima settimana dichiarata
-    # dopo, e le ore già derivate lì vanno rifatte. Una settimana sola, per la
-    # stessa ragione (monotonia imposta a monte, niente cascata).
-    #
-    # STA QUI E NON ACCANTO ALLA DERIVAZIONE, a differenza del gemello sui
-    # sottotask, e la ragione è l'ordine di scrittura: le righe
-    # ConsuntivoSottotask si scrivono e si flushano PRIMA di derivare, mentre la
-    # percentuale del TASK finisce sulla riga Consuntivo che il ciclo qui sopra
-    # ha appena scritto. Ricalcolando prima, la baseline della settimana a valle
-    # non vedrebbe la dichiarazione appena inserita e ricalcolerebbe lo stesso
-    # numero di prima — cioè non ricalcolerebbe affatto, in silenzio.
-    # La query sotto fa autoflush della riga nuova, che è ciò che serve.
-    if task_unita:
-        for task_id, sett_dopo in sorted(
-            _prima_settimana_dopo(
-                session, "task", sorted(task_unita), settimana_date
-            ).items()
-        ):
-            # Tutte le righe di quel task in quella settimana: la percentuale è
-            # per (task, dipendente, settimana), quindi più persone possono
-            # averne una — ciascuna con la propria riga da riscrivere, come per
-            # i pezzi con assegnatario diverso.
-            righe_dopo = (
-                session.query(Consuntivo)
+                .join(Sottotask, Sottotask.id == ConsuntivoSottotask.sottotask_id)
                 .filter(
-                    Consuntivo.task_id == task_id,
-                    Consuntivo.settimana == sett_dopo,
+                    ConsuntivoSottotask.sottotask_id.in_(list(avanzamenti_sottotask)),
+                    ConsuntivoSottotask.settimana > settimana_date,
+                    ConsuntivoSottotask.percentuale.isnot(None),
                 )
                 .all()
             )
-            for riga in righe_dopo:
-                ricalcolo, _ = _aggrega_ore_unita(
-                    session, "task",
-                    [(task_id, riga.percentuale, riga.ore_effettive)],
-                    sett_dopo,
+            # La PRIMA settimana dichiarata dopo W, per sottotask → l'insieme delle
+            # coppie (task, settimana) da rifare. Due sottotask dello stesso task
+            # con la stessa settimana a valle collassano in una coppia sola.
+            prima_dopo = {}
+            for sid, sett_dopo, tid in successive:
+                if sid not in prima_dopo or sett_dopo < prima_dopo[sid][0]:
+                    prima_dopo[sid] = (sett_dopo, tid)
+            da_rifare = {(tid, sett_dopo) for sett_dopo, tid in prima_dopo.values()}
+
+            for tid, sett_dopo in sorted(da_rifare):
+                # TUTTE le dichiarazioni su quel task in quella settimana, non solo
+                # quelle dei sottotask toccati oggi: la riga Consuntivo che stiamo
+                # per riscrivere le aggrega tutte, e ricalcolarne una parte
+                # cancellerebbe il resto (stessa ragione della rilettura dal DB
+                # nel blocco 0-bis).
+                righe_dopo = (
+                    session.query(
+                        ConsuntivoSottotask.sottotask_id,
+                        ConsuntivoSottotask.dipendente_id,
+                        ConsuntivoSottotask.percentuale,
+                        ConsuntivoSottotask.ore_effettive,
+                    )
+                    .join(Sottotask, Sottotask.id == ConsuntivoSottotask.sottotask_id)
+                    .filter(
+                        Sottotask.task_id == tid,
+                        ConsuntivoSottotask.settimana == sett_dopo,
+                    )
+                    .all()
                 )
-                # `.get` con default 0.0: se il ricalcolo non produce nulla
-                # (percentuale sparita, o stima mancante) la riga va a zero, non
-                # resta col valore vecchio che ora è falso.
-                riga.ore_dichiarate = ricalcolo.get(task_id, 0.0)
+                # Raggruppate per DIPENDENTE: la grana di Consuntivo è (task,
+                # dipendente, settimana), e chi ha dichiarato a valle può non essere
+                # chi sta salvando adesso — un sottotask può avere un assegnatario
+                # proprio in override (Sottotask.dipendente_id). Si riscrive la riga
+                # di ciascuno, non quella di chi ha in mano il form.
+                per_dipendente = {}
+                for sid, did, pct, ore_eff in righe_dopo:
+                    per_dipendente.setdefault(did, []).append((sid, pct, ore_eff))
 
-    # 2) Presenze settimanali (smart working + assenze) — SOLO SE PERVENUTE.
-    # Ogni campo è aggiornato singolarmente e solo se non è None: il blocco non
-    # riscrive mai i campi che il chiamante non ha nominato. Stessa convenzione
-    # di `spese_lista` e `note_per_task`: None = «non gestisco questo campo».
-    # Prima erano parametri con default 0/0/0/""/"" scritti incondizionatamente,
-    # e i default sono nati quando il body del form portava sempre tutto. Con un
-    # client che manda solo uno stato (le presenze le ha compilate ieri, in
-    # un'altra schermata) quei default tornavano in DB come dati veri: 1 giorno
-    # in sede e 4 da remoto diventavano 3 e 2 al primo salvataggio di una nota.
-    # Un default non è un dato dichiarato — e sovrascriverlo in silenzio è
-    # peggio che non scriverlo.
-    presenze_pervenute = {
-        campo: valore
-        for campo, valore in (
-            ("giorni_sede", giorni_sede),
-            ("giorni_remoto", giorni_remoto),
-            ("ore_assenza", ore_assenza),
-            ("tipo_assenza", tipo_assenza),
-            ("nota_assenza", nota_assenza),
+                for did, righe_dip in per_dipendente.items():
+                    # Stesso helper dell'aggregazione sopra, quindi stessa regola:
+                    # dove ci sono ore effettive, il ricalcolo NON le tocca. Sono un
+                    # dato esplicito e non una derivata, e una baseline cambiata a
+                    # monte non ha voce in capitolo su quante ore è costato davvero
+                    # quel pezzo. È la differenza fra correggere un calcolo e
+                    # riscrivere una dichiarazione.
+                    per_task_dopo, _ = _aggrega_ore_unita(session, "sottotask", righe_dip, sett_dopo)
+                    totale = per_task_dopo.get(tid, 0.0)
+
+                    riga_cons = session.query(Consuntivo).filter(
+                        Consuntivo.task_id == tid,
+                        Consuntivo.dipendente_id == did,
+                        Consuntivo.settimana == sett_dopo,
+                    ).first()
+                    if riga_cons:
+                        riga_cons.ore_dichiarate = totale
+                    else:
+                        # Non dovrebbe capitare — se ci sono dichiarazioni a valle
+                        # la riga esiste — ma se manca la si crea invece di perdere
+                        # le ore. `compilato=True` perché una dichiarazione sui
+                        # sottotask È una compilazione.
+                        session.add(Consuntivo(
+                            task_id=tid,
+                            dipendente_id=did,
+                            settimana=sett_dopo,
+                            ore_dichiarate=totale,
+                            compilato=True,
+                            data_compilazione=datetime.utcnow(),
+                        ))
+
+        # ── 0-quater) IL TASK COME UNITÀ DI LAVORO ──────────────────────────
+        # Stessa derivazione dei pezzi, su un'entità diversa: `tipo="task"` fa
+        # leggere la percentuale da `Consuntivo.percentuale` e la stima da
+        # `Task.ore_pianificate`. Non c'è aggregazione da fare — le ore che ne
+        # escono sono già del task — e infatti `_aggrega_ore_unita` non ha un ramo
+        # per questo: la somma di un elemento solo È il passaggio diretto.
+        #
+        # MUTUA ESCLUSIONE: si deriva SOLO per i task che `tipo_unita_per_task`
+        # classifica come unità. Su un task scomposto la percentuale-task viene
+        # ignorata e nemmeno scritta: lasciarla sulla riga creerebbe una seconda
+        # verità sulle ore dello stesso task, che è il conflitto già risolto una
+        # volta fra derivate e manuali. Chi l'ha mandata lo scopre dagli `avvisi`,
+        # non in silenzio.
+        task_unita = set()
+        if percentuale_per_task or ore_effettive_per_task:
+            candidati = list(dict.fromkeys(
+                list(percentuale_per_task) + list(ore_effettive_per_task)
+            ))
+            tipi = tipo_unita_per_task(session, candidati)
+            task_unita = {t for t in candidati if tipi.get(t) == "task"}
+
+            scartati = [t for t in candidati if tipi.get(t) == "sottotask"]
+            for task_id in sorted(scartati):
+                avvisi.append(
+                    f"Task '{task_id}': è scomposto in sottotask, quindi le sue ore "
+                    f"vengono dai pezzi. L'avanzamento dichiarato sul task è stato "
+                    f"ignorato — dichiaralo sui singoli sottotask."
+                )
+
+            if task_unita:
+                righe_task = [
+                    (task_id,
+                     percentuale_per_task.get(task_id),
+                     ore_effettive_per_task.get(task_id))
+                    for task_id in sorted(task_unita)
+                ]
+                derivate_task, non_derivabili_task = _aggrega_ore_unita(
+                    session, "task", righe_task, settimana_date
+                )
+                derivate_per_task.update(derivate_task)
+
+                for task_id in sorted(non_derivabili_task):
+                    avvisi.append(
+                        f"Task '{task_id}': avanzamento registrato ma ore non "
+                        f"derivate, manca `ore_pianificate`. Chiedi al PM di "
+                        f"pianificare il task dal Cantiere; le ore si "
+                        f"ricalcoleranno alla prossima dichiarazione."
+                    )
+
+        # Le DERIVATE VINCONO sulle ore dichiarate a mano per lo stesso task: se un
+        # task è stato scomposto, la verità sulle sue ore è la somma dei pezzi.
+        # Dizionario NUOVO e non mutazione: `ore_per_task` appartiene al chiamante,
+        # e la route lo rilegge dal DTO.
+        ore_per_task = {**ore_per_task, **derivate_per_task}
+
+        # 1) Salva/aggiorna ore, stato e nota per ogni task.
+        # Si itera sull'UNIONE delle chiavi dei tre dizionari, non su ore_per_task:
+        # le ore non sono più il campo che decide se un task è stato compilato. Il
+        # campo primario è lo stato — «a che punto sono», non «quanto ho lavorato»
+        # — e le ore sono facoltative. Ciclando su ore_per_task, una compilazione
+        # di soli stati (caso ormai normale) non entrava mai nel ciclo: la funzione
+        # tornava True senza aver scritto una riga. Residuo di quando le ore erano
+        # obbligatorie.
+        # dict.fromkeys e non set(): preserva l'ordine di arrivo, così le scritture
+        # restano deterministiche e i test riproducibili.
+        task_toccati = dict.fromkeys(
+            list(ore_per_task) + list(stati_per_task) + list(note_per_task or {})
+            + sorted(task_unita)
         )
-        if valore is not None
-    }
+        stati_dichiarati = {}   # task_id → stato, da propagare dopo il commit
+        for task_id in task_toccati:
+            # `ore is None` = ore non dichiarate: diverso da 0 («non ci ho
+            # lavorato»). Sulla riga esistente le ore non si toccano, sulla nuova
+            # si parte da 0.
+            ore = ore_per_task.get(task_id)
+            stato = stati_per_task.get(task_id)
+            # La nota conta come pervenuta anche se è la stringa vuota: cancellare
+            # una nota è un ATTO del dipendente, non un non-evento, e va scritto.
+            nota_pervenuta = note_per_task is not None and task_id in note_per_task
+            # Salta solo i task che non portano NIENTE: né stato, né nota, né ore.
+            # `not ore` copre insieme None (ore non dichiarate) e 0 («non ci ho
+            # lavorato»): l'intenzione non dipende più dal fatto accidentale che
+            # `None == 0` sia False, che è ciò che teneva in piedi il caso
+            # «solo nota» — un `or 0` aggiunto a monte lo avrebbe rotto in
+            # silenzio, facendo sparire le note senza errori.
+            # La guardia serve ancora: il form manda a 0 anche i task su cui non
+            # si è lavorato, e senza di essa ogni salvataggio creerebbe una riga
+            # vuota per ciascuno.
+            #
+            # `task_id not in derivate_per_task` è il quarto termine (Step 4): un
+            # task le cui uniche dichiarazioni stanno sui SOTTOTASK deve entrare
+            # comunque. Le sue ore derivate valgono legittimamente 0.0 — Δ=0 vuol
+            # dire «questa settimana il pezzo non è avanzato», che è una
+            # dichiarazione, non un silenzio — e senza questo termine `not ore`
+            # sarebbe vero e la riga Consuntivo non verrebbe mai scritta. La
+            # settimana risulterebbe non compilata su quel task pur avendo il
+            # dipendente mosso (o volutamente non mosso) lo slider.
+            if (not stato and not nota_pervenuta and not ore
+                    and task_id not in derivate_per_task
+                    and task_id not in task_unita):
+                continue
 
-    if presenze_pervenute:
-        existing_pres = session.query(PresenzaSettimanale).filter(
-            PresenzaSettimanale.dipendente_id == dipendente_id,
-            PresenzaSettimanale.settimana == settimana_date,
-        ).first()
+            # motivo_fermo è un flag, non un archivio: va RIALLINEATO a ogni
+            # salvataggio, non solo popolato. Prima il ramo `else` non esisteva e
+            # un task sbloccato la settimana dopo restava marcato «bloccato» per
+            # sempre. Il perché del blocco lo scrive il dipendente in `nota`.
+            existing = session.query(Consuntivo).filter(
+                Consuntivo.task_id == task_id,
+                Consuntivo.dipendente_id == dipendente_id,
+                Consuntivo.settimana == settimana_date,
+            ).first()
 
-        if existing_pres is None:
-            # Riga nuova: i campi NON pervenuti restano al default di colonna
-            # (0), non a un valore inventato qui.
-            existing_pres = PresenzaSettimanale(
-                dipendente_id=dipendente_id,
-                settimana=settimana_date,
-            )
-            session.add(existing_pres)
+            # Step 4 (07/08/2026): su un task-UNITÀ che porta un avanzamento, lo
+            # stato non si prende da `stati_per_task` — si DERIVA dal cursore, come
+            # sul sottotask. Di `stati_per_task` resta significativo il solo
+            # «Bloccato», l'unica cosa che una percentuale non può dire.
+            # Fuori da questo caso `stato` resta esattamente quello di prima: un
+            # task senza percentuale (o scomposto) continua a dichiarare lo stato a
+            # mano, e il comportamento storico non si muove di una virgola.
+            if task_id in task_unita:
+                bloccato = (stato == "Bloccato")
+                if task_id in percentuale_per_task or bloccato:
+                    pct_finale = percentuale_per_task.get(
+                        task_id, existing.percentuale if existing else None
+                    )
+                    stato = _stato_da_avanzamento(pct_finale, bloccato)
 
-        for campo, valore in presenze_pervenute.items():
-            setattr(existing_pres, campo, valore)
+            # motivo_fermo è un flag, non un archivio: va RIALLINEATO a ogni
+            # salvataggio. Si calcola DOPO l'eventuale derivazione, altrimenti un
+            # blocco derivato non lo accenderebbe.
+            motivo = "Segnalato come bloccato dal dipendente" if stato == "Bloccato" else None
 
-        # Coerenza dell'assenza: se le ore di assenza sono state dichiarate a
-        # zero, l'assenza non c'è e tipo/nota non hanno più un referente —
-        # vanno azzerati anche se sono arrivati valorizzati. Vale solo quando
-        # `ore_assenza` è pervenuto: senza, non sappiamo nulla dell'assenza e
-        # non tocchiamo ciò che c'è già.
-        if ore_assenza is not None and ore_assenza <= 0:
-            existing_pres.tipo_assenza = None
-            existing_pres.nota_assenza = None
-
-    # 3) Salva spese — SOSTITUZIONE, non accodamento.
-    # Il form manda lo stato completo delle spese della settimana, non righe
-    # incrementali: non c'è modo di dire «questa riga è nuova» o «questa l'ho
-    # cancellata». Prima erano `session.add()` incondizionati senza lookup, e
-    # Spesa non ha UNIQUE a proteggere: ogni ri-salvataggio re-inseriva tutte
-    # le spese del form, moltiplicando i rimborsi a ogni click su «Invia».
-    # Cancella-e-riscrivi è l'unica semantica coerente con un form di stato.
-    # `spese_lista is None` = campo non pervenuto (chiamante che non gestisce
-    # le spese) → non toccare nulla. `[]` = «questa settimana nessuna spesa»
-    # → svuota davvero.
-    if spese_lista is not None:
-        session.query(Spesa).filter(
-            Spesa.dipendente_id == dipendente_id,
-            Spesa.settimana == settimana_date,
-        ).delete(synchronize_session=False)
-
-        for spesa in spese_lista:
-            if spesa.get("importo", 0) > 0:
-                session.add(Spesa(
+            if existing:
+                if ore is not None:
+                    existing.ore_dichiarate = ore
+                # I due campi dell'unità di lavoro, con la convenzione «chiave
+                # assente = non toccare» degli altri: dichiarare le ore effettive
+                # non deve cancellare la percentuale scritta prima, né viceversa.
+                if task_id in percentuale_per_task:
+                    existing.percentuale = percentuale_per_task[task_id]
+                if task_id in ore_effettive_per_task:
+                    existing.ore_effettive = ore_effettive_per_task[task_id]
+                existing.compilato = True
+                existing.data_compilazione = datetime.utcnow()
+                existing.motivo_fermo = motivo
+                # Lo stato dichiarato resta anche sulla riga della settimana, non
+                # solo su Task.stato: quest'ultimo è a sovrascrittura e non dice né
+                # chi né quando. `stato` assente = non pervenuto, la colonna non si
+                # tocca (stessa convenzione di note e presenze): un salvataggio di
+                # sole ore non cancella la dichiarazione fatta prima.
+                if stato:
+                    existing.stato_dichiarato = stato
+                if note_per_task is not None and task_id in note_per_task:
+                    existing.nota = _nota_task(note_per_task[task_id])
+            else:
+                session.add(Consuntivo(
+                    task_id=task_id,
                     dipendente_id=dipendente_id,
                     settimana=settimana_date,
-                    descrizione=spesa.get("descrizione", ""),
-                    importo=spesa["importo"],
-                    categoria=spesa.get("categoria", ""),
+                    ore_dichiarate=ore if ore is not None else 0,
+                    compilato=True,
+                    data_compilazione=datetime.utcnow(),
+                    motivo_fermo=motivo,
+                    nota=_nota_task((note_per_task or {}).get(task_id)),
+                    # None se il task non è in stati_per_task: la riga nasce da
+                    # sole ore o sola nota e nessuno si è espresso sullo stato.
+                    stato_dichiarato=stato,
+                    percentuale=percentuale_per_task.get(task_id),
+                    ore_effettive=ore_effettive_per_task.get(task_id),
                 ))
 
-    # 4) Legge lo stato ATTUALE dei task dichiarati (serve al passo 5, ma la
-    # sessione è ancora aperta: una query in più invece di una sessione in più).
-    stati_correnti = {}
-    if stati_dichiarati:
-        stati_correnti = dict(
-            session.query(Task.id, Task.stato)
-            .filter(Task.id.in_(list(stati_dichiarati)))
-            .all()
-        )
+            if stato:
+                stati_dichiarati[task_id] = stato
 
-    session.commit()
-    session.close()
+        # 1-bis) RICALCOLO A VALLE, per i task-unità.
+        #
+        # Stessa logica del blocco 0-ter sui sottotask, su un'altra tabella: la
+        # dichiarazione di W cambia la baseline della prima settimana dichiarata
+        # dopo, e le ore già derivate lì vanno rifatte. Una settimana sola, per la
+        # stessa ragione (monotonia imposta a monte, niente cascata).
+        #
+        # STA QUI E NON ACCANTO ALLA DERIVAZIONE, a differenza del gemello sui
+        # sottotask, e la ragione è l'ordine di scrittura: le righe
+        # ConsuntivoSottotask si scrivono e si flushano PRIMA di derivare, mentre la
+        # percentuale del TASK finisce sulla riga Consuntivo che il ciclo qui sopra
+        # ha appena scritto. Ricalcolando prima, la baseline della settimana a valle
+        # non vedrebbe la dichiarazione appena inserita e ricalcolerebbe lo stesso
+        # numero di prima — cioè non ricalcolerebbe affatto, in silenzio.
+        # La query sotto fa autoflush della riga nuova, che è ciò che serve.
+        if task_unita:
+            for task_id, sett_dopo in sorted(
+                _prima_settimana_dopo(
+                    session, "task", sorted(task_unita), settimana_date
+                ).items()
+            ):
+                # Tutte le righe di quel task in quella settimana: la percentuale è
+                # per (task, dipendente, settimana), quindi più persone possono
+                # averne una — ciascuna con la propria riga da riscrivere, come per
+                # i pezzi con assegnatario diverso.
+                righe_dopo = (
+                    session.query(Consuntivo)
+                    .filter(
+                        Consuntivo.task_id == task_id,
+                        Consuntivo.settimana == sett_dopo,
+                    )
+                    .all()
+                )
+                for riga in righe_dopo:
+                    ricalcolo, _ = _aggrega_ore_unita(
+                        session, "task",
+                        [(task_id, riga.percentuale, riga.ore_effettive)],
+                        sett_dopo,
+                    )
+                    # `.get` con default 0.0: se il ricalcolo non produce nulla
+                    # (percentuale sparita, o stima mancante) la riga va a zero, non
+                    # resta col valore vecchio che ora è falso.
+                    riga.ore_dichiarate = ricalcolo.get(task_id, 0.0)
+
+        # 2) Presenze settimanali (smart working + assenze) — SOLO SE PERVENUTE.
+        # Ogni campo è aggiornato singolarmente e solo se non è None: il blocco non
+        # riscrive mai i campi che il chiamante non ha nominato. Stessa convenzione
+        # di `spese_lista` e `note_per_task`: None = «non gestisco questo campo».
+        # Prima erano parametri con default 0/0/0/""/"" scritti incondizionatamente,
+        # e i default sono nati quando il body del form portava sempre tutto. Con un
+        # client che manda solo uno stato (le presenze le ha compilate ieri, in
+        # un'altra schermata) quei default tornavano in DB come dati veri: 1 giorno
+        # in sede e 4 da remoto diventavano 3 e 2 al primo salvataggio di una nota.
+        # Un default non è un dato dichiarato — e sovrascriverlo in silenzio è
+        # peggio che non scriverlo.
+        presenze_pervenute = {
+            campo: valore
+            for campo, valore in (
+                ("giorni_sede", giorni_sede),
+                ("giorni_remoto", giorni_remoto),
+                ("ore_assenza", ore_assenza),
+                ("tipo_assenza", tipo_assenza),
+                ("nota_assenza", nota_assenza),
+            )
+            if valore is not None
+        }
+
+        if presenze_pervenute:
+            existing_pres = session.query(PresenzaSettimanale).filter(
+                PresenzaSettimanale.dipendente_id == dipendente_id,
+                PresenzaSettimanale.settimana == settimana_date,
+            ).first()
+
+            if existing_pres is None:
+                # Riga nuova: i campi NON pervenuti restano al default di colonna
+                # (0), non a un valore inventato qui.
+                existing_pres = PresenzaSettimanale(
+                    dipendente_id=dipendente_id,
+                    settimana=settimana_date,
+                )
+                session.add(existing_pres)
+
+            for campo, valore in presenze_pervenute.items():
+                setattr(existing_pres, campo, valore)
+
+            # Coerenza dell'assenza: se le ore di assenza sono state dichiarate a
+            # zero, l'assenza non c'è e tipo/nota non hanno più un referente —
+            # vanno azzerati anche se sono arrivati valorizzati. Vale solo quando
+            # `ore_assenza` è pervenuto: senza, non sappiamo nulla dell'assenza e
+            # non tocchiamo ciò che c'è già.
+            if ore_assenza is not None and ore_assenza <= 0:
+                existing_pres.tipo_assenza = None
+                existing_pres.nota_assenza = None
+
+        # 3) Salva spese — SOSTITUZIONE, non accodamento.
+        # Il form manda lo stato completo delle spese della settimana, non righe
+        # incrementali: non c'è modo di dire «questa riga è nuova» o «questa l'ho
+        # cancellata». Prima erano `session.add()` incondizionati senza lookup, e
+        # Spesa non ha UNIQUE a proteggere: ogni ri-salvataggio re-inseriva tutte
+        # le spese del form, moltiplicando i rimborsi a ogni click su «Invia».
+        # Cancella-e-riscrivi è l'unica semantica coerente con un form di stato.
+        # `spese_lista is None` = campo non pervenuto (chiamante che non gestisce
+        # le spese) → non toccare nulla. `[]` = «questa settimana nessuna spesa»
+        # → svuota davvero.
+        if spese_lista is not None:
+            session.query(Spesa).filter(
+                Spesa.dipendente_id == dipendente_id,
+                Spesa.settimana == settimana_date,
+            ).delete(synchronize_session=False)
+
+            for spesa in spese_lista:
+                if spesa.get("importo", 0) > 0:
+                    session.add(Spesa(
+                        dipendente_id=dipendente_id,
+                        settimana=settimana_date,
+                        descrizione=spesa.get("descrizione", ""),
+                        importo=spesa["importo"],
+                        categoria=spesa.get("categoria", ""),
+                    ))
+
+        # 4) Legge lo stato ATTUALE dei task dichiarati (serve al passo 5, ma la
+        # sessione è ancora aperta: una query in più invece di una sessione in più).
+        stati_correnti = {}
+        if stati_dichiarati:
+            stati_correnti = dict(
+                session.query(Task.id, Task.stato)
+                .filter(Task.id.in_(list(stati_dichiarati)))
+                .all()
+            )
+
+        session.commit()
+    except Exception:
+        # Non si inghiotte: si ripulisce e si ri-solleva. Il chiamante deve
+        # vedere l'errore — è la route a tradurlo in HTTP. Senza il
+        # rollback esplicito la transazione resterebbe aperta fino al GC,
+        # tenendo i LOCK sulle righe toccate: i dati non si corrompono (il
+        # commit non è mai stato raggiunto) ma chiunque altro scriva su
+        # quelle righe si blocca. Scoperto misurando: la verifica di
+        # atomicità dello Step 4 andò in timeout proprio così.
+        session.rollback()
+        raise
+    finally:
+        # SEMPRE, percorso felice e percorso d'errore. Assorbe il
+        # `session.close()` che stava dopo il commit.
+        session.close()
 
     # 5) PROPAGAZIONE: lo stato dichiarato arriva su Task.stato.
     # Fuori dalla sessione del consuntivo e DOPO il commit, di proposito:
