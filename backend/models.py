@@ -626,8 +626,32 @@ class Consuntivo(Base):
     data_compilazione = Column(DateTime, nullable=True)
     modalita = Column(String(10), nullable=True)
     motivo_fermo = Column(String(120), nullable=True)
-    sottotask_nota = Column(Text, nullable=True)
     nota = Column(Text, nullable=True)
+    # ── Dichiarazione del task come UNITÀ DI LAVORO (Step 4, 07/08/2026) ──
+    # Un task NON scomposto dichiara l'avanzamento come lo dichiara un pezzo:
+    # con una percentuale, non con un booleano di stato. Queste due colonne
+    # sono le gemelle esatte di quelle su `ConsuntivoSottotask` — stesso tipo,
+    # stessa semantica del NULL, stesso CHECK — perché il motore ore-derivate
+    # possa trattare task e sottotask come la stessa cosa: un'unità di lavoro
+    # su cui qualcuno dichiara quanto è avanti.
+    #
+    # La grana lo permette già: questa tabella è UNIQUE su
+    # (task_id, dipendente_id, settimana), quella dei pezzi su
+    # (sottotask_id, dipendente_id, settimana). Identiche a meno del nome
+    # della colonna-entità.
+    #
+    # percentuale: avanzamento 0-100 dichiarato. NULL = non si è espresso —
+    #   diverso da 0, che è «l'ho guardato e non è avanzato». CHECK a livello
+    #   DB: ck_consuntivi_percentuale (migration d6e7f8a9b0c1), gemello di
+    #   ck_consuntivo_sottotask_percentuale.
+    percentuale = Column(Integer, nullable=True)
+    # ore_effettive: le ore REALI della settimana su questo task, quando
+    #   l'avanzamento non le cattura (fermo che è costato tempo, o costato più
+    #   della stima). Quando è valorizzata SOSTITUISCE la derivata, non ci si
+    #   somma. NULL = nessuna ora effettiva, si deriva; 0.0 = «zero ore, e lo
+    #   dico io», che spegne la derivazione. È la ragione per cui è nullable
+    #   mentre `ore_dichiarate` qui sopra è NOT NULL DEFAULT 0.
+    ore_effettive = Column(Float, nullable=True)
     # Lo stato che il DIPENDENTE ha dichiarato in questa settimana su questo
     # task. Valori: il sottoinsieme STATI_DICHIARABILI (vincolo nel DTO della
     # route, non un CHECK: la colonna dovrà accogliere anche le dichiarazioni
