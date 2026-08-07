@@ -461,10 +461,17 @@ def _baseline_percentuali(session, tipo, ids, settimana):
     return {unita_id: pct for unita_id, (_sett, pct) in migliore.items()}
 
 
-def ore_derivate_sottotask(avanzamenti, settimana=None, session=None):
-    """Ore derivate dall'avanzamento dichiarato su uno o più sottotask.
+def ore_derivate_unita(tipo, avanzamenti, settimana=None, session=None):
+    """Ore derivate dall'avanzamento dichiarato su una o più UNITÀ DI LAVORO.
 
-    Step 4 sottotask — STRATO 1 del motore ore-derivate (06/08/2026). Calcola e
+    Un'unità di lavoro è un SOTTOTASK (pezzo di un task scomposto) oppure un
+    TASK non scomposto, che dichiara l'avanzamento come farebbe un pezzo. Le due
+    cose si derivano con la stessa formula e differiscono in due soli punti,
+    entrambi nell'anagrafica qui sotto: dove sta la percentuale e quale colonna
+    è la stima.
+
+    Step 4 sottotask — STRATO 1 del motore ore-derivate (06/08/2026,
+    generalizzata alle unità il 07/08). Calcola e
     basta: NON scrive niente, né su ConsuntivoSottotask né su Consuntivo. Dato
     lo stato del database ritorna dei numeri, e chi la chiama decide cosa
     farne. Isolarla così la rende testabile senza montare un salvataggio
@@ -564,7 +571,7 @@ def ore_derivate_sottotask(avanzamenti, settimana=None, session=None):
     invalidata, l'aggregazione per task, l'innesto in `salva_consuntivo`. Questa
     funzione calcola una fotografia, non gestisce il tempo.
     """
-    from models import Sottotask, ConsuntivoSottotask
+    from models import Sottotask
 
     if not avanzamenti:
         return {}
@@ -575,13 +582,41 @@ def ore_derivate_sottotask(avanzamenti, settimana=None, session=None):
     propria = session is None
     session = session or get_session()
     try:
-        # 1) Anagrafica dei sottotask: task padre e stima. Una query.
-        righe = (
-            session.query(Sottotask.id, Sottotask.task_id, Sottotask.ore_stimate)
-            .filter(Sottotask.id.in_(ids))
-            .all()
-        )
-        anagrafica = {r.id: (r.task_id, r.ore_stimate) for r in righe}
+        # 1) ANAGRAFICA — l'unico punto, con la baseline, in cui i due tipi
+        # divergono. Per ciascuna unità serve la coppia (task a cui le ore
+        # vanno attribuite, stima su cui calcolare il Δ).
+        if tipo == "sottotask":
+            righe = (
+                session.query(Sottotask.id, Sottotask.task_id, Sottotask.ore_stimate)
+                .filter(Sottotask.id.in_(ids))
+                .all()
+            )
+            anagrafica = {r[0]: (r[1], r[2]) for r in righe}
+        elif tipo == "task":
+            # Il task È la propria unità: il «task a cui attribuire» è se
+            # stesso, e le ore che ne derivano stanno già sulla riga giusta —
+            # è la ragione per cui più avanti l'aggregazione non ha nulla da
+            # sommare.
+            #
+            # LA STIMA È `ore_pianificate`, NON `ore_stimate`. Quest'ultima
+            # porta la convenzione R1 («non si modifica dopo l'avvio»): è il
+            # budget storico congelato, e derivarci sopra vorrebbe dire
+            # calcolare le ore di oggi su un piano di mesi fa. `ore_pianificate`
+            # è il piano vivo, ed è la stessa base che usano già
+            # `scostamento_stime_sottotask` (che ci confronta la somma delle
+            # stime dei pezzi) e la barra `progress` del GANTT.
+            # NB: sul SOTTOTASK il ruolo è invertito — `Sottotask.ore_stimate`
+            # è l'unica colonna-ore che il pezzo ha, quindi lì è quella viva.
+            righe = (
+                session.query(Task.id, Task.ore_pianificate)
+                .filter(Task.id.in_(ids))
+                .all()
+            )
+            anagrafica = {r[0]: (r[0], r[1]) for r in righe}
+        else:
+            raise ValueError(
+                f"tipo '{tipo}' non ammesso per la derivazione: attesi {TIPI_UNITA}."
+            )
         if not anagrafica:
             return {}
 
@@ -589,7 +624,7 @@ def ore_derivate_sottotask(avanzamenti, settimana=None, session=None):
         # `task_settimana_dipendente`: il frontend deve mostrare allo slider
         # ESATTAMENTE il punto da cui il motore calcolerà il Δ, e due copie
         # della stessa riduzione finirebbero per rispondere due cose diverse.
-        baseline = _baseline_percentuali(session, "sottotask", list(anagrafica), sett)
+        baseline = _baseline_percentuali(session, tipo, list(anagrafica), sett)
 
         out = {}
         for sid in ids:
@@ -604,7 +639,7 @@ def ore_derivate_sottotask(avanzamenti, settimana=None, session=None):
             if pct is None:
                 out[sid] = {
                     "task_id": task_id, "ore": 0.0, "baseline_pct": base,
-                    "delta_pct": None, "ore_stimate": stima,
+                    "delta_pct": None, "stima_usata": stima,
                 }
                 continue
 
@@ -613,7 +648,7 @@ def ore_derivate_sottotask(avanzamenti, settimana=None, session=None):
             if stima is None:
                 out[sid] = {
                     "task_id": task_id, "ore": None, "baseline_pct": base,
-                    "delta_pct": delta, "ore_stimate": None,
+                    "delta_pct": delta, "stima_usata": None,
                 }
                 continue
 
@@ -633,7 +668,7 @@ def ore_derivate_sottotask(avanzamenti, settimana=None, session=None):
                 "ore": round(ore, 1),
                 "baseline_pct": base,
                 "delta_pct": delta,
-                "ore_stimate": stima,
+                "stima_usata": stima,
             }
         return out
     finally:
@@ -643,7 +678,65 @@ def ore_derivate_sottotask(avanzamenti, settimana=None, session=None):
             session.close()
 
 
-def _aggrega_ore_sottotask(session, righe, settimana):
+def tipo_unita_per_task(session, task_ids):
+    """{task_id: "sottotask" | "task"} — quale unità di lavoro governa ogni task.
+
+    È IL PUNTO DI MUTUA ESCLUSIONE del motore ore-derivate (Step 4, 07/08/2026).
+    Un task ha pezzi OPPURE una percentuale propria, MAI entrambi:
+
+      ha almeno un sottotask non-Annullato  → "sottotask"
+          le ore vengono dai pezzi, e una eventuale `Consuntivo.percentuale`
+          sulla riga del task viene IGNORATA.
+      nessun sottotask                      → "task"
+          le ore vengono dalla percentuale del task.
+
+    PERCHÉ ESISTE, e perché è una funzione e non un `if` sparso. Le due sorgenti
+    risponderebbero alla stessa domanda — quante ore è costato questo task
+    questa settimana — e sommarle conterebbe due volte lo stesso lavoro. È lo
+    stesso conflitto già risolto una volta fra ore derivate e ore manuali
+    (`salva_consuntivo`, dove le derivate vincono): lì la regola sta in un punto
+    solo, e qui deve stare in un punto solo. Un task con pezzi che si porti
+    dietro una percentuale propria — residuo di prima della scomposizione, o di
+    un client distratto — non deve poter far comparire ore dal nulla.
+
+    LA DOMANDA È SULLA STRUTTURA, NON SULLE DICHIARAZIONI. Si guarda se il
+    task è scomposto, non se qualcuno ha dichiarato: un task scomposto su cui
+    nessuno ha ancora toccato i pezzi resta di tipo "sottotask" e deriva zero,
+    che è la verità. Decidere in base a «dove ci sono dichiarazioni» farebbe
+    cambiare tipo allo stesso task da una settimana all'altra.
+
+    Gli ANNULLATI non contano: sono pezzi tolti dal piano (la via che il
+    Cantiere offre per cancellarli conservando le dichiarazioni), e
+    `salva_consuntivo` rifiuta con 400 un avanzamento su di essi. Un task i cui
+    pezzi sono stati tutti annullati torna a essere un task-unità. Stessa
+    asimmetria di `scostamento_stime_sottotask`, che esclude gli Annullati e
+    tiene i Sospesi.
+
+    Una query aggregata per tutti i task insieme, non una per task.
+    """
+    from models import Sottotask
+
+    task_ids = list(task_ids)
+    if not task_ids:
+        return {}
+
+    scomposti = {
+        r[0]
+        for r in session.query(Sottotask.task_id)
+        .filter(
+            Sottotask.task_id.in_(task_ids),
+            Sottotask.stato != "Annullato",
+        )
+        .distinct()
+        .all()
+    }
+    return {
+        tid: ("sottotask" if tid in scomposti else "task")
+        for tid in task_ids
+    }
+
+
+def _aggrega_ore_unita(session, tipo, righe, settimana):
     """Ore per task da un insieme di dichiarazioni-sottotask di una settimana.
 
     Step 4 STRATO 2 (06/08/2026). È il punto — l'UNICO — dove si applica la
@@ -684,25 +777,33 @@ def _aggrega_ore_sottotask(session, righe, settimana):
         return {}, []
 
     effettive = {
-        sottotask_id: ore
-        for sottotask_id, _pct, ore in righe
+        unita_id: ore
+        for unita_id, _pct, ore in righe
         if ore is not None
     }
-    derivate = ore_derivate_sottotask(
-        {sottotask_id: pct for sottotask_id, pct, _ore in righe},
+    derivate = ore_derivate_unita(
+        tipo,
+        {unita_id: pct for unita_id, pct, _ore in righe},
         settimana,
         session=session,
     )
 
+    # LA SOMMA NON HA UN RAMO PER TIPO, e non è una svista. Per i sottotask
+    # accumula i pezzi sul task padre; per un task-unità `task_id` È l'unità
+    # stessa e le righe di quel task sono una sola (UNIQUE task+dipendente+
+    # settimana), quindi lo stesso accumulo diventa un passaggio diretto: il
+    # caso «nessuna aggregazione» è quello degenere dell'aggregazione con un
+    # elemento. Scriverci sopra un `if tipo ==` aggiungerebbe un ramo che
+    # calcola la stessa cosa, cioè un posto in più dove divergere.
     per_task = {}
     non_derivabili = []
-    for sottotask_id, calcolo in derivate.items():
+    for unita_id, calcolo in derivate.items():
         task_id = calcolo["task_id"]
-        if sottotask_id in effettive:
-            per_task[task_id] = per_task.get(task_id, 0.0) + effettive[sottotask_id]
+        if unita_id in effettive:
+            per_task[task_id] = per_task.get(task_id, 0.0) + effettive[unita_id]
             continue
         if calcolo["ore"] is None:
-            non_derivabili.append(sottotask_id)
+            non_derivabili.append(unita_id)
             continue
         per_task[task_id] = per_task.get(task_id, 0.0) + calcolo["ore"]
 
@@ -1965,8 +2066,8 @@ def salva_consuntivo(dipendente_id, settimana, ore_per_task, stati_per_task,
             .all()
         )
 
-        derivate_per_task, non_derivabili = _aggrega_ore_sottotask(
-            session, dichiarazioni, settimana_date
+        derivate_per_task, non_derivabili = _aggrega_ore_unita(
+            session, "sottotask", dichiarazioni, settimana_date
         )
 
         if non_derivabili:
@@ -2064,7 +2165,7 @@ def salva_consuntivo(dipendente_id, settimana, ore_per_task, stati_per_task,
                 # monte non ha voce in capitolo su quante ore è costato davvero
                 # quel pezzo. È la differenza fra correggere un calcolo e
                 # riscrivere una dichiarazione.
-                per_task_dopo, _ = _aggrega_ore_sottotask(session, righe_dip, sett_dopo)
+                per_task_dopo, _ = _aggrega_ore_unita(session, "sottotask", righe_dip, sett_dopo)
                 totale = per_task_dopo.get(tid, 0.0)
 
                 riga_cons = session.query(Consuntivo).filter(
