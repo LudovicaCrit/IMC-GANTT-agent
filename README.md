@@ -182,16 +182,18 @@ main.py (98 r)
 
 ```
 models.py (387 r)              # Schema SQLAlchemy: 17 tabelle
-data.py (38 r)                 # Router intelligente db/memory (dispatcher)
-data_db_impl.py (486 r)        # Implementazione live PostgreSQL
-data_legacy.py (580 r)         # Dati grezzi del seed iniziale
-seed.py (307 r)                # Setup script per popolare il db
+data.py                        # Porta d'ingresso: ri-esporta data_db_impl
+data_db_impl.py                # Implementazione live PostgreSQL (unica)
+seed_data.json                 # Dati sintetici del seed
+seed.py                        # Setup script per popolare il db
 ```
 
-`data_legacy.py` contiene i dati fittizi credibili (15 dipendenti, 10 progetti,
-1282 consuntivi simulati) usati da `seed.py` per popolare il db iniziale. Il nome
-è storico: in origine era "modalità memoria di fallback", ma da quando PostgreSQL
-è stabile (6 mag 2026) il file ha solo il ruolo di dati seed.
+`seed_data.json` contiene i dati sintetici (18 dipendenti, 38 progetti, 114 task,
+2632 consuntivi simulati) che `seed.py` usa per popolare il db iniziale. Sono
+impalcatura di sviluppo: in produzione non vengono caricati. Fino al 07/08/2026
+vivevano in `data_legacy.py`, che `data.py` serviva anche come fallback runtime
+quando Postgres non rispondeva — comportamento rimosso: Postgres è ora
+obbligatorio e un database irraggiungibile ferma l'avvio con un errore parlante.
 
 
 ## Struttura del repository
@@ -202,7 +204,7 @@ seed.py (307 r)                # Setup script per popolare il db
 │   ├── main.py                       # Entry point (98 r)
 │   ├── models.py                     # Schema SQLAlchemy (17 classi)
 │   ├── data.py + data_db_impl.py     # Layer dati live
-│   ├── data_legacy.py                # Dati grezzi seed
+│   ├── seed_data.json                # Dati sintetici seed
 │   ├── seed.py                       # Setup script
 │   ├── auth.py + auth_routes.py      # Auth JWT
 │   ├── deps.py                       # Dependency: get_current_user, require_manager

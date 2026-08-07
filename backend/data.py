@@ -9,14 +9,18 @@ OBBLIGATORIO.
 FINO AL 07/08/2026 QUI C'ERA UN DISPATCHER, e vale la pena sapere perché non
 c'è più. Contava le righe di `dipendenti` dentro un `try/except Exception:
 pass`; se la conta non riusciva — per QUALSIASI motivo — ripiegava sui
-DataFrame sintetici di `data_legacy.py`. Tre guasti diversi (Postgres spento,
-credenziali sbagliate, migration non applicate) finivano tutti sullo stesso
-messaggio «⚠ Database non disponibile — fallback in memoria (esegui: python
-seed.py)», che è il rimedio giusto per un quarto caso e inutile per quei tre.
-E il fallback non funzionava nemmeno: `data_legacy` copre 13 dei 35 nomi che
-l'app importa da qui, quindi l'avvio moriva comunque — ma con un
-`ImportError: cannot import name 'margini_economia'`, che accusa il file
-sbagliato. Un guasto di infrastruttura si presentava come un bug applicativo.
+DataFrame sintetici di un secondo modulo (`data_legacy.py`, cancellato il
+giorno stesso). Tre guasti diversi (Postgres spento, credenziali sbagliate,
+migration non applicate) finivano tutti sullo stesso messaggio «⚠ Database non
+disponibile — fallback in memoria (esegui: python seed.py)», che è il rimedio
+giusto per un quarto caso e inutile per quei tre. E il fallback non funzionava
+nemmeno: quel modulo copriva 13 dei 35 nomi che l'app importa da qui, quindi
+l'avvio moriva comunque — ma con un `ImportError: cannot import name
+'margini_economia'`, che accusa il file sbagliato. Un guasto di infrastruttura
+si presentava come un bug applicativo.
+
+I dati sintetici che quel modulo conteneva vivono ora in `seed_data.json`, letto
+dal solo `seed.py`: sono impalcatura di sviluppo, non un ramo del runtime.
 
 I TRE CASI, ORA DISTINTI (misurati, non ipotizzati):
 

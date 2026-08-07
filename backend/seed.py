@@ -20,12 +20,12 @@ from auth import hash_password
 
 # ── Dati sintetici del seed ───────────────────────────────────────────────
 # Vengono da `seed_data.json`, non più da `data.py` (che li prendeva da
-# `data_legacy.py`). Il motivo non è di stile: `data.py` è un dispatcher che
-# sceglie a runtime fra Postgres e i DataFrame in memoria, e il seed poteva
-# leggerli SOLO nel ramo di fallback — cioè solo a database vuoto. Bastava
-# popolare il db perché `import seed` smettesse di funzionare. I dati stanno
-# ora in un file che è dati e basta, e il seed non dipende più da quale ramo
-# il dispatcher abbia scelto.
+# `data_legacy.py`, poi cancellato). Il motivo non è di stile: `data.py` ERA un
+# dispatcher che sceglieva a runtime fra Postgres e i DataFrame in memoria, e il
+# seed poteva leggerli SOLO nel ramo di fallback — cioè solo a database vuoto.
+# Bastava popolare il db perché `import seed` smettesse di funzionare. I dati
+# stanno ora in un file che è dati e basta, e il seed non dipende più dal layer
+# dati dell'applicazione.
 #
 # Si ricostruiscono come DataFrame perché è la forma che il resto di questo
 # file già consuma — `.iterrows()`, accesso per nome di colonna, un
@@ -282,7 +282,7 @@ def seed():
             ore_stimate=int(row["ore_stimate"]),
             # piano corrente: di norma = stima iniziale, ma su alcuni progetti il
             # PM ha rivisto il piano (ore_pianificate ≠ ore_stimate) → le due
-            # erosioni in Economia divergono. Colonna fornita da data_legacy;
+            # erosioni in Economia divergono. Colonna fornita da seed_data.json;
             # fallback alla stima se assente (retrocompat.).
             ore_pianificate=float(row.get("ore_pianificate", row["ore_stimate"])),
             ore_rimanenti=float(row.get("ore_pianificate", row["ore_stimate"])),  # rimanenti = piano corrente al seed

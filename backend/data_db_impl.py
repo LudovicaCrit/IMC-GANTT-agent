@@ -1,6 +1,7 @@
 """
-Data layer — implementazione database.
-Stessa interfaccia pubblica di data_legacy.py.
+Data layer — implementazione database (unica: Postgres è obbligatorio).
+
+Ri-esportata da `data.py`, che è la porta d'ingresso delle route.
 """
 
 from datetime import datetime, timedelta, date
@@ -21,7 +22,7 @@ def _to_dt(d):
 
 
 # ══════════════════════════════════════════════════════════════════════
-# HELPER FUNCTIONS — lettura (stessa interfaccia di data_legacy.py)
+# HELPER FUNCTIONS — lettura
 # ══════════════════════════════════════════════════════════════════════
 
 def get_dipendente(did):
