@@ -186,7 +186,6 @@ data.py (38 r)                 # Router intelligente db/memory (dispatcher)
 data_db_impl.py (486 r)        # Implementazione live PostgreSQL
 data_legacy.py (580 r)         # Dati grezzi del seed iniziale
 seed.py (307 r)                # Setup script per popolare il db
-dataframes.py (68 r)           # Helper DataFrame condivisi
 ```
 
 `data_legacy.py` contiene i dati fittizi credibili (15 dipendenti, 10 progetti,
@@ -210,7 +209,7 @@ dataframes.py (68 r)           # Helper DataFrame condivisi
 │   ├── scenario_engine.py            # Motore deterministico simulazioni
 │   ├── agent.py                      # Wrapper Gemini
 │   ├── gantt_pdf.py                  # Rendering PDF GANTT
-│   ├── utils.py + dataframes.py + contesto.py   # Helper condivisi
+│   ├── utils.py + contesto.py        # Helper condivisi
 │   ├── alembic/                      # Migration tracciate
 │   │   ├── env.py
 │   │   └── versions/

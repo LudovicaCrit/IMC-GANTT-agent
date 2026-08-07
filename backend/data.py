@@ -10,7 +10,7 @@ Per attivare la persistenza:
 
 Interfaccia pubblica (stessa firma in entrambi i modi):
   DIPENDENTI, PROGETTI, TASKS, CONSUNTIVI  — DataFrame pandas
-  get_dipendente, get_progetto, get_tasks_progetto, ...
+  get_dipendente, get_progetto, ...
   aggiungi_task, modifica_task, cambia_stato_progetto
   get_segnalazioni, aggiungi_segnalazione
 """

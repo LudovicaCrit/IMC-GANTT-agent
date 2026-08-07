@@ -134,7 +134,6 @@ DIPENDENZE
   `aggiungi_segnalazione` se PERSISTENT_MODE.
 - `models`: `Dipendente`, `Progetto`, `Task`, `get_session` (lettura
   diretta Postgres per /analisi-gantt e /verifica-pianificazione).
-- `dataframes._TASKS`: residuo per /chat, vedi nota sopra.
 - `utils.get_oggi`: data di sistema (era usata ma non importata: bug
   latente corretto durante la migrazione del 21/05).
 - `deps`: `get_current_user`, `require_manager`.

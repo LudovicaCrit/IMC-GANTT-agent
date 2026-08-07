@@ -95,7 +95,7 @@ register_router, helpers che andranno in moduli condivisi).
 
 Dopo questo router, il refactoring degli endpoint è chiuso. Resta:
 - pulizia DTO orfani in main.py (commit dedicato)
-- estrazione helper condivisi in utils.py / dataframes.py / contesto.py
+- estrazione helper condivisi in utils.py / contesto.py
 - fix bug audit_permessi.py (auth_routes.py)
 ═══════════════════════════════════════════════════════════════════════════
 """

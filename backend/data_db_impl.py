@@ -55,42 +55,6 @@ def get_progetto(pid):
         "budget_ore": r.budget_ore or 0, "valore_contratto": r.valore_contratto or 0,
         "descrizione": r.descrizione or "", "fase_corrente": r.fase_corrente or "",
     }
-
-def get_tasks_progetto(pid):
-    """Tasks di un progetto come lista di dict (uno per task).
-
-    Blocco 4 (ritiro helper-DataFrame): questa funzione tornava un DataFrame
-    pandas, residuo storico della migrazione DataFrame→Postgres. Ora restituisce
-    direttamente la lista di dict `data` (e `[]` se il progetto non ha task).
-
-    Ogni task espone `dipendenze`: lista di dict
-    `{task_predecessore_id, tipo_dipendenza}` (modello-grafo Step 3.1,
-    25/05/2026) — già nella forma nested corretta, niente normalizzazione.
-    """
-    session = get_session()
-    from sqlalchemy.orm import joinedload, selectinload
-    # Step 3.1 (25/05/2026): `predecessore` stringa singola → `dipendenze`
-    # lista (modello-grafo, vedi alembic e5f6a7b8c9d0). selectinload sulle
-    # dipendenze entranti = 1 query in più, evita N+1 sulla lista.
-    rows = session.query(Task).options(
-        joinedload(Task.fase_rel),
-        selectinload(Task.dipendenze_entranti),
-    ).filter(Task.progetto_id == pid).all()
-    data = [{"id": r.id, "progetto_id": r.progetto_id, "nome": r.nome,
-             "fase_id": r.fase_id,
-             "fase": r.fase_rel.nome if r.fase_rel else "",
-             "ore_stimate": r.ore_stimate or 0,
-             "data_inizio": _to_dt(r.data_inizio), "data_fine": _to_dt(r.data_fine),
-             "stato": r.stato, "profilo_richiesto": r.profilo_richiesto or "",
-             "dipendente_id": r.dipendente_id or "",
-             "dipendenze": [
-                 {"task_predecessore_id": d.task_predecessore_id,
-                  "tipo_dipendenza": d.tipo_dipendenza}
-                 for d in r.dipendenze_entranti
-             ]} for r in rows]
-    session.close()
-    return data
-
 def ore_consuntivate_progetto(pid):
     from sqlalchemy import func
     session = get_session()
