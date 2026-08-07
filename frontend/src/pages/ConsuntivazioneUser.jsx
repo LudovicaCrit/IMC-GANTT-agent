@@ -15,8 +15,13 @@ const TOOLTIP = {
   ore: 'Quante ore ci hai messo, se te lo ricordi. Campo facoltativo.',
   oreEffettive: 'Ore reali su questo pezzo, se l\'avanzamento non le racconta ' +
                 '(fermo, o costato più della stima). Vuoto = si calcolano dal cursore.',
-  oreDerivate: 'Calcolate dai pezzi: quanto sono avanzati per la loro stima, ' +
-               'oppure le ore reali dove le hai scritte a mano.',
+  oreEffettiveTask: 'Ore reali su questo task, se l\'avanzamento non le racconta ' +
+                    '(fermo, o costato più del previsto). Vuoto = si calcolano dal cursore.',
+  // Le ore non si scrivono più a mano da nessuna parte: si calcolano
+  // dall'avanzamento — dei pezzi se il task è scomposto, del task stesso se
+  // non lo è. Il tooltip lo dice in entrambi i casi.
+  oreDerivate: 'Calcolate dall\'avanzamento: quanto è avanzato per la sua ' +
+               'stima, oppure le ore reali dove le hai scritte a mano.',
 }
 
 /* ── Helpers ──────────────────────────────────────────────────────── */
@@ -89,6 +94,20 @@ export default function ConsuntivazioneUser() {
     if (campo === 'stato') return STATI.includes(t.stato_dichiarato) ? t.stato_dichiarato : null
     if (campo === 'ore') return t.ore_consumate || ''
     if (campo === 'nota') return t.nota ?? ''
+    // ── Il task come UNITÀ DI LAVORO ────────────────────────────────────
+    // Stessi quattro campi di un pezzo, risolti allo stesso modo. Vivono in
+    // `modifiche[task_id]`, la mappa che c'era già: sono campi DEL task, non
+    // di un'altra entità, e una terza mappa avrebbe solo aggiunto un posto
+    // dove cercarli.
+    // Il cursore parte da dove il task è ARRIVATO: la dichiarazione di questa
+    // settimana se c'è, altrimenti la baseline. Mai da zero — ripartire da
+    // zero su un task al 40% suggerirebbe di aver disfatto il lavoro.
+    // `?? 0` sulla baseline: per il task /me la manda `null` quando non c'è
+    // storia (a differenza dei pezzi, dove è 0), e uno slider ha bisogno di un
+    // numero.
+    if (campo === 'percentuale') return t.percentuale ?? t.baseline_pct ?? 0
+    if (campo === 'ore_effettive') return t.ore_effettive ?? ''
+    if (campo === 'bloccato') return t.stato_dichiarato === 'Bloccato'
     return undefined
   }
 
@@ -392,6 +411,9 @@ export default function ConsuntivazioneUser() {
                     statoSel={valore(t, 'stato')}
                     ore={valore(t, 'ore')}
                     nota={valore(t, 'nota') ?? ''}
+                    pct={valore(t, 'percentuale')}
+                    oreEffettive={valore(t, 'ore_effettive')}
+                    bloccato={valore(t, 'bloccato')}
                     modificata={Boolean(modifiche[t.task_id])}
                     notaAperta={Boolean(noteAperte[t.task_id])}
                     soloLettura={soloLettura}
@@ -476,6 +498,9 @@ function RigaTask({
   statoSel,
   ore,
   nota,
+  pct,
+  oreEffettive,
+  bloccato,
   modificata,
   notaAperta,
   soloLettura,
@@ -529,59 +554,46 @@ function RigaTask({
           )}
         </td>
 
-        {/* Stato — azione principale */}
+        {/* A che punto sei? — il cursore, non più tre pulsanti.
+            I tre stati non si chiedono più a NESSUN task: «In corso» e
+            «Completato» sono riflessi dell'avanzamento (del task o dei suoi
+            pezzi), e chiederli a parte significava raccogliere due risposte
+            alla stessa domanda, che possono contraddirsi. Resta «Bloccato»,
+            dentro i controlli, perché è l'unica cosa che una percentuale non
+            può dire. */}
         <td className="px-4 py-3">
-          <div className="flex gap-1 justify-center">
-            {STATI.map((s) => {
-              const sel = statoSel === s
-              const st = STATO_STYLE[s]
-              return (
-                <button
-                  key={s}
-                  disabled={soloLettura}
-                  onClick={() => {
-                    onModifica('stato', sel ? null : s)
-                    if (s === 'Bloccato' && !sel) {
-                      onNotaAperta(true)
-                    }
-                  }}
-                  className={`px-2.5 py-1.5 rounded-md text-xs font-medium border transition-colors
-                              ${sel ? st.on : st.off} ${soloLettura ? 'opacity-50 cursor-not-allowed' : ''}`}
-                >
-                  {s === 'Completato' ? 'Fatto' : s}
-                </button>
-              )
-            })}
-          </div>
+          {scomposto ? (
+            // Task scomposto: la risposta sta nei pezzi, qui sotto.
+            <p className="text-[11px] text-gray-600 text-center">nei pezzi ↓</p>
+          ) : (
+            <div className="flex items-center gap-3">
+              <ControlliAvanzamento
+                pct={pct}
+                baseline={t.baseline_pct ?? 0}
+                oreEffettive={oreEffettive}
+                bloccato={bloccato}
+                disabilitato={soloLettura}
+                titoloBloccato="Il task è fermo: dovrai scrivere perché"
+                titoloOreEffettive={TOOLTIP.oreEffettiveTask}
+                onModifica={onModifica}
+                onNotaAperta={onNotaAperta}
+              />
+            </div>
+          )}
         </td>
 
-        {/* Ore — facoltative sul task semplice, DERIVATE su quello scomposto */}
+        {/* Ore — DERIVATE, sempre. Niente input a mano da nessuna parte: le
+            calcola il backend dall'avanzamento (Δ × stima, o le ore reali dove
+            dichiarate), e le derivate VINCONO su un eventuale valore scritto a
+            mano. Un campo editabile qui accetterebbe un numero per poi
+            sostituirlo in silenzio al salvataggio: meglio non offrirlo. */}
         <td className="px-4 py-3 text-center">
-          {scomposto ? (
-            // Niente input: su un task scomposto le ore le calcola il backend
-            // sommando i pezzi (Δavanzamento × stima, o le ore effettive), e le
-            // derivate VINCONO su un eventuale valore scritto a mano. Un campo
-            // editabile qui accetterebbe un numero per poi sostituirlo in
-            // silenzio al salvataggio: meglio non offrirlo.
-            <>
-              <span className="text-gray-300 font-medium" title={TOOLTIP.oreDerivate}>
-                {fmtH(t.ore_consumate)}
-              </span>
-              <p className="text-[11px] text-gray-600">dai pezzi</p>
-            </>
-          ) : (
-            <input
-              type="number" min="0" step="0.5"
-              disabled={soloLettura}
-              value={ore}
-              onChange={(e) => onModifica('ore', e.target.value)}
-              placeholder="—"
-              className="w-16 bg-gray-950 text-gray-200 rounded-md px-2 py-1.5 text-center
-                         border border-gray-700 focus:outline-none focus:ring-2
-                         focus:ring-blue-600 focus:border-blue-600
-                         disabled:opacity-50 placeholder:text-gray-700"
-            />
-          )}
+          <span className="text-gray-300 font-medium" title={TOOLTIP.oreDerivate}>
+            {fmtH(t.ore_consumate)}
+          </span>
+          <p className="text-[11px] text-gray-600">
+            {scomposto ? 'dai pezzi' : "dall'avanzamento"}
+          </p>
         </td>
 
         {/* Icona nota */}
