@@ -1102,7 +1102,11 @@ def task_settimana_dipendente(dipendente_id, settimana=None):
         cons_rows = (
             session.query(Consuntivo.task_id, Consuntivo.ore_dichiarate,
                           Consuntivo.nota, Consuntivo.compilato,
-                          Consuntivo.stato_dichiarato)
+                          Consuntivo.stato_dichiarato,
+                          # Step 4 (07/08/2026): la dichiarazione del task come
+                          # UNITÀ di lavoro. Due colonne in più sulla query che
+                          # c'era già, non una query nuova.
+                          Consuntivo.percentuale, Consuntivo.ore_effettive)
             .filter(
                 Consuntivo.dipendente_id == dipendente_id,
                 Consuntivo.settimana >= lun,
@@ -1138,6 +1142,8 @@ def task_settimana_dipendente(dipendente_id, settimana=None):
         sottotask_rows = []
         dich_sottotask = {}
         baseline_sottotask = {}
+        task_unita = []
+        baseline_task = {}
         if task_ids:
             sottotask_rows = (
                 session.query(Sottotask)
@@ -1175,6 +1181,22 @@ def task_settimana_dipendente(dipendente_id, settimana=None):
                 baseline_sottotask = _baseline_percentuali(
                     session, "sottotask", sottotask_ids, lun
                 )
+
+            # ── Baseline dei TASK-UNITÀ (Step 4, 07/08/2026) ──────────────
+            # Solo per i task NON scomposti: su un task con pezzi la
+            # percentuale vive sui pezzi, e una percentuale-task sarebbe la
+            # doppia verità che il motore già ignora (`tipo_unita_per_task`).
+            # Il discriminante NON richiede una query: `sottotask_rows` sopra ha
+            # già filtrato i non-Annullati, quindi i task che vi compaiono sono
+            # esattamente gli scomposti — stesso criterio, dato già in mano.
+            task_scomposti = {s.task_id for s in sottotask_rows}
+            task_unita = [tid for tid in task_ids if tid not in task_scomposti]
+            if task_unita:
+                # Stessa funzione della baseline dei pezzi, con tipo="task": il
+                # cursore deve partire dal punto da cui partirà il conto.
+                baseline_task = _baseline_percentuali(
+                    session, "task", task_unita, lun
+                )
     finally:
         session.close()
 
@@ -1210,8 +1232,16 @@ def task_settimana_dipendente(dipendente_id, settimana=None):
     note_per_task = {}
     dichiarati = set()
     stato_dichiarato_per_task = {}
-    for tid, ore, nota, compilato, stato_dich in cons_rows:
+    percentuale_per_task = {}
+    ore_effettive_per_task = {}
+    for (tid, ore, nota, compilato, stato_dich,
+         pct, ore_eff) in cons_rows:
         consumate_per_task[tid] = consumate_per_task.get(tid, 0.0) + float(ore or 0)
+        # Come lo stato e la nota: non si sommano, vince la prima valorizzata.
+        if pct is not None and tid not in percentuale_per_task:
+            percentuale_per_task[tid] = pct
+        if ore_eff is not None and tid not in ore_effettive_per_task:
+            ore_effettive_per_task[tid] = ore_eff
         if compilato:
             dichiarati.add(tid)
         # Come la nota: non si somma, e la prima valorizzata vince.
@@ -1292,6 +1322,23 @@ def task_settimana_dipendente(dipendente_id, settimana=None):
             # dichiarazione. Solo questo può essere attribuito a lui.
             "stato_dichiarato": stato_dichiarato_per_task.get(t.id),
         })
+
+        # ── Il task come UNITÀ DI LAVORO (Step 4, 07/08/2026) ────────────
+        # I tre campi che il frontend serve per rendere lo slider del task,
+        # gemelli di quelli che ogni pezzo porta già. Compaiono SOLO sui task
+        # non scomposti: sulla voce di un task con pezzi sarebbero la doppia
+        # verità che il motore rifiuta, e il payload di quei task resta
+        # identico a prima — nessun consumatore esistente vede campi nuovi.
+        #
+        # `baseline_pct` è None e non 0 quando non c'è storia: 0 direbbe «il
+        # lavoro è a zero», None dice «non c'è un punto di partenza», e sono
+        # due cose diverse per uno slider che deve decidere il proprio minimo.
+        if t.id not in task_scomposti:
+            out[-1].update({
+                "percentuale": percentuale_per_task.get(t.id),
+                "baseline_pct": baseline_task.get(t.id),
+                "ore_effettive": ore_effettive_per_task.get(t.id),
+            })
 
         # `sottotask` compare SOLO sui task scomposti — la chiave assente è essa
         # stessa l'informazione «questo task si compila come sempre», e il
