@@ -207,6 +207,113 @@ def colore_unita(data_fine, stato, oggi,
     return "verde"
 
 
+# ── L'ORDINAMENTO DEI COLORI — una regola sola, condivisa ─────────────
+# Serve ovunque si debba dire «il peggio fra questi»: l'aggregazione lungo la
+# scala sottotask → task → fase → progetto, e chiunque altro debba confrontare
+# due colori. Sta qui, in una funzione, per la stessa ragione di `colore_unita`:
+# due ordinamenti che divergono producono un colore sbagliato senza che nulla
+# fallisca.
+#
+# IL GIALLO È NELL'ORDINE PUR ESSENDO SPENTO. In strato 1 `colore_unita` non lo
+# emette mai, quindi il rank 2 non viene mai usato — ed è deliberato: quando lo
+# strato 2 lo accenderà, l'ordinamento non va toccato, e non c'è il rischio di
+# infilarlo al posto sbagliato mesi dopo, quando la ragione dell'ordine sarà
+# meno fresca.
+#
+# GRIGIO SOPRA VERDE, e non sotto: un'unità viva senza data è un DUBBIO, e un
+# dubbio non deve essere assorbito da fratelli che stanno bene. La conseguenza
+# — un solo figlio grigio ingrigisce il genitore se è il peggio — è voluta, non
+# un effetto collaterale. Sotto il rosso, però: un dubbio non può nascondere una
+# certezza, e un fratello rosso vince sempre su un fratello grigio.
+RANK_SEMAFORO = {"rosso": 3, "giallo": 2, "grigio": 1, "verde": 0}
+
+
+def peggio_semaforo(colori):
+    """Il colore peggiore fra quelli dati, secondo RANK_SEMAFORO. Pura.
+
+    Sequenza VUOTA → None, non "verde". La differenza conta: "verde" sarebbe
+    un'affermazione («va tutto bene») su qualcosa che non abbiamo guardato,
+    mentre None dice «non c'è nulla da confrontare». Una fase senza task non è
+    verde-per-via-dei-suoi-task: semplicemente non ne ha, e il suo colore lo
+    decide il proprio calendario. Il chiamante scarta i None prima di
+    confrontare.
+
+    Un colore non presente in RANK_SEMAFORO solleva KeyError, e va bene così:
+    è un bug del chiamante, e un default silenzioso lo trasformerebbe in un
+    colore sbagliato che nessuno può notare.
+    """
+    colori = [c for c in colori if c is not None]
+    if not colori:
+        return None
+    return max(colori, key=lambda c: RANK_SEMAFORO[c])
+
+
+def _nodo_semaforo(colore_proprio, colori_figli):
+    """Il nodo dell'albero: colore aggregato + da dove viene. Puro.
+
+    È la regola del punto 1 della scala, scritta UNA volta e applicata identica
+    ai quattro livelli:
+
+        colore = peggio(colore-proprio, peggio-dei-figli)
+
+    Un livello non può essere più verde del proprio calendario, né più verde del
+    peggio dei suoi figli. Nessun assorbimento, nessuna finestra di prossimità:
+    un figlio rosso rende rosso il genitore, punto. Misurato sui dati veri, il
+    rosso che sale produce 5 progetti rossi su 38 — leggibile, non un'inondazione
+    — e l'alternativa («assorbi il rosso se il genitore ha margine») si è
+    rivelata un no-op: avrebbe lasciato rossi esattamente i 2 progetti già rossi
+    per data propria, nascondendo 8 task rossi su 11.
+
+    `origine` — PERCHÉ È ROSSO, non solo che lo è
+    ---------------------------------------------
+    È la scomposizione di un fatto che l'aggregazione conosce già e che
+    altrimenti butterebbe via. Non è un quinto colore e non tocca
+    l'ordinamento: è un secondo campo, di natura diversa dal colore.
+      "propria" → il colore viene dal calendario/stato DI QUESTO livello, e i
+                  figli non arrivano a tanto (o non ci sono).
+      "figli"   → questo livello per conto suo starebbe meglio; il colore glielo
+                  passa un figlio. È il caso di P002: 60 giorni di margine e
+                  dentro un task scaduto da 139.
+      "entrambe"→ il colore-proprio E il peggio-dei-figli valgono ENTRAMBI il
+                  colore finale. Non «sono uguali fra loro»: sono uguali AL
+                  PEGGIO. Un livello rosso di suo con un figlio rosso è
+                  "entrambe"; un livello rosso di suo con figli grigi è
+                  "propria", perché il grigio non concorre al colore vinto.
+      None      → il colore è verde: non c'è niente da spiegare, e inventare
+                  un'origine per lo star bene sarebbe rumore.
+    Serve al frontend per graduare la resa senza che il backend inventi soglie:
+    «rosso proprio» pieno, «rosso ereditato» più leggero. È la gradazione che il
+    giallo darà da solo in strato 2, ottenuta intanto senza inventare un gradino.
+
+    `figli_rossi` — figli DIRETTI, non il sottoalbero
+    -------------------------------------------------
+    Il progetto conta le FASI rosse, non i task rossi dei nipoti; la fase conta
+    i task. Due ragioni. La prima: è il numero che risponde alla domanda che si
+    fa davvero guardando un drill-down — «dove clicco adesso» — e il totale del
+    sottoalbero dice quanto è grosso il problema, non dove sta. La seconda: i
+    diretti danno anche i totali (la somma dei `figli_rossi` delle fasi di un
+    progetto è il numero dei task rossi), mentre dal totale non si torna
+    indietro. Si espone il dato da cui si ricava l'altro.
+    Sulle foglie (sottotask) vale sempre 0: la forma del nodo è identica a ogni
+    livello, così chi cammina l'albero non ha casi speciali.
+    """
+    colore_figli = peggio_semaforo(colori_figli)
+    colore = peggio_semaforo([colore_proprio, colore_figli])
+
+    if colore == "verde":
+        origine = None
+    else:
+        da_se = colore_proprio == colore
+        da_figli = colore_figli == colore
+        origine = "entrambe" if (da_se and da_figli) else ("propria" if da_se else "figli")
+
+    return {
+        "semaforo": colore,
+        "origine": origine,
+        "figli_rossi": sum(1 for c in colori_figli if c == "rosso"),
+    }
+
+
 # ══════════════════════════════════════════════════════════════════════
 # HELPER FUNCTIONS — lettura
 # ══════════════════════════════════════════════════════════════════════
@@ -424,6 +531,153 @@ def criticita_sforamento_progetti(progetti_ids):
                     "pm_id": p.pm_id,
                     "criticita": criticita,
                 })
+        return out
+    finally:
+        session.close()
+
+
+def semaforo_progetti(progetti_ids, oggi=None):
+    """Semaforo ritardabilità su tutta la gerarchia dei progetti dati.
+
+    STRATO 1, sotto-edit 2. Cammina progetto → fase → task → sottotask,
+    calcola il colore-proprio di ogni unità con `colore_unita` e lo aggrega
+    verso l'alto col peggio-dei-figli (`_nodo_semaforo`). Il colore non è MAI
+    persistito: si ricalcola a ogni richiesta, e `oggi` è l'unico ingresso che
+    lo fa cambiare da solo.
+
+    FIRMA BATCH SU SCOPE-PROGETTO, come `criticita_sforamento_progetti` — la
+    stessa forma per la stessa ragione: `progetti_ids` è già la lista filtrata a
+    monte (attivi + filtro identità), qui non si filtra per stato né per
+    identità, si calcola e basta. Il chiamante più esigente è
+    `gantt_strutturato`, che gira su tutti i progetti attivi: una chiamata per
+    unità sarebbe un N+1 su ~110 task. Chi ne vuole uno solo passa [pid].
+
+    `oggi` INIETTABILE. `colore_unita` è pura e non conosce l'orologio; questa
+    funzione è il confine dove il tempo entra nel calcolo, UNA volta, e resta
+    un parametro perché i test possano fissarlo. Il default `date.today()` è
+    letto qui e passato a tutte le unità: senza questo, una richiesta a cavallo
+    di mezzanotte potrebbe valutare due rami dello stesso albero in due giorni
+    diversi.
+
+    OUTPUT — dict annidato, chiave = id dell'unità a ogni livello:
+
+      {progetto_id: {semaforo, origine, figli_rossi,
+         "fasi": {fase_id: {semaforo, origine, figli_rossi,
+            "task": {task_id: {semaforo, origine, figli_rossi,
+               "sottotask": {sottotask_id: {semaforo, origine, figli_rossi}}}}}}}}
+
+    La forma del NODO è identica ai quattro livelli (`semaforo`, `origine`,
+    `figli_rossi`): chi cammina l'albero non ha casi speciali, e sulle foglie
+    `figli_rossi` vale 0 e `origine` è "propria" o None.
+    `fasi` e `task` ci sono sempre, anche vuoti — sono la struttura.
+    `sottotask` compare SOLO sui task scomposti: la chiave assente è essa stessa
+    l'informazione «questo task non ha pezzi», ed è la convenzione della casa
+    (`task_settimana_dipendente`, `scostamento_stime_sottotask`).
+    Progetto inesistente → chiave assente, nessun raise: le route validano a
+    monte, qui non si alza.
+
+    IL SOTTOTASK EREDITA LA DATA DEL TASK PADRE — è la riga da non sbagliare.
+    `Sottotask` non ha date proprie PER SCELTA (models.py: «eredita la finestra
+    temporale del task padre»). Passare `sottotask.data_fine` — che non esiste —
+    o `None` renderebbe GRIGIO ogni sottotask vivo, e siccome grigio > verde
+    ogni task scomposto diventerebbe grigio, e con lui la sua fase. Il guasto
+    non si vedrebbe oggi: in DB ci sono ZERO sottotask, quindi si accenderebbe
+    alla prima scomposizione reale, lontano da qui. Vedi la riga marcata
+    «EREDITÀ» nel corpo.
+
+    STATI DEL SOTTOTASK: sono `STATI_PIANIFICAZIONE_SOTTOTASK` («Da iniziare»,
+    «Sospeso», «Annullato») e NON includono «Completato» — la conclusione di un
+    pezzo vive nelle dichiarazioni, non sulla definizione condivisa. Sospeso e
+    Annullato stanno già in `STATI_CHIUSI_SEMAFORO`, quindi un pezzo tolto dal
+    piano non tinge il task. Un pezzo «Da iniziare» dentro un task scaduto è
+    rosso, e deve esserlo: è lavoro vivo con la finestra chiusa.
+
+    TASK «Eliminato» ESCLUSI, come in `gantt_strutturato` (soft delete, non
+    devono comparire nel drill-down). Sarebbero comunque verdi — «Eliminato» è
+    fra gli stati chiusi — ma escluderli qui tiene le CHIAVI di questo dict
+    allineate a quelle del payload che lo ospiterà: un semaforo su un task che
+    la pagina non mostra è un orfano che qualcuno prima o poi cercherà di
+    renderizzare.
+
+    QUERY: due, indipendenti dal numero di unità. Una per la gerarchia
+    (joinedload fasi → task, lo stesso di `gantt_strutturato`) e una per tutti i
+    sottotask dei task in scope. Nessun N+1, ed è verificato da un test che
+    conta le query.
+    """
+    from sqlalchemy.orm import joinedload
+    from models import Fase, Sottotask
+
+    if not progetti_ids:
+        return {}
+
+    oggi = oggi or date.today()
+
+    session = get_session()
+    try:
+        progetti = (
+            session.query(Progetto)
+            .options(joinedload(Progetto.fasi).joinedload(Fase.task))
+            .filter(Progetto.id.in_(list(progetti_ids)))
+            .all()
+        )
+        if not progetti:
+            return {}
+
+        task_ids = [
+            t.id for p in progetti for f in p.fasi for t in f.task
+            if t.stato != "Eliminato"
+        ]
+
+        # Tutti i pezzi in UNA query, poi lookup nel loop. Stesso pattern di
+        # `ore_per_task` in routes/gantt.py.
+        pezzi_per_task = {}
+        if task_ids:
+            for st in (session.query(Sottotask)
+                       .filter(Sottotask.task_id.in_(task_ids))
+                       .all()):
+                pezzi_per_task.setdefault(st.task_id, []).append(st)
+
+        out = {}
+        for p in progetti:
+            fasi_out = {}
+            for f in p.fasi:
+                task_out = {}
+                for t in f.task:
+                    if t.stato == "Eliminato":
+                        continue
+
+                    sottotask_out = {}
+                    for st in pezzi_per_task.get(t.id, []):
+                        # EREDITÀ — `t.data_fine`, NON `None`: il sottotask non
+                        # ha date proprie e vive nella finestra del task padre.
+                        # Vedi il docstring: sbagliare qui ingrigisce in
+                        # silenzio ogni task scomposto.
+                        sottotask_out[st.id] = _nodo_semaforo(
+                            colore_unita(t.data_fine, st.stato, oggi), []
+                        )
+
+                    nodo_task = _nodo_semaforo(
+                        colore_unita(t.data_fine, t.stato, oggi),
+                        [n["semaforo"] for n in sottotask_out.values()],
+                    )
+                    if sottotask_out:
+                        nodo_task["sottotask"] = sottotask_out
+                    task_out[t.id] = nodo_task
+
+                nodo_fase = _nodo_semaforo(
+                    colore_unita(f.data_fine, f.stato, oggi),
+                    [n["semaforo"] for n in task_out.values()],
+                )
+                nodo_fase["task"] = task_out
+                fasi_out[f.id] = nodo_fase
+
+            nodo_progetto = _nodo_semaforo(
+                colore_unita(p.data_fine, p.stato, oggi),
+                [n["semaforo"] for n in fasi_out.values()],
+            )
+            nodo_progetto["fasi"] = fasi_out
+            out[p.id] = nodo_progetto
+
         return out
     finally:
         session.close()

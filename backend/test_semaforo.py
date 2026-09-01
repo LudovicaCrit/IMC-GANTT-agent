@@ -15,7 +15,10 @@ Stile e runner: `test_scenario_engine.py`.
 
 from datetime import date
 
-from data_db_impl import colore_unita, STATI_CHIUSI_SEMAFORO
+from data_db_impl import (
+    colore_unita, STATI_CHIUSI_SEMAFORO,
+    RANK_SEMAFORO, peggio_semaforo, _nodo_semaforo,
+)
 
 
 # Data fissa: nessun test dipende dall'orologio reale, `oggi` è un parametro.
@@ -183,6 +186,77 @@ def test_stato_sconosciuto_non_disarma_la_scadenza():
     print("✅ 8. stato sconosciuto → vale la scadenza OK")
 
 
+# ══════════════════════════════════════════════════════════════════════
+# ORDINAMENTO E NODO — gli helper puri dell'aggregazione (sotto-edit 2)
+# ══════════════════════════════════════════════════════════════════════
+
+def test_ordinamento_peggio():
+    """9. rosso > giallo > grigio > verde, e il vuoto è None (non verde)."""
+    assert RANK_SEMAFORO == {"rosso": 3, "giallo": 2, "grigio": 1, "verde": 0}
+
+    assert peggio_semaforo(["verde", "rosso"]) == "rosso"
+    assert peggio_semaforo(["verde", "grigio"]) == "grigio"
+    assert peggio_semaforo(["verde", "verde"]) == "verde"
+
+    # UN GRIGIO NON NASCONDE UN FRATELLO ROSSO: è il punto 6 del brief.
+    assert peggio_semaforo(["grigio", "rosso"]) == "rosso"
+    assert peggio_semaforo(["rosso", "grigio", "verde"]) == "rosso"
+
+    # Il giallo è nell'ordine anche se `colore_unita` non lo emette: quando lo
+    # strato 2 lo accende, l'ordinamento non va toccato.
+    assert peggio_semaforo(["giallo", "grigio"]) == "giallo"
+    assert peggio_semaforo(["giallo", "rosso"]) == "rosso"
+
+    # Vuoto → None, non "verde": non abbiamo guardato niente, non possiamo
+    # dire che vada tutto bene.
+    assert peggio_semaforo([]) is None
+    assert peggio_semaforo([None, None]) is None
+    assert peggio_semaforo([None, "rosso"]) == "rosso"
+
+    # Un colore fuori vocabolario è un bug del chiamante, non un default muto.
+    try:
+        peggio_semaforo(["fucsia"])
+        raise AssertionError("atteso KeyError su colore sconosciuto")
+    except KeyError:
+        pass
+
+    print("✅ 9. ordinamento rosso>giallo>grigio>verde, vuoto→None OK")
+
+
+def test_nodo_origine():
+    """10. `origine`: propria / figli / entrambe / None, e figli_rossi."""
+    # Nessun figlio → il colore è tutto suo.
+    assert _nodo_semaforo("rosso", []) == {
+        "semaforo": "rosso", "origine": "propria", "figli_rossi": 0}
+
+    # Verde → nessuna origine: non c'è niente da spiegare.
+    assert _nodo_semaforo("verde", ["verde", "verde"]) == {
+        "semaforo": "verde", "origine": None, "figli_rossi": 0}
+
+    # Il caso P002: il calendario proprio regge, il rosso viene da un figlio.
+    assert _nodo_semaforo("verde", ["verde", "rosso"]) == {
+        "semaforo": "rosso", "origine": "figli", "figli_rossi": 1}
+
+    # "entrambe" = proprio E figli valgono ENTRAMBI il colore VINTO.
+    assert _nodo_semaforo("rosso", ["rosso", "verde"]) == {
+        "semaforo": "rosso", "origine": "entrambe", "figli_rossi": 1}
+
+    # ...e NON «proprio e figli sono uguali fra loro»: qui il grigio dei figli
+    # non concorre al rosso vinto, quindi l'origine è "propria".
+    assert _nodo_semaforo("rosso", ["grigio", "verde"]) == {
+        "semaforo": "rosso", "origine": "propria", "figli_rossi": 0}
+
+    # Grigio ereditato da un figlio vivo-senza-data.
+    assert _nodo_semaforo("verde", ["grigio", "verde"]) == {
+        "semaforo": "grigio", "origine": "figli", "figli_rossi": 0}
+
+    # Il grigio non nasconde il rosso, e figli_rossi conta solo i rossi.
+    assert _nodo_semaforo("verde", ["grigio", "rosso", "rosso"]) == {
+        "semaforo": "rosso", "origine": "figli", "figli_rossi": 2}
+
+    print("✅ 10. origine propria/figli/entrambe/None e figli_rossi OK")
+
+
 if __name__ == "__main__":
     test_grigio_senza_data_fine()
     test_rosso_scaduto_e_vivo()
@@ -192,6 +266,8 @@ if __name__ == "__main__":
     test_scadenza_oggi_non_e_ritardo()
     test_purezza()
     test_stato_sconosciuto_non_disarma_la_scadenza()
+    test_ordinamento_peggio()
+    test_nodo_origine()
     print()
     print("=" * 60)
     print("TUTTI I TEST PASSATI ✅")
