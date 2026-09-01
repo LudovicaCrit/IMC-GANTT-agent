@@ -45,6 +45,10 @@ CAMPI_TASK = {
     "dipendente_nome", "profilo_richiesto", "predecessore", "dipendenze",
     "semaforo",
 }
+# `sottotask` è l'unico campo OPZIONALE del task: c'è solo sui task scomposti.
+# Non sta in CAMPI_TASK perché la sua assenza è il caso normale (e, oggi, l'unico
+# in DB); sta qui perché la sua presenza non deve far fallire il contratto.
+CAMPI_TASK_OPZIONALI = {"sottotask"}
 CAMPI_SEMAFORO = {"colore", "origine", "figli_rossi"}
 
 COLORI = ("rosso", "giallo", "grigio", "verde")
@@ -97,6 +101,8 @@ def test_payload_additivo():
         n[livello] += 1
         mancanti = attesi[livello] - set(nodo)
         extra = set(nodo) - attesi[livello]
+        if livello == "task":
+            extra -= CAMPI_TASK_OPZIONALI
         assert not mancanti, f"{livello} {uid}: campi PERSI {mancanti}"
         assert not extra, f"{livello} {uid}: campi INATTESI {extra}"
 
@@ -227,7 +233,130 @@ def test_query_costanti():
     unita = sum(1 for _ in _unita(tutti))
     assert c1.n == cN.n, f"{c1.n} query su 1 progetto, {cN.n} su {len(tutti)}"
     print(f"✅ 6. {cN.n} query per {len(tutti)} progetti / {unita} unità "
-          f"(uguali alle {c1.n} di un solo progetto) — di cui 2 del semaforo")
+          f"(uguali alle {c1.n} di un solo progetto) — 5 dell'endpoint, "
+          f"2 del semaforo, 1 delle righe sottotask")
+
+
+# ══════════════════════════════════════════════════════════════════════
+# 8. SOTTOTASK ANNIDATI (lavoro B) — fixture, 0 pezzi in DB
+# ══════════════════════════════════════════════════════════════════════
+
+CAMPI_SOTTOTASK = {
+    "id", "nome", "ordine", "stato", "ore_stimate",
+    "dipendente_id", "dipendente_nome", "semaforo",
+}
+
+
+def test_sottotask_annidati():
+    """8. I sottotask compaiono annidati nel task, con anagrafica e colore.
+
+    Stampo di `test_semaforo_aggregazione.py::test_fixture_sottotask_eredita_
+    la_data_del_padre`, spostato dal dict dell'aggregazione al payload della
+    route. Due padri (uno verde, uno rosso) per verificare che il colore del
+    pezzo segua la data EREDITATA dal task, più un pezzo «Annullato» che non
+    deve comparire.
+    """
+    from datetime import date
+    from models import get_session, Task, Sottotask
+    from data_db_impl import colore_unita
+
+    oggi = date.today()
+    s = get_session()
+    creati, ids_creati = [], []
+    try:
+        vivi = ("Completato", "Sospeso", "Annullato", "Eliminato")
+        t_verde = next(t for t in s.query(Task).all()
+                       if colore_unita(t.data_fine, t.stato, oggi) == "verde"
+                       and t.stato not in vivi)
+        t_rosso = next(t for t in s.query(Task).all()
+                       if colore_unita(t.data_fine, t.stato, oggi) == "rosso")
+
+        # ordine 2 PRIMA di ordine 1, per provare che l'order_by lavora.
+        pezzi = [
+            (t_verde, "verde-B", 2, "Da iniziare", 4, None),
+            (t_verde, "verde-A", 1, "Da iniziare", 8, t_verde.dipendente_id),
+            (t_rosso, "rosso-B", 2, "Sospeso", 3, None),
+            (t_rosso, "rosso-A", 1, "Da iniziare", 6, None),
+            (t_rosso, "rosso-ANNULLATO", 3, "Annullato", 5, None),
+        ]
+        for padre, nome, ordine, stato, ore, did in pezzi:
+            st = Sottotask(task_id=padre.id, nome=f"[FIXTURE] {nome}",
+                           ordine=ordine, stato=stato, ore_stimate=ore,
+                           dipendente_id=did)
+            s.add(st)
+            creati.append(st)
+        s.commit()
+        ids_creati = [st.id for st in creati]
+
+        payload = _payload()
+        nodi = {tid: n for liv, tid, n in _unita(payload) if liv == "task"}
+
+        # ── il task VERDE: 2 pezzi, verdi, ordinati, con anagrafica giusta
+        tv = nodi[t_verde.id]
+        assert "sottotask" in tv, "chiave sottotask assente sul task scomposto"
+        assert len(tv["sottotask"]) == 2, tv["sottotask"]
+        assert [p["ordine"] for p in tv["sottotask"]] == [1, 2], "order_by non rispettato"
+        assert [p["nome"] for p in tv["sottotask"]] == \
+            ["[FIXTURE] verde-A", "[FIXTURE] verde-B"]
+        for p in tv["sottotask"]:
+            assert set(p) == CAMPI_SOTTOTASK, set(p)
+            assert p["semaforo"]["colore"] == "verde", (
+                "il pezzo NON sta ereditando la data del padre")
+            assert p["semaforo"]["origine"] is None
+            assert p["semaforo"]["figli_rossi"] == 0
+            assert "data_inizio" not in p and "data_fine" not in p
+            assert "percentuale" not in p
+        # anagrafica: stato, ore_stimate, override assegnatario
+        a, b = tv["sottotask"]
+        assert (a["stato"], a["ore_stimate"]) == ("Da iniziare", 8)
+        assert (b["stato"], b["ore_stimate"]) == ("Da iniziare", 4)
+        assert a["dipendente_id"] == t_verde.dipendente_id  # override esplicito
+        assert b["dipendente_id"] is None                   # eredita → NULL, non ""
+        assert b["dipendente_nome"] == ""
+        # il task resta verde e senza origine: i pezzi non lo peggiorano
+        assert tv["semaforo"]["colore"] == "verde"
+        assert tv["semaforo"]["origine"] is None
+
+        # ── il task ROSSO: l'annullato sparisce, i vivi ereditano il rosso
+        tr = nodi[t_rosso.id]
+        nomi = [p["nome"] for p in tr["sottotask"]]
+        assert len(tr["sottotask"]) == 2, nomi
+        assert "[FIXTURE] rosso-ANNULLATO" not in nomi, "pezzo Annullato serializzato"
+        per_nome = {p["nome"]: p for p in tr["sottotask"]}
+        vivo = per_nome["[FIXTURE] rosso-A"]
+        sospeso = per_nome["[FIXTURE] rosso-B"]
+        assert vivo["semaforo"]["colore"] == "rosso", (
+            "il pezzo vivo deve ereditare la finestra chiusa del padre")
+        assert vivo["semaforo"]["origine"] == "propria"
+        assert sospeso["semaforo"]["colore"] == "verde", "un Sospeso è chiuso"
+        assert sospeso["stato"] == "Sospeso"
+        # il task rosso di suo E dai pezzi
+        assert tr["semaforo"]["colore"] == "rosso"
+        assert tr["semaforo"]["origine"] == "entrambe"
+        assert tr["semaforo"]["figli_rossi"] == 1, "il Sospeso non conta"
+
+        # ── nessun pezzo con semaforo null, e i task non scomposti intatti
+        for liv, tid, n in _unita(payload):
+            if liv != "task" or "sottotask" not in n:
+                continue
+            for p in n["sottotask"]:
+                assert p["semaforo"] is not None, (tid, p["id"])
+        non_scomposti = [n for liv, _, n in _unita(payload)
+                         if liv == "task" and "sottotask" not in n]
+        assert len(non_scomposti) >= 100, "attesi molti task senza pezzi"
+
+        print(f"✅ 8. sottotask annidati — {t_verde.id} (2 verdi, ordinati) e "
+              f"{t_rosso.id} (1 rosso ereditato + 1 sospeso, annullato escluso); "
+              f"{len(non_scomposti)} task senza chiave `sottotask`")
+    finally:
+        for st in creati:
+            s.delete(st)
+        s.commit()
+        if ids_creati:
+            assert s.query(Sottotask).filter(
+                Sottotask.id.in_(ids_creati)).count() == 0, "fixture non ripulita"
+        assert s.query(Sottotask).count() == 0, "residui in tabella sottotask"
+        s.close()
 
 
 def test_endpoint_risponde_200():
@@ -255,6 +384,7 @@ if __name__ == "__main__":
     test_copertura_totale()
     test_rossi_e_provenienza_nel_payload()
     test_query_costanti()
+    test_sottotask_annidati()
     test_endpoint_risponde_200()
     print()
     print("=" * 60)

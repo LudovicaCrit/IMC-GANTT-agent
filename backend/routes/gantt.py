@@ -122,8 +122,8 @@ from sqlalchemy import func
 
 from deps import require_manager
 from models import (
-    Utente, Progetto, Fase, Task, Consuntivo, Dipendente, get_session,
-    STATI_PROGETTO_ATTIVI,
+    Utente, Progetto, Fase, Task, Consuntivo, Dipendente, Sottotask,
+    get_session, STATI_PROGETTO_ATTIVI,
 )
 
 
@@ -147,7 +147,11 @@ def _semaforo_payload(nodo):
     com'è si otterrebbe `"semaforo": {"semaforo": "rosso", ...}`, che si legge
     male e si sbaglia a scrivere. Scarta anche le chiavi STRUTTURALI del nodo
     (`fasi`, `task`, `sottotask`): il payload ha già la propria gerarchia, e
-    duplicarla dentro ogni semaforo la raddoppierebbe.
+    duplicarla dentro ogni semaforo la raddoppierebbe. Lo scarto è di FORMA, non
+    di contenuto — il sotto-dict `sottotask` del nodo-task viene letto a parte
+    dal loop, che lo appaia alle righe Sottotask vere e ne ricava il colore di
+    ciascun pezzo (lavoro B): il colore dei sottotask non si ricalcola, si
+    riprende da qui.
 
     `nodo` assente → None, come fa `scostamento_per_task.get(t.id)` per i task
     senza niente da dire. NON un KeyError: `semaforo_progetti` cammina la
@@ -309,9 +313,16 @@ def gantt_strutturato(
                 "ore_stimate": 40, "ore_consumate": 25,
                 "data_inizio": "...", "data_fine": "...",
                 "dipendente_id": "...", "dipendente_nome": "...",
-                "semaforo": {"colore": "rosso", "origine": "propria",
-                             "figli_rossi": 0},
-                "predecessore": ""
+                "semaforo": {"colore": "rosso", "origine": "entrambe",
+                             "figli_rossi": 1},
+                "predecessore": "",
+                "sottotask": [            # solo sui task scomposti
+                  {"id": 7, "nome": "...", "ordine": 1, "stato": "Da iniziare",
+                   "ore_stimate": 8, "dipendente_id": null,
+                   "dipendente_nome": "",
+                   "semaforo": {"colore": "rosso", "origine": "propria",
+                                "figli_rossi": 0}}, ...
+                ]
               }, ...
             ]
           }, ...
@@ -357,10 +368,30 @@ def gantt_strutturato(
     "figli", e va disegnato diversamente da uno rosso di suo.
     `figli_rossi` conta i figli DIRETTI rossi (le fasi per il progetto, i task
     per la fase): risponde a «dove clicco adesso».
-    I SOTTOTASK NON SONO IN QUESTO PAYLOAD e il loro colore non compare qui:
-    arriverà su GET /api/sottotask/{task_id}. `semaforo_progetti` lo calcola
-    comunque (il task lo eredita dai pezzi), quindi il colore di un task
-    scomposto tiene già conto di loro anche se i pezzi non si vedono.
+    I SOTTOTASK (lavoro B) — quarto livello, annidato nel task:
+        "sottotask": [{id, nome, ordine, stato, ore_stimate,
+                       dipendente_id, dipendente_nome, semaforo}, ...]
+    La chiave c'è SOLO sui task scomposti: assente = «questo task non ha
+    pezzi», ed è la convenzione della casa (`task_settimana_dipendente`).
+    Ordinati per (ordine, id), come `lista_sottotask_task`.
+    I pezzi «Annullato» non compaiono: sono stati tolti dal piano, e un GANTT
+    disegna il piano. I «Sospeso» sì — in pausa, ma ancora nel piano.
+
+    NIENTE DATE sui sottotask, e non è una dimenticanza: `Sottotask` non ne ha
+    PER SCELTA (models.py: «eredita la finestra temporale del task padre»). La
+    finestra di un pezzo è quella del task che lo racchiude, che il frontend ha
+    già sotto mano nell'oggetto immediatamente superiore. Copiarle qui creerebbe
+    una seconda verità destinata a divergere alla prima modifica delle date del
+    task — e, se un domani i sottotask avessero date proprie, un payload che ne
+    porta già di ereditate cambierebbe significato in silenzio.
+    Il colore del pezzo, però, RIFLETTE quella data ereditata: un pezzo vivo
+    dentro un task scaduto è rosso.
+
+    NIENTE PERCENTUALE, per ora. Serve `_baseline_percentuali(tipo="sottotask")`
+    — una query in più e una decisione su dove viva «avanzamento corrente» — e
+    oggi uscirebbe `null` per ogni pezzo: in DB non c'è UNA riga con
+    `percentuale` non-NULL, né in `consuntivi` né in `consuntivo_sottotask`.
+    Si aggiunge col lavoro A, quando le barre andranno disegnate davvero.
     """
     session = get_session()
     try:
@@ -424,9 +455,57 @@ def gantt_strutturato(
         # e gli oggetti ORM di questa route, legherebbe il calcolo al suo unico
         # chiamante proprio mentre stiamo per darne un secondo
         # (GET /api/sottotask/{task_id}).
+        # Dal lavoro B lo stesso prezzo si paga una seconda volta, sulla tabella
+        # `sottotask`: la legge questa funzione (per i colori) e la rilegge il
+        # blocco 2-quater (per le righe da serializzare). È la stessa scelta,
+        # fatta di nuovo e con gli stessi occhi — non una svista: due letture di
+        # una tabella piccola contro un calcolo legato al suo chiamante.
         # `oggi` non si passa: lo strato dati legge `date.today()` una volta
         # sola e lo usa per tutto l'albero.
         semaforo_per_progetto = semaforo_progetti([p.id for p in progetti])
+
+        # ── 2-quater. Le righe dei SOTTOTASK, in UNA query ────────────
+        # Lavoro B (granularità sottotask nel GANTT). Query batch su task_id +
+        # lookup nel loop: lo stesso pattern di `ore_per_task`, `scostamento` e
+        # `semaforo` qui sopra, e NON un `selectinload` agganciato alla catena
+        # joinedload della query 1 — quella è già a tre livelli
+        # (progetti → fasi → task) e appenderne un quarto la fa crescere per un
+        # dato che serve solo a una minoranza dei task.
+        #
+        # ORDINE (ordine, id): l'id come secondo criterio rende stabile anche il
+        # caso `ordine` NULL, che Postgres in ASC manda in coda. È l'ordinamento
+        # di `lista_sottotask_task` in routes/sottotask.py, e le due viste dei
+        # pezzi devono mostrarli nella stessa sequenza. La relationship
+        # `Task.sottotask` ha già `order_by=Sottotask.ordine`, ma qui non la si
+        # usa (è una query a sé), quindi l'ordine va chiesto esplicitamente.
+        #
+        # FILTRO «Annullato» — e la sua asimmetria con l'aggregazione, che è
+        # deliberata. `semaforo_progetti` NON filtra: carica tutti i pezzi e
+        # calcola un colore anche per gli annullati (che essendo fra gli stati
+        # chiusi escono verdi). Qui invece si escludono, con lo stesso criterio
+        # di `scostamento_stime_sottotask` — `stato != "Annullato"`, il
+        # precedente della casa per «quali pezzi contano»: un pezzo annullato è
+        # stato tolto dal piano e non è lavoro da disegnare in un GANTT.
+        # L'asimmetria è a SENSO UNICO e per questo innocua: il payload è un
+        # SOTTOINSIEME dell'albero, quindi ogni pezzo serializzato trova il suo
+        # colore e nessuno esce con `semaforo: null` (il contrario — un pezzo nel
+        # payload senza nodo — sarebbe il caso da temere, e non può accadere).
+        # Allineare anche l'aggregazione non cambierebbe NESSUN colore: un
+        # annullato è verde, e il verde non vince mai il peggio-dei-figli.
+        # «Eliminato» non compare nel filtro perché per un sottotask non esiste:
+        # gli stati ammessi sono STATI_PIANIFICAZIONE_SOTTOTASK («Da iniziare»,
+        # «Sospeso», «Annullato»), con CHECK ck_sottotask_stato_pianificazione a
+        # livello DB. Filtrarlo suggerirebbe uno stato che il modello non ha.
+        # I «Sospeso» restano: sono in pausa ma ancora nel piano, come in
+        # `scostamento_stime_sottotask`.
+        pezzi_per_task = {}
+        if task_ids_all:
+            for st in (session.query(Sottotask)
+                       .filter(Sottotask.task_id.in_(task_ids_all),
+                               Sottotask.stato != "Annullato")
+                       .order_by(Sottotask.ordine, Sottotask.id)
+                       .all()):
+                pezzi_per_task.setdefault(st.task_id, []).append(st)
 
         # ── 3. Cache nomi dipendenti per evitare lookup ripetuti ──────
         dip_rows = session.query(Dipendente).all()
@@ -456,6 +535,11 @@ def gantt_strutturato(
                 for t in f.task:
                     if t.stato == "Eliminato":
                         continue
+                    # Il nodo del semaforo di QUESTO task, con dentro — sui soli
+                    # task scomposti — il sotto-dict {sottotask_id: nodo} che il
+                    # blocco più sotto appaia alle righe vere.
+                    nodo_task = semaforo_task.get(t.id) or {}
+                    semaforo_pezzi = nodo_task.get("sottotask", {})
                     ore_cons_t = ore_per_task.get(t.id, 0.0)
                     ore_consumate_fase += ore_cons_t
                     tasks_serial.append({
@@ -479,9 +563,9 @@ def gantt_strutturato(
                         # Semaforo strato 1: colore + provenienza. Su un task
                         # `origine` è "propria" o None finché i sottotask non
                         # esistono; con i pezzi diventa "figli"/"entrambe", e il
-                        # colore ne tiene conto anche se i pezzi non compaiono
-                        # in questo payload.
-                        "semaforo": _semaforo_payload(semaforo_task.get(t.id)),
+                        # colore ne tiene conto — i pezzi che lo hanno prodotto
+                        # sono annidati qui sotto, nella chiave `sottotask`.
+                        "semaforo": _semaforo_payload(nodo_task or None),
                         "data_inizio": t.data_inizio.isoformat() if t.data_inizio else None,
                         "data_fine": t.data_fine.isoformat() if t.data_fine else None,
                         "dipendente_id": t.dipendente_id or "",
@@ -503,6 +587,55 @@ def gantt_strutturato(
                             for d in (t.dipendenze_entranti or [])
                         ],
                     })
+
+                    # ── I SOTTOTASK (lavoro B) ────────────────────────
+                    # La chiave compare SOLO sui task scomposti: la sua assenza
+                    # è essa stessa l'informazione «questo task non ha pezzi»,
+                    # e il frontend distingue i due render da lì. È la
+                    # convenzione della casa (`task_settimana_dipendente`,
+                    # `scostamento_stime_sottotask`), e tiene il payload dei
+                    # task non scomposti — cioè tutti e 114 quelli in DB oggi —
+                    # IDENTICO a prima: nessun consumatore esistente vede
+                    # comparire un campo nuovo. Una lista vuota sempre presente
+                    # direbbe la stessa cosa in modo più rumoroso, e cambierebbe
+                    # il payload di ogni task del sistema per niente.
+                    # `tasks_serial[-1]` invece di costruire prima la lista: è
+                    # come lo fa `task_settimana_dipendente` (`out[-1][...]`),
+                    # ed evita di spezzare il dict literal qui sopra.
+                    pezzi = pezzi_per_task.get(t.id)
+                    if pezzi:
+                        tasks_serial[-1]["sottotask"] = [
+                            {
+                                "id": st.id,
+                                "nome": st.nome,
+                                "ordine": st.ordine,
+                                "stato": st.stato,
+                                "ore_stimate": st.ore_stimate,
+                                # RAW, e `None` non "" — al contrario del task
+                                # qui sopra, che usa `t.dipendente_id or ""`.
+                                # Non è un'incoerenza: su un sottotask il NULL È
+                                # informazione («nessun override, lo fa chi fa
+                                # il task»), mentre su un task "" vuol dire solo
+                                # «non assegnato». Appiattire il NULL sul nome
+                                # dell'assegnatario del task nasconderebbe quali
+                                # pezzi hanno un override esplicito — la stessa
+                                # scelta, con la stessa motivazione, di
+                                # `lista_sottotask_task` in routes/sottotask.py,
+                                # di cui questo payload riusa il vocabolario
+                                # invece di inventarne un secondo.
+                                "dipendente_id": st.dipendente_id,
+                                "dipendente_nome": nomi_dip.get(st.dipendente_id, ""),
+                                # Colore GIÀ CALCOLATO da `semaforo_progetti`,
+                                # non ricalcolato qui: l'aggregazione scende ai
+                                # sottotask per fare il peggio-dei-figli del
+                                # task, e fin qui il suo risultato veniva
+                                # scartato. Il pezzo eredita la finestra
+                                # temporale del padre (vedi sotto), quindi il
+                                # suo colore riflette la data DEL TASK.
+                                "semaforo": _semaforo_payload(semaforo_pezzi.get(st.id)),
+                            }
+                            for st in pezzi
+                        ]
 
                 ore_vendute_fase = float(f.ore_vendute or 0)
                 ore_vendute_proj += ore_vendute_fase
