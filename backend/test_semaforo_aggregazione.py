@@ -314,13 +314,18 @@ def test_fixture_sottotask_eredita_la_data_del_padre():
         assert nodo_r["origine"] == "entrambe", "rosso di suo E dai pezzi"
         assert nodo_r["figli_rossi"] == 2
 
-        # ── un pezzo Sospeso è chiuso: non tinge, e non conta fra i rossi
+        # ── un pezzo Sospeso è FERMO: grigio, non verde e non rosso.
+        # Il semaforo si astiene su ciò che è stato messo in pausa (01/09/2026,
+        # caso P006). Non conta fra i rossi, e non nasconde il fratello rosso.
         creati[2].stato = "Sospeso"   # pezzo C, sotto il padre rosso
         s.commit()
         alberi = semaforo_progetti([pid_r], oggi=OGGI)
         nodo_r = alberi[pid_r]["fasi"][fid_r]["task"][t_rosso.id]
-        assert nodo_r["sottotask"][creati[2].id]["semaforo"] == "verde"
+        assert nodo_r["sottotask"][creati[2].id]["semaforo"] == "grigio"
         assert nodo_r["figli_rossi"] == 1
+        # rosso > grigio: il pezzo fermo non attenua il pezzo in ritardo.
+        assert nodo_r["semaforo"] == "rosso"
+        assert nodo_r["origine"] == "entrambe"
 
         # ── i task NON scomposti non hanno la chiave `sottotask`
         altri = [t for t in alberi[pid_r]["fasi"][fid_r]["task"].items()
@@ -345,6 +350,79 @@ def test_fixture_sottotask_eredita_la_data_del_padre():
 # ══════════════════════════════════════════════════════════════════════
 # 6. NIENTE N+1
 # ══════════════════════════════════════════════════════════════════════
+
+def test_fixture_sospeso_in_aggregazione():
+    """4-bis. Un figlio SOSPESO (grigio) nel peggio-dei-figli.
+
+    Due proprietà, e sono opposte fra loro — è il senso di mettere il grigio in
+    mezzo all'ordinamento (rosso > grigio > verde):
+      - un task sospeso INGRIGISCE la fase se è il peggio: se una parte del
+        lavoro è ferma, la fase non può dire «tutto a posto»;
+      - ma NON nasconde un fratello rosso: un dubbio non copre una certezza.
+    In DB non ci sono task né fasi sospese (0 su 114, 0 su 71), quindi il caso
+    va costruito. Scrive su due task veri e ripristina i valori letti prima.
+    """
+    s = get_session()
+    fase = None
+    for f in s.query(Fase).all():
+        vivi = [t for t in f.task
+                if colore_unita(t.data_fine, t.stato, OGGI) == "verde"
+                and t.stato not in ("Completato", "Sospeso", "Annullato", "Eliminato")]
+        if colore_unita(f.data_fine, f.stato, OGGI) == "verde" and len(vivi) >= 2:
+            fase, t_sosp, t_rosso = f, vivi[0], vivi[1]
+            break
+    assert fase is not None, "nessuna fase verde con 2 task vivi verdi"
+
+    pid, fid = fase.progetto_id, fase.id
+    id_sosp, id_rosso = t_sosp.id, t_rosso.id
+    # Tre valori toccati, tre valori salvati — uno per riga, così il ripristino
+    # non può appaiare la colonna sbagliata.
+    orig_sosp_stato = t_sosp.stato
+    orig_sosp_fine = t_sosp.data_fine
+    orig_rosso_fine = t_rosso.data_fine
+
+    try:
+        # ── (a) un task sospeso → grigio, e la fase lo eredita
+        t_sosp.stato = "Sospeso"
+        s.commit()
+
+        albero = semaforo_progetti([pid], oggi=OGGI)
+        nodo_fase = albero[pid]["fasi"][fid]
+        assert nodo_fase["task"][id_sosp]["semaforo"] == "grigio"
+        assert nodo_fase["semaforo"] == "grigio", nodo_fase
+        assert nodo_fase["origine"] == "figli"
+        assert nodo_fase["figli_rossi"] == 0
+
+        # ── (b) un fratello ROSSO vince sul grigio-sospeso
+        t_rosso.data_fine = OGGI - timedelta(days=10)
+        s.commit()
+
+        albero = semaforo_progetti([pid], oggi=OGGI)
+        nodo_fase = albero[pid]["fasi"][fid]
+        assert nodo_fase["task"][id_sosp]["semaforo"] == "grigio"
+        assert nodo_fase["task"][id_rosso]["semaforo"] == "rosso"
+        assert nodo_fase["semaforo"] == "rosso", "il sospeso ha nascosto il rosso"
+        assert nodo_fase["figli_rossi"] == 1, "il sospeso non deve contare"
+
+        # ── (c) il sospeso resta grigio anche quando è LUI a essere scaduto
+        t_sosp.data_fine = OGGI - timedelta(days=200)
+        s.commit()
+        albero = semaforo_progetti([pid], oggi=OGGI)
+        assert albero[pid]["fasi"][fid]["task"][id_sosp]["semaforo"] == "grigio", (
+            "un sospeso scaduto NON è rosso — è il caso P006")
+
+        print(f"✅ 4-bis. sospeso in aggregazione su fase {fid} "
+              f"({id_sosp} sospeso, {id_rosso} rosso): ingrigisce, non nasconde")
+    finally:
+        t_sosp.stato = orig_sosp_stato
+        t_sosp.data_fine = orig_sosp_fine
+        t_rosso.data_fine = orig_rosso_fine
+        s.commit()
+        s.refresh(t_sosp); s.refresh(t_rosso)
+        assert (t_sosp.stato, t_sosp.data_fine) == (orig_sosp_stato, orig_sosp_fine)
+        assert t_rosso.data_fine == orig_rosso_fine
+        s.close()
+
 
 def test_niente_n_piu_uno():
     """6. Le query sono costanti: non crescono col numero di unità."""
@@ -378,6 +456,7 @@ if __name__ == "__main__":
     test_provenienza()
     test_progetto_verde_non_ha_origine()
     test_fixture_grigio()
+    test_fixture_sospeso_in_aggregazione()
     test_fixture_sottotask_eredita_la_data_del_padre()
     test_niente_n_piu_uno()
     test_guardia_input_vuoto()

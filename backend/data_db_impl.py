@@ -52,11 +52,21 @@ def _to_dt(d):
 #   - il giallo VERO (ore residue vs capacità residua): strato 2, vedi sotto.
 #   - qualunque accesso al database.
 
-# Gli stati in cui l'unità NON È PIÙ LAVORO VIVO, e per i quali una data_fine
-# passata non è un allarme aperto.
+# DUE INSIEMI, NON UNO. Fino al 01/09/2026 «Sospeso» stava insieme a
+# «Completato» in un unico set di stati-chiusi, e usciva VERDE. Non è la stessa
+# cosa, e la differenza si vede meglio dicendola col colore:
+#   FINITO   → verde:  il lavoro è andato a termine, non c'è rischio di ritardo.
+#   FERMO    → grigio: il semaforo SI ASTIENE. Un'unità sospesa non è «a posto»
+#                      (il verde lo direbbe) e non è un allarme su cui agire
+#                      (il rosso lo direbbe): è ferma per una decisione presa
+#                      apposta, e il giudizio sul ritardo non si applica.
+# Il caso che l'ha reso evidente è P006: progetto Sospeso con la data di fine
+# passata da cinque mesi. Il semaforo lo dava verde — «tutto bene» su qualcosa
+# che è fermo da marzo — mentre la criticità della tab Scenari lo segnalava in
+# ritardo. Non aveva ragione nessuno dei due: la risposta giusta è «non giudico».
 #
 # I QUATTRO LIVELLI PARLANO QUATTRO VOCABOLARI DIVERSI, e la fase è al
-# FEMMINILE — è la ragione per cui questo set è un'UNIONE e non una delle
+# FEMMINILE — è la ragione per cui entrambi i set sono UNIONI e non una delle
 # quattro liste di models.py:
 #   Task      (STATI_TASK)                      → Completato, Sospeso, Annullato
 #   Fase      (STATI_FASE)                      → Completata, Sospesa, Annullata
@@ -66,16 +76,14 @@ def _to_dt(d):
 #      nelle dichiarazioni, non sulla definizione condivisa del pezzo.)
 # Un set al solo maschile colorerebbe ROSSO ogni fase «Completata» chiusa in
 # ritardo — 25 fasi su 71 sono in quello stato oggi — e lo farebbe in silenzio.
-#
-# PERCHÉ QUESTI QUATTRO E NON ALTRI (il semaforo SCEGLIE i propri, non li
-# eredita):
+
+# ── FINITI → verde ────────────────────────────────────────────────────
+# Il semaforo SCEGLIE i propri stati, non li eredita:
 #   - Completato/Completata: il lavoro è finito. Che sia finito dopo la data
 #     prevista è un fatto STORICO, materia di consuntivo, non un rischio da
 #     presidiare. Un semaforo che resta rosso su ciò che è chiuso accumula
 #     rossi che nessuno può spegnere, e a quel punto smette di essere letto.
 #     Stessa scelta di `_in_ritardo` in `task_settimana_dipendente`.
-#   - Sospeso/Sospesa: è una DECISIONE del PM, non uno scivolamento. Sempre da
-#     `_in_ritardo`: «segnalarlo accuserebbe del contrario».
 #   - Annullato/Annullata: tolto dal piano. Non è lavoro in ritardo, non è
 #     lavoro. Qui il semaforo DIVERGE da `_in_ritardo`, che non lo esclude:
 #     quella closure gira su una query che ha già filtrato gli annullati a
@@ -88,12 +96,25 @@ def _to_dt(d):
 # "Bozza" (progetto) e "Da iniziare" NON sono qui: sono lavoro vivo che non è
 # ancora partito, e un lavoro non partito con la data di fine alle spalle è
 # esattamente il caso che il rosso deve gridare.
-STATI_CHIUSI_SEMAFORO = (
+STATI_FINITI_SEMAFORO = (
     "Completato", "Completata",
-    "Sospeso", "Sospesa",
     "Annullato", "Annullata",
     "Eliminato",
 )
+
+# ── FERMI → grigio ────────────────────────────────────────────────────
+# Sospeso/Sospesa: è una DECISIONE del PM, non uno scivolamento — e
+# `_in_ritardo` lo dice bene: «segnalarlo accuserebbe del contrario». Ma non
+# accusare non vuol dire assolvere: un lavoro fermo da mesi non è un lavoro che
+# va bene, è un lavoro su cui il semaforo non ha niente da dire finché qualcuno
+# non lo riprende in mano.
+# Non c'è un colore dedicato ai fermi: il grigio è UNO, e lo condividono con le
+# unità senza data. Le due ragioni («fermo» / «senza data») sono entrambe
+# «non calcolabile», e distinguerle è compito del tooltip lato frontend, che ha
+# lo `stato` sotto mano. Un quinto colore per una sfumatura che l'interfaccia
+# può già spiegare a parole costringerebbe ogni consumatore e l'ordinamento
+# dell'aggregazione a farci i conti.
+STATI_FERMI_SEMAFORO = ("Sospeso", "Sospesa")
 
 
 def colore_unita(data_fine, stato, oggi,
@@ -111,14 +132,14 @@ def colore_unita(data_fine, stato, oggi,
 
     L'ORDINE DI VALUTAZIONE È LA REGOLA, e non è riordinabile:
 
-      1. CHIUSA → "verde". Vedi `STATI_CHIUSI_SEMAFORO` sopra per quali stati e
+      1. FINITA → "verde". Vedi `STATI_FINITI_SEMAFORO` sopra per quali stati e
          perché. Viene PRIMA di tutto il resto — prima del rosso (è la ragione
          per cui un task completato in ritardo non è un allarme) e prima del
          grigio.
          PERCHÉ LA CHIUSURA BATTE IL GRIGIO (invertito nel sotto-edit 2
          dell'aggregazione, che ha reso il caso concreto). Le due domande sono
          in ordine, non in parità: «questo lavoro è ancora aperto?» viene prima
-         di «riesco a collocarlo nel calendario?». Di un'unità CHIUSA sappiamo
+         di «riesco a collocarlo nel calendario?». Di un'unità FINITA sappiamo
          già la risposta che conta — non è a rischio — e non ci serve alcuna
          data per saperlo: il calendario risponderebbe a una domanda che non si
          pone più. «Finito» è informazione più forte di «non calcolabile».
@@ -129,24 +150,38 @@ def colore_unita(data_fine, stato, oggi,
          restare il colore del dubbio VERO, altrimenti smette di segnalare
          qualcosa.
 
-      2. GRIGIO — `data_fine is None` su unità VIVA → "grigio". Senza data di
-         fine la famiglia A (calendario) non ha termine di confronto: non è «va
-         tutto bene», è «non lo so», e le due cose non vanno confuse. Precede
-         il rosso e il verde perché entrambi si leggono dalla data che manca.
+      2. FERMA → "grigio". `STATI_FERMI_SEMAFORO`: Sospeso/Sospesa.
+         DEVE STARE PRIMA DEL ROSSO, ed è tutto il punto di questo ramo: un
+         sospeso con la data passata NON è rosso. Se il controllo stesse dopo,
+         P006 — Sospeso, scaduto da cinque mesi — uscirebbe rosso, e il
+         semaforo accuserebbe di ritardo un lavoro che qualcuno ha fermato
+         apposta. Metterlo prima non è un dettaglio di ordinamento: è la
+         differenza fra «non giudico» e un'accusa.
+         Sta invece DOPO il verde solo per leggibilità — gli stati sono
+         mutuamente esclusivi (una stringa sola), quindi i due rami non possono
+         mai contendersi la stessa unità.
+
+      3. GRIGIO — `data_fine is None` su unità viva e non ferma → "grigio".
+         Senza data di fine la famiglia A (calendario) non ha termine di
+         confronto: non è «va tutto bene», è «non lo so», e le due cose non
+         vanno confuse. Precede il rosso e il verde perché entrambi si leggono
+         dalla data che manca.
          Oggi in DB i NULL sono ZERO (0 su 114 task, 0 su 71 fasi, 0 su 38
          progetti) e le colonne sono comunque `nullable=True` a tutti e tre i
          livelli: questo ramo è difesa di schema, non un caso osservato.
+         Stesso colore del ramo 2 — vedi `STATI_FERMI_SEMAFORO` per il perché il
+         grigio è uno solo e la distinzione la fa il tooltip.
 
-      3. ROSSO retrospettivo — `data_fine < oggi` su unità viva → "rosso".
+      4. ROSSO retrospettivo — `data_fine < oggi` su unità viva → "rosso".
          Il confronto è STRETTO: un'unità che scade OGGI non è in ritardo, la
          giornata non è finita. Non è solo semantica — `_in_ritardo` usa
          `data_fine < oggi`, e divergere di un `=` farebbe dissentire il badge
          di /me e il semaforo per l'esattezza di un giorno, sullo stesso task,
          senza che nessuno possa capire perché.
 
-      4. GIALLO — non emesso in strato 1. Vedi sotto.
+      5. GIALLO — non emesso in strato 1. Vedi sotto.
 
-      5. VERDE — tutto il resto: unità viva con la finestra ancora aperta.
+      6. VERDE — tutto il resto: unità viva con la finestra ancora aperta.
 
     IL GIALLO — perché è spento e come si accende
     ---------------------------------------------
@@ -176,26 +211,32 @@ def colore_unita(data_fine, stato, oggi,
     avrebbe nulla da dire nemmeno se fosse accesa.
 
     Nota su `stato`: si accetta la stringa grezza dell'entità, senza
-    normalizzarla. Uno stato sconosciuto o `None` non è chiuso, quindi ricade
-    nella valutazione per data — che è il comportamento prudente: davanti a uno
-    stato che non riconosciamo, la scadenza vale comunque.
+    normalizzarla. Uno stato sconosciuto o `None` non è né finito né fermo,
+    quindi ricade nella valutazione per data — che è il comportamento prudente:
+    davanti a uno stato che non riconosciamo, la scadenza vale comunque.
     """
-    # 1. CHIUSA — non è lavoro vivo, nessun allarme aperto. Precede tutto:
-    #    di ciò che è chiuso sappiamo già che non è a rischio, senza guardare
-    #    il calendario. «Finito» batte «non calcolabile».
-    if stato in STATI_CHIUSI_SEMAFORO:
+    # 1. FINITA — il lavoro è andato a termine (o è stato tolto dal piano):
+    #    nessun allarme aperto. Precede tutto: di ciò che è finito sappiamo già
+    #    che non è a rischio, senza guardare il calendario. «Finito» batte «non
+    #    calcolabile».
+    if stato in STATI_FINITI_SEMAFORO:
         return "verde"
 
-    # 2. GRIGIO — unità VIVA senza data: non calcolabile, e non è «va bene».
+    # 2. FERMA — sospesa per decisione: il semaforo si astiene. PRIMA del rosso,
+    #    ed è il punto: un sospeso scaduto non è in ritardo, è fermo (caso P006).
+    if stato in STATI_FERMI_SEMAFORO:
+        return "grigio"
+
+    # 3. GRIGIO — unità VIVA senza data: non calcolabile, e non è «va bene».
     if data_fine is None:
         return "grigio"
 
-    # 3. ROSSO retrospettivo — finestra chiusa su lavoro ancora vivo.
+    # 4. ROSSO retrospettivo — finestra chiusa su lavoro ancora vivo.
     #    `<` stretto: chi scade oggi non è (ancora) in ritardo.
     if data_fine < oggi:
         return "rosso"
 
-    # 4. GIALLO — STRATO 2, qui e non altrove.
+    # 5. GIALLO — STRATO 2, qui e non altrove.
     #    Entrerà in questo punto il confronto ORE RESIDUE vs CAPACITÀ RESIDUA,
     #    con la famiglia B (ritmo di consumo ore contro ritmo di avanzamento)
     #    come aggravante di un gradino. I tre parametri già in firma
@@ -203,7 +244,7 @@ def colore_unita(data_fine, stato, oggi,
     #    ingressi. In strato 1 non si emette giallo: sul tempo soltanto,
     #    ingiallirebbe ogni lavoro in corso, cioè quasi tutto il DB.
 
-    # 5. VERDE — viva, con la finestra ancora aperta.
+    # 6. VERDE — viva, non ferma, con la finestra ancora aperta.
     return "verde"
 
 
@@ -587,10 +628,14 @@ def semaforo_progetti(progetti_ids, oggi=None):
 
     STATI DEL SOTTOTASK: sono `STATI_PIANIFICAZIONE_SOTTOTASK` («Da iniziare»,
     «Sospeso», «Annullato») e NON includono «Completato» — la conclusione di un
-    pezzo vive nelle dichiarazioni, non sulla definizione condivisa. Sospeso e
-    Annullato stanno già in `STATI_CHIUSI_SEMAFORO`, quindi un pezzo tolto dal
-    piano non tinge il task. Un pezzo «Da iniziare» dentro un task scaduto è
-    rosso, e deve esserlo: è lavoro vivo con la finestra chiusa.
+    pezzo vive nelle dichiarazioni, non sulla definizione condivisa.
+    «Annullato» sta in `STATI_FINITI_SEMAFORO` → verde: un pezzo tolto dal piano
+    non tinge il task. «Sospeso» sta in `STATI_FERMI_SEMAFORO` → GRIGIO, e
+    siccome grigio > verde un pezzo sospeso dentro un task altrimenti verde
+    ingrigisce il task. È voluto e coerente con gli altri livelli: se una parte
+    del lavoro è ferma, il semaforo del task non può dire «tutto a posto».
+    Un pezzo «Da iniziare» dentro un task scaduto è invece rosso, e deve
+    esserlo: è lavoro vivo con la finestra chiusa.
 
     TASK «Eliminato» ESCLUSI, come in `gantt_strutturato` (soft delete, non
     devono comparire nel drill-down). Sarebbero comunque verdi — «Eliminato» è

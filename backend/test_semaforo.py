@@ -16,7 +16,7 @@ Stile e runner: `test_scenario_engine.py`.
 from datetime import date
 
 from data_db_impl import (
-    colore_unita, STATI_CHIUSI_SEMAFORO,
+    colore_unita, STATI_FINITI_SEMAFORO, STATI_FERMI_SEMAFORO,
     RANK_SEMAFORO, peggio_semaforo, _nodo_semaforo,
 )
 
@@ -37,13 +37,17 @@ def test_grigio_senza_data_fine():
     assert colore_unita(None, "Bloccato", OGGI) == "grigio"
 
     # LA CHIUSURA BATTE IL GRIGIO (ordine invertito nel sotto-edit 2). Di
-    # un'unità chiusa sappiamo già che non è a rischio, senza calendario:
+    # un'unità finita sappiamo già che non è a rischio, senza calendario:
     # chiamarla grigia direbbe «non so» di qualcosa che sappiamo, e in
     # aggregazione (grigio > verde) quel falso dubbio salirebbe al padre.
     assert colore_unita(None, "Completato", OGGI) == "verde"
     assert colore_unita(None, "Completata", OGGI) == "verde"
-    for stato in STATI_CHIUSI_SEMAFORO:
+    for stato in STATI_FINITI_SEMAFORO:
         assert colore_unita(None, stato, OGGI) == "verde", stato
+
+    # Un fermo senza data è grigio due volte: per lo stato e per la data.
+    for stato in STATI_FERMI_SEMAFORO:
+        assert colore_unita(None, stato, OGGI) == "grigio", stato
 
     print("✅ 1. grigio su unità viva senza data; chiusura batte grigio OK")
 
@@ -74,22 +78,51 @@ def test_completato_non_e_rosso():
     print("✅ 3. completato in ritardo → verde (non rosso) OK")
 
 
-def test_sospeso_annullato_non_sono_rossi():
-    """4. Sospeso/Annullato/Eliminato scaduti → verde, mai rosso.
+def test_annullato_eliminato_sono_verdi():
+    """4. Annullato/Eliminato scaduti → verde, mai rosso.
 
     Il femminile della fase è il caso che un set al solo maschile sbaglierebbe
     in silenzio: 25 fasi su 71 sono "Completata" e 0 "Completato".
     """
-    for stato in ("Sospeso", "Sospesa", "Annullato", "Annullata", "Eliminato"):
+    for stato in ("Annullato", "Annullata", "Eliminato"):
         assert colore_unita(IERI, stato, OGGI) == "verde", stato
 
-    # Il set è esattamente quello dichiarato: nessuno stato chiuso produce
+    # Il set è esattamente quello dichiarato: nessuno stato FINITO produce
     # rosso, qualunque sia la data.
-    for stato in STATI_CHIUSI_SEMAFORO:
+    for stato in STATI_FINITI_SEMAFORO:
         assert colore_unita(IERI, stato, OGGI) == "verde", stato
         assert colore_unita(DOMANI, stato, OGGI) == "verde", stato
 
-    print("✅ 4. sospeso/annullato/eliminato → verde (non rosso) OK")
+    # E i fermi non sono finiti: non devono essere finiti nel set sbagliato.
+    for stato in STATI_FERMI_SEMAFORO:
+        assert stato not in STATI_FINITI_SEMAFORO, stato
+
+    print("✅ 4. annullato/eliminato → verde (non rosso) OK")
+
+
+def test_sospeso_e_grigio_anche_se_scaduto():
+    """4-bis. Sospeso/Sospesa → GRIGIO, e resta grigio anche a data passata.
+
+    IL CASO P006 — progetto Sospeso con la data di fine passata da cinque mesi.
+    Fino al 01/09/2026 usciva VERDE («tutto a posto» su un lavoro fermo da
+    marzo), mentre la criticità della tab Scenari lo dava in ritardo. La
+    risposta giusta non era nessuna delle due: il semaforo si ASTIENE.
+    Il ramo dei fermi sta PRIMA di quello del rosso, ed è tutto il punto: se
+    stesse dopo, questo test fallirebbe con "rosso".
+    """
+    # data futura, oggi, passata, e molto passata: sempre grigio.
+    for quando in (DOMANI, OGGI, IERI, date(2026, 3, 31)):
+        for stato in ("Sospeso", "Sospesa"):
+            assert colore_unita(quando, stato, OGGI) == "grigio", (stato, quando)
+
+    # Il confronto che conta: stessa data, stato vivo → rosso; sospeso → grigio.
+    assert colore_unita(IERI, "In corso", OGGI) == "rosso"
+    assert colore_unita(IERI, "Sospeso", OGGI) == "grigio"
+
+    # Non è verde, e non è rosso: sono le due risposte che il grigio rifiuta.
+    assert colore_unita(IERI, "Sospeso", OGGI) not in ("verde", "rosso")
+
+    print("✅ 4-bis. sospeso → grigio, anche scaduto (caso P006) OK")
 
 
 def test_verde_futuro_il_giallo_e_spento():
@@ -261,7 +294,8 @@ if __name__ == "__main__":
     test_grigio_senza_data_fine()
     test_rosso_scaduto_e_vivo()
     test_completato_non_e_rosso()
-    test_sospeso_annullato_non_sono_rossi()
+    test_annullato_eliminato_sono_verdi()
+    test_sospeso_e_grigio_anche_se_scaduto()
     test_verde_futuro_il_giallo_e_spento()
     test_scadenza_oggi_non_e_ritardo()
     test_purezza()

@@ -328,7 +328,9 @@ def test_sottotask_annidati():
         assert vivo["semaforo"]["colore"] == "rosso", (
             "il pezzo vivo deve ereditare la finestra chiusa del padre")
         assert vivo["semaforo"]["origine"] == "propria"
-        assert sospeso["semaforo"]["colore"] == "verde", "un Sospeso è chiuso"
+        # Un Sospeso è FERMO, non finito: grigio (01/09/2026, caso P006).
+        assert sospeso["semaforo"]["colore"] == "grigio", "un Sospeso è fermo"
+        assert sospeso["semaforo"]["origine"] == "propria"
         assert sospeso["stato"] == "Sospeso"
         # il task rosso di suo E dai pezzi
         assert tr["semaforo"]["colore"] == "rosso"
