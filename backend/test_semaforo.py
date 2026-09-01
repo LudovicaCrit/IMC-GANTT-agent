@@ -25,20 +25,24 @@ DOMANI = date(2026, 9, 2)
 
 
 def test_grigio_senza_data_fine():
-    """1. data_fine None → grigio, e precede OGNI altra valutazione."""
+    """1. data_fine None su unità VIVA → grigio. Ma la chiusura viene prima."""
     assert colore_unita(None, "In corso", OGGI) == "grigio"
     assert colore_unita(None, "Da iniziare", OGGI) == "grigio"
 
-    # Precedenza sul rosso: nessuna data, nessun calendario, niente da dire.
+    # Precedenza sul rosso e sul verde: entrambi si leggono da una data che
+    # non c'è.
     assert colore_unita(None, "Bloccato", OGGI) == "grigio"
 
-    # Precedenza anche sulle CHIUSE — conseguenza dichiarata di «il grigio
-    # precede tutto», documentata nel docstring e da riguardare nel sotto-edit
-    # dell'aggregazione (dove grigio è ordinato sopra verde). Il test la fissa
-    # perché sia un comportamento scelto e non un incidente.
-    assert colore_unita(None, "Completato", OGGI) == "grigio"
+    # LA CHIUSURA BATTE IL GRIGIO (ordine invertito nel sotto-edit 2). Di
+    # un'unità chiusa sappiamo già che non è a rischio, senza calendario:
+    # chiamarla grigia direbbe «non so» di qualcosa che sappiamo, e in
+    # aggregazione (grigio > verde) quel falso dubbio salirebbe al padre.
+    assert colore_unita(None, "Completato", OGGI) == "verde"
+    assert colore_unita(None, "Completata", OGGI) == "verde"
+    for stato in STATI_CHIUSI_SEMAFORO:
+        assert colore_unita(None, stato, OGGI) == "verde", stato
 
-    print("✅ 1. grigio senza data_fine OK")
+    print("✅ 1. grigio su unità viva senza data; chiusura batte grigio OK")
 
 
 def test_rosso_scaduto_e_vivo():

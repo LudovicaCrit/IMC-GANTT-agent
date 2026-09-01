@@ -111,35 +111,31 @@ def colore_unita(data_fine, stato, oggi,
 
     L'ORDINE DI VALUTAZIONE È LA REGOLA, e non è riordinabile:
 
-      1. GRIGIO — `data_fine is None` → "grigio", PRIMA di ogni altra
-         valutazione. Senza data di fine la famiglia A (calendario) non ha
-         termine di confronto: non è «va tutto bene», è «non lo so», e le due
-         cose non vanno confuse. Oggi in DB i NULL sono ZERO (0 su 114 task,
-         0 su 71 fasi, 0 su 38 progetti) e le colonne sono comunque
-         `nullable=True` a tutti e tre i livelli: questo ramo è difesa di
-         schema, non un caso osservato.
-         CONSEGUENZA DA CONOSCERE: precedendo tutto, il grigio vince anche su
-         un'unità CHIUSA senza data_fine, che diventa grigia e non verde. È il
-         prezzo di «grigio precede ogni altra valutazione», e oggi costa zero
-         perché quei casi non esistono. Diventerà visibile con l'aggregazione,
-         dove il grigio è ordinato SOPRA il verde: una sola unità senza data
-         ingrigisce il padre. Da riguardare in quel sotto-edit, non qui.
+      1. CHIUSA → "verde". Vedi `STATI_CHIUSI_SEMAFORO` sopra per quali stati e
+         perché. Viene PRIMA di tutto il resto — prima del rosso (è la ragione
+         per cui un task completato in ritardo non è un allarme) e prima del
+         grigio.
+         PERCHÉ LA CHIUSURA BATTE IL GRIGIO (invertito nel sotto-edit 2
+         dell'aggregazione, che ha reso il caso concreto). Le due domande sono
+         in ordine, non in parità: «questo lavoro è ancora aperto?» viene prima
+         di «riesco a collocarlo nel calendario?». Di un'unità CHIUSA sappiamo
+         già la risposta che conta — non è a rischio — e non ci serve alcuna
+         data per saperlo: il calendario risponderebbe a una domanda che non si
+         pone più. «Finito» è informazione più forte di «non calcolabile».
+         Chiamare grigia una chiusura senza data sarebbe dire «non so» di
+         qualcosa che sappiamo, e in aggregazione (dove grigio > verde) quel
+         falso «non so» si propagherebbe verso l'alto: una singola fase
+         completata e priva di data ingrigirebbe il progetto. Il grigio deve
+         restare il colore del dubbio VERO, altrimenti smette di segnalare
+         qualcosa.
 
-      2. CHIUSA → "verde". Vedi `STATI_CHIUSI_SEMAFORO` sopra per quali stati e
-         perché. Viene PRIMA del rosso: è la ragione per cui un task completato
-         in ritardo non è un allarme.
-         PERCHÉ VERDE E NON UN QUINTO COLORE NEUTRO. La distinzione «finito»
-         contro «sospeso/annullato» è vera e conta — ma non serve un colore per
-         esprimerla: `gantt_strutturato` porta già `stato` su ogni livello, e il
-         frontend può distinguere i due casi senza che la palette cresca. Un
-         quinto valore invece costringerebbe ogni consumatore a gestirlo e
-         l'aggregazione a collocarlo nell'ordinamento — due decisioni nuove per
-         un'informazione già disponibile. La domanda a cui il semaforo risponde
-         è «quanto è a rischio-ritardo»: per tutte e quattro le chiusure la
-         risposta è la stessa, e il verde la dice esatta.
-         Il grigio NON è il posto giusto per le chiuse: significa «non
-         calcolabile», mentre di un'unità chiusa sappiamo benissimo che non è a
-         rischio. Sarebbe confondere «non so» con «so, ed è a posto».
+      2. GRIGIO — `data_fine is None` su unità VIVA → "grigio". Senza data di
+         fine la famiglia A (calendario) non ha termine di confronto: non è «va
+         tutto bene», è «non lo so», e le due cose non vanno confuse. Precede
+         il rosso e il verde perché entrambi si leggono dalla data che manca.
+         Oggi in DB i NULL sono ZERO (0 su 114 task, 0 su 71 fasi, 0 su 38
+         progetti) e le colonne sono comunque `nullable=True` a tutti e tre i
+         livelli: questo ramo è difesa di schema, non un caso osservato.
 
       3. ROSSO retrospettivo — `data_fine < oggi` su unità viva → "rosso".
          Il confronto è STRETTO: un'unità che scade OGGI non è in ritardo, la
@@ -184,13 +180,15 @@ def colore_unita(data_fine, stato, oggi,
     nella valutazione per data — che è il comportamento prudente: davanti a uno
     stato che non riconosciamo, la scadenza vale comunque.
     """
-    # 1. GRIGIO — non calcolabile. Precede tutto: senza data non c'è calendario.
-    if data_fine is None:
-        return "grigio"
-
-    # 2. CHIUSA — non è lavoro vivo, nessun allarme aperto. Prima del rosso.
+    # 1. CHIUSA — non è lavoro vivo, nessun allarme aperto. Precede tutto:
+    #    di ciò che è chiuso sappiamo già che non è a rischio, senza guardare
+    #    il calendario. «Finito» batte «non calcolabile».
     if stato in STATI_CHIUSI_SEMAFORO:
         return "verde"
+
+    # 2. GRIGIO — unità VIVA senza data: non calcolabile, e non è «va bene».
+    if data_fine is None:
+        return "grigio"
 
     # 3. ROSSO retrospettivo — finestra chiusa su lavoro ancora vivo.
     #    `<` stretto: chi scade oggi non è (ancora) in ritardo.
