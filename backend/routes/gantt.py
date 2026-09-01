@@ -140,6 +140,34 @@ from models import (
 # tipizzate, questa helper va sostituita dall'esposizione dell'intera lista
 # `dipendenze_entranti` (id + tipo_dipendenza). Vedi HANDOFF Gruppo A→B.
 # ─────────────────────────────────────────────────────────────────────────
+def _semaforo_payload(nodo):
+    """Nodo dell'albero di `semaforo_progetti` → sotto-oggetto del payload.
+
+    Traduce la chiave `semaforo` del nodo in `colore`: annidando il nodo così
+    com'è si otterrebbe `"semaforo": {"semaforo": "rosso", ...}`, che si legge
+    male e si sbaglia a scrivere. Scarta anche le chiavi STRUTTURALI del nodo
+    (`fasi`, `task`, `sottotask`): il payload ha già la propria gerarchia, e
+    duplicarla dentro ogni semaforo la raddoppierebbe.
+
+    `nodo` assente → None, come fa `scostamento_per_task.get(t.id)` per i task
+    senza niente da dire. NON un KeyError: `semaforo_progetti` cammina la
+    gerarchia per conto suo e applica gli stessi filtri di questo endpoint
+    (task «Eliminato» esclusi di là come di qua), quindi ogni unità serializzata
+    DEVE trovare il suo nodo — ma se un domani i due filtri divergessero,
+    perdere un colore su una riga è meno grave che restituire 500 sull'intero
+    drill-down di quattro pagine. Che la copertura sia totale non è affidato
+    alla speranza: c'è un test che verifica che nessuna unità del payload esca
+    con `semaforo: null`, e lì la divergenza sarebbe rumorosa.
+    """
+    if not nodo:
+        return None
+    return {
+        "colore": nodo["semaforo"],
+        "origine": nodo["origine"],
+        "figli_rossi": nodo["figli_rossi"],
+    }
+
+
 def _predecessore_principale(task: Task) -> str:
     """Id del predecessore principale del task (Strada 1, singolo).
 
@@ -151,7 +179,7 @@ def _predecessore_principale(task: Task) -> str:
     fs = [d for d in entranti if d.tipo_dipendenza == "FS"]
     scelta = fs[0] if fs else entranti[0]
     return scelta.task_predecessore_id or ""
-from data import get_dipendente, scostamento_stime_sottotask
+from data import get_dipendente, scostamento_stime_sottotask, semaforo_progetti
 from data_db_impl import _to_dt
 
 
@@ -268,17 +296,21 @@ def gantt_strutturato(
         "id": "P001", "nome": "...", "cliente": "...", "stato": "...",
         "data_inizio": "...", "data_fine": "...",
         "ore_vendute_totali": 240, "ore_consumate_totali": 130,
+        "semaforo": {"colore": "rosso", "origine": "figli", "figli_rossi": 1},
         "fasi": [
           {
             "id": 1, "nome": "Analisi", "ordine": 1, "stato": "In corso",
             "data_inizio": "...", "data_fine": "...",
             "ore_vendute": 80, "ore_consumate": 50,
+            "semaforo": {"colore": "rosso", "origine": "figli", "figli_rossi": 2},
             "tasks": [
               {
                 "id": "T001", "nome": "...", "stato": "...",
                 "ore_stimate": 40, "ore_consumate": 25,
                 "data_inizio": "...", "data_fine": "...",
                 "dipendente_id": "...", "dipendente_nome": "...",
+                "semaforo": {"colore": "rosso", "origine": "propria",
+                             "figli_rossi": 0},
                 "predecessore": ""
               }, ...
             ]
@@ -288,12 +320,47 @@ def gantt_strutturato(
     ]
 
     Design:
-    - L'endpoint è "stupido": restituisce dati raw. Il frontend calcola
-      progress %, colori, default aperture (handoff §2.3 "fasi In corso
-      aperte" è scelta UI, non backend).
+    - L'endpoint restituisce dati RAW più due GIUDIZI CALCOLATI nello strato
+      dati: `scostamento` (Step 2.3) e `semaforo` (semaforo ritardabilità,
+      strato 1). Fino al 30/07/2026 questa riga diceva «l'endpoint è stupido,
+      il frontend calcola progress %, colori e default aperture»: `scostamento`
+      l'aveva già incrinata, il semaforo la rende falsa, e vale la pena dire
+      perché invece di lasciarla lì.
+      Il semaforo NON può stare nel frontend. Serve la GERARCHIA per aggregare
+      il peggio-dei-figli lungo sottotask → task → fase → progetto, e in strato
+      2 servirà la STORIA delle percentuali dichiarate — cioè query, non dati
+      che il payload contiene. Calcolarlo di là significherebbe o mandare al
+      client tutto quello che serve al calcolo, o riscriverlo in JavaScript e
+      farlo divergere da quello del backend alla prima modifica.
+      Resta invece vero, e non è cambiato, che il frontend decide la RESA:
+      quali colori disegnare, quali fasi aprire per default (handoff §2.3
+      «fasi In corso aperte» è scelta UI), come graduare un rosso proprio da un
+      rosso ereditato. Il backend dice il GIUDIZIO, il frontend come si vede.
     - Performance: joinedload per evitare N+1 query su fasi e task.
     - Aggregazioni ore: una query sum() sui consuntivi per evitare
       iterazioni Python.
+    - Semaforo: UNA chiamata batch per tutti i progetti in scope (2 query),
+      non una per unità. Stesso pattern di `scostamento`.
+
+    IL CAMPO `semaforo` (a progetto, fase e task):
+        "semaforo": {"colore": "rosso"|"giallo"|"grigio"|"verde",
+                     "origine": "propria"|"figli"|"entrambe"|null,
+                     "figli_rossi": int}
+    Sotto-oggetto e non tre campi piatti, per la stessa ragione di
+    `scostamento`: è UN fatto con più facce, e in strato 2 gli si affiancheranno
+    altre (le ore residue, il motivo del giallo) senza allargare di nuovo lo
+    spazio dei nomi al primo livello.
+    `origine` dice DA DOVE viene il colore — dal calendario di questo livello
+    ("propria"), da un figlio ("figli"), o da entrambi. È ciò che permette al
+    frontend di graduare la resa senza che il backend inventi soglie: un
+    progetto rosso con 60 giorni di margine e un task scaduto dentro è
+    "figli", e va disegnato diversamente da uno rosso di suo.
+    `figli_rossi` conta i figli DIRETTI rossi (le fasi per il progetto, i task
+    per la fase): risponde a «dove clicco adesso».
+    I SOTTOTASK NON SONO IN QUESTO PAYLOAD e il loro colore non compare qui:
+    arriverà su GET /api/sottotask/{task_id}. `semaforo_progetti` lo calcola
+    comunque (il task lo eredita dai pezzi), quindi il colore di un task
+    scomposto tiene già conto di loro anche se i pezzi non si vedono.
     """
     session = get_session()
     try:
@@ -344,6 +411,23 @@ def gantt_strutturato(
         # sessione della route) romperebbe la firma di tutto lo strato dati.
         scostamento_per_task = scostamento_stime_sottotask(task_ids_all)
 
+        # ── 2-ter. Semaforo ritardabilità, in UNA chiamata ────────────
+        # Semaforo strato 1. Stessa forma dell'innesto qui sopra: un solo
+        # calcolo batch per TUTTI i progetti in scope, poi lookup per riga nel
+        # loop. Sono 2 query fisse (gerarchia + sottotask) indipendenti dal
+        # numero di unità — su ~110 task una chiamata per unità sarebbe un N+1.
+        # La funzione cammina la gerarchia PER CONTO SUO invece di ricevere
+        # quella già caricata qui: è il contratto dello strato dati (apre e
+        # chiude la propria sessione, come tutte le sue sorelle), e il costo è
+        # una seconda lettura degli stessi id — accettato, lo stesso che fa
+        # `criticita_sforamento_progetti`. L'alternativa, passarle la sessione
+        # e gli oggetti ORM di questa route, legherebbe il calcolo al suo unico
+        # chiamante proprio mentre stiamo per darne un secondo
+        # (GET /api/sottotask/{task_id}).
+        # `oggi` non si passa: lo strato dati legge `date.today()` una volta
+        # sola e lo usa per tutto l'albero.
+        semaforo_per_progetto = semaforo_progetti([p.id for p in progetti])
+
         # ── 3. Cache nomi dipendenti per evitare lookup ripetuti ──────
         dip_rows = session.query(Dipendente).all()
         nomi_dip = {d.id: d.nome for d in dip_rows}
@@ -357,7 +441,14 @@ def gantt_strutturato(
             ore_vendute_proj = 0.0
             ore_consumate_proj = 0.0
 
+            # Il sotto-albero del semaforo di QUESTO progetto. `or {}` così i
+            # tre `.get()` più sotto restano leciti anche se il progetto non
+            # comparisse: vedi `_semaforo_payload` per il perché non si alza.
+            albero_semaforo = semaforo_per_progetto.get(p.id) or {}
+            semaforo_fasi = albero_semaforo.get("fasi", {})
+
             for f in sorted(p.fasi, key=lambda x: x.ordine or 0):
+                semaforo_task = semaforo_fasi.get(f.id, {}).get("task", {})
                 tasks_serial = []
                 ore_consumate_fase = 0.0
                 # Filtra task "Eliminato" (soft delete, Step 2.4-bis fix):
@@ -385,6 +476,12 @@ def gantt_strutturato(
                         # "endpoint stupido, il frontend decide la resa".
                         # Stessa forma di GET /api/sottotask/{task_id}.
                         "scostamento": scostamento_per_task.get(t.id),
+                        # Semaforo strato 1: colore + provenienza. Su un task
+                        # `origine` è "propria" o None finché i sottotask non
+                        # esistono; con i pezzi diventa "figli"/"entrambe", e il
+                        # colore ne tiene conto anche se i pezzi non compaiono
+                        # in questo payload.
+                        "semaforo": _semaforo_payload(semaforo_task.get(t.id)),
                         "data_inizio": t.data_inizio.isoformat() if t.data_inizio else None,
                         "data_fine": t.data_fine.isoformat() if t.data_fine else None,
                         "dipendente_id": t.dipendente_id or "",
@@ -421,6 +518,9 @@ def gantt_strutturato(
                     "ore_vendute": ore_vendute_fase,
                     "ore_pianificate": float(f.ore_pianificate or 0),
                     "ore_consumate": round(ore_consumate_fase, 1),
+                    # Semaforo di fase: il peggio fra il proprio calendario e i
+                    # task. `figli_rossi` = quanti task rossi ha dentro.
+                    "semaforo": _semaforo_payload(semaforo_fasi.get(f.id)),
                     "n_task": len(tasks_serial),
                     "tasks": tasks_serial,
                 })
@@ -438,6 +538,10 @@ def gantt_strutturato(
                 "pm_id": p.pm_id,
                 "ore_vendute_totali": ore_vendute_proj,
                 "ore_consumate_totali": round(ore_consumate_proj, 1),
+                # Semaforo di progetto: il peggio fra il proprio calendario e
+                # le fasi. `figli_rossi` = quante FASI rosse (non quanti task:
+                # i diretti, vedi `_nodo_semaforo`).
+                "semaforo": _semaforo_payload(albero_semaforo or None),
                 "n_fasi": len(fasi_serial),
                 "fasi": fasi_serial,
             })
