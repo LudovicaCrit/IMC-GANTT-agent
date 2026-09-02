@@ -38,6 +38,7 @@ import React, { useState, useEffect } from 'react'
 import { STATI_FASE, STATI_TASK } from './_costanti'
 import StatoBadge from '../_shared/StatoBadge'
 import PastigliaSemaforo from '../_shared/PastigliaSemaforo'
+import SottotaskManager from './SottotaskManager'
 import { FormInput, FormInputDate, FormSelect } from '../_shared/Form'
 import { fetchSaturazionePeriodo } from '../../api'
 import { giorniLavorativi} from '../../utils/festivita'
@@ -179,6 +180,15 @@ export default function SezioneFasiTask({
 // ═════════════════════════════════════════════════════════════════════════
 
 function FaseEditabile({ fase, dipendenti, tutteLeTaskDelProgetto, espansa, onToggle, onAggiorna, onElimina, onAggiungiTask, onEditTask, onEliminaTask, readonly = false }) {
+  // Quali task hanno il pannello di scomposizione aperto. Un Set e non un
+  // singolo id: aprire un pezzo non deve chiudere quello che stavi guardando.
+  // Ogni pannello si carica i propri dati, quindi più aperti non si disturbano.
+  const [scomposizioniAperte, setScomposizioniAperte] = useState(() => new Set())
+  const toggleScomposizione = (taskId) => setScomposizioniAperte((prev) => {
+    const next = new Set(prev)
+    next.has(taskId) ? next.delete(taskId) : next.add(taskId)
+    return next
+  })
   const [editingStato, setEditingStato] = useState(false)
   const [statoLocal, setStatoLocal] = useState(fase.stato)
   const [modaleCascata, setModaleCascata] = useState(null) // statoNuovo da confermare
@@ -281,8 +291,11 @@ function FaseEditabile({ fase, dipendenti, tutteLeTaskDelProgetto, espansa, onTo
               <tbody>
                 {fase.tasks.map(t => {
                   const sfora = t.ore_stimate > 0 && t.ore_consumate > t.ore_stimate
+                  const nPezzi = (t.sottotask ?? []).length
+                  const scomposizioneAperta = scomposizioniAperte.has(t.id)
                   return (
-                    <tr key={t.id} className="border-t border-gray-800/40 hover:bg-gray-800/30">
+                    <React.Fragment key={t.id}>
+                    <tr className="border-t border-gray-800/40 hover:bg-gray-800/30">
                       <td className="py-1.5 pr-2">
                         <div>{t.nome}</div>
                         {t.predecessore && (
@@ -309,7 +322,24 @@ function FaseEditabile({ fase, dipendenti, tutteLeTaskDelProgetto, espansa, onTo
                         </span>
                       </td>
                       {!readonly && (
-                        <td className="py-1.5 text-right">
+                        <td className="py-1.5 text-right whitespace-nowrap">
+                          {/* Scomponi in sottotask — prima di ✏ perché è
+                              l'azione che APRE qualcosa, non che sostituisce
+                              la riga. Il contatore viene dal payload del
+                              Cantiere (gantt_strutturato annida i pezzi): è
+                              fermo all'ultimo caricamento della pagina, mentre
+                              il pannello aperto mostra sempre la verità. */}
+                          <button onClick={() => toggleScomposizione(t.id)}
+                            title={nPezzi > 0
+                              ? `Scomposto in ${nPezzi} ${nPezzi === 1 ? 'sottotask' : 'sottotask'}`
+                              : 'Scomponi questo task in sottotask'}
+                            className={`text-xs mr-2 transition-colors ${
+                              scomposizioneAperta || nPezzi > 0
+                                ? 'text-amber-300 hover:text-amber-200'
+                                : 'text-gray-500 hover:text-gray-300'
+                            }`}>
+                            ⑂{nPezzi > 0 && <span className="ml-0.5 text-[10px]">{nPezzi}</span>}
+                          </button>
                           <button onClick={() => onEditTask(t)} title="Modifica task"
                             className="text-xs text-blue-400 hover:text-blue-300 mr-2">✏</button>
                           <button onClick={() => onEliminaTask(t)} title="Elimina task"
@@ -317,6 +347,20 @@ function FaseEditabile({ fase, dipendenti, tutteLeTaskDelProgetto, espansa, onTo
                         </td>
                       )}
                     </tr>
+
+                    {/* Pannello di scomposizione, in-riga sotto il task —
+                        stessa forma dei pezzi in Consuntivazione (colSpan +
+                        bordo a sinistra). */}
+                    {!readonly && scomposizioneAperta && (
+                      <tr className="border-t border-gray-800/30">
+                        <td colSpan={6} className="px-2 pb-2 pt-0 bg-gray-950/40">
+                          <div className="pl-4 border-l-2 border-amber-800/40">
+                            <SottotaskManager taskId={t.id} />
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                    </React.Fragment>
                   )
                 })}
               </tbody>

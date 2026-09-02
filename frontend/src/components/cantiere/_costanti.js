@@ -37,6 +37,18 @@ export const STATI_PROGETTO = ['Bozza', 'Da iniziare', 'In esecuzione', 'Sospeso
 // data_inizio <= oggi (Blocco 3).
 export const STATI_PROGETTO_ATTIVI = ['In esecuzione', 'Sospeso']
 
+// Stati di PIANIFICAZIONE del sottotask — quelli che il PM governa sulla
+// DEFINIZIONE del pezzo dal Cantiere. CHECK a livello DB:
+// ck_sottotask_stato_pianificazione (migration a3b4c5d6e7f8).
+//
+// NON sono i tre dichiarabili (In corso / Completato / Bloccato): quelli sono
+// l'asse del DIPENDENTE e vivono sulle sue dichiarazioni settimanali, non sulla
+// definizione condivisa del pezzo. «In corso» su una definizione non
+// significherebbe nulla: in corso per chi? Il backend rifiuta i dichiarabili con
+// un 400 che rimanda alla Consuntivazione — il selettore del Cantiere offre solo
+// questi tre, così quell'errore non si incontra.
+export const STATI_PIANIFICAZIONE_SOTTOTASK = ['Da iniziare', 'Sospeso', 'Annullato']
+
 export const COLORI_STATO = {
   // ── Fase ──────────────────────────────────────────────────────────
   'Da iniziare': 'bg-gray-700 text-gray-300',
