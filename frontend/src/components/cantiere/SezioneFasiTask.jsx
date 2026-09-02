@@ -37,6 +37,7 @@
 import React, { useState, useEffect } from 'react'
 import { STATI_FASE, STATI_TASK } from './_costanti'
 import StatoBadge from '../_shared/StatoBadge'
+import PastigliaSemaforo from '../_shared/PastigliaSemaforo'
 import { FormInput, FormInputDate, FormSelect } from '../_shared/Form'
 import { fetchSaturazionePeriodo } from '../../api'
 import { giorniLavorativi} from '../../utils/festivita'
@@ -237,6 +238,15 @@ function FaseEditabile({ fase, dipendenti, tutteLeTaskDelProgetto, espansa, onTo
           </button>
         )}
 
+        {/* Semaforo di fase: il peggio fra il proprio calendario e i suoi task.
+            Fuori dal ternario dello stato perché non dipende dalla modalità di
+            modifica — si vede identico in readonly e in editing. */}
+        <PastigliaSemaforo
+          semaforo={fase.semaforo}
+          stato={fase.stato}
+          livello="fase"
+        />
+
         <div className="ml-auto flex items-center gap-3 text-xs">
           <span>
             <span className={sforamento ? 'text-red-400 font-medium' : 'text-gray-300'}>
@@ -288,7 +298,16 @@ function FaseEditabile({ fase, dipendenti, tutteLeTaskDelProgetto, espansa, onTo
                         <span className="text-gray-600"> / {t.ore_stimate}h</span>
                       </td>
                       <td className="py-1.5 pr-2 text-xs text-gray-500">{t.data_inizio || '?'} → {t.data_fine || '?'}</td>
-                      <td className="py-1.5 pr-2"><StatoBadge stato={t.stato} /></td>
+                      <td className="py-1.5 pr-2">
+                        <span className="inline-flex items-center gap-1.5">
+                          <StatoBadge stato={t.stato} />
+                          <PastigliaSemaforo
+                            semaforo={t.semaforo}
+                            stato={t.stato}
+                            livello="task"
+                          />
+                        </span>
+                      </td>
                       {!readonly && (
                         <td className="py-1.5 text-right">
                           <button onClick={() => onEditTask(t)} title="Modifica task"

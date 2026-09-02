@@ -23,6 +23,7 @@
 
 import React from 'react'
 import StatoBadge from '../_shared/StatoBadge'
+import PastigliaSemaforo from '../_shared/PastigliaSemaforo'
 
 export default function BannerStato({ progetto, onAvvia, onCambiaStato, readonly = false }) {
   if (progetto.stato === 'Bozza') {
@@ -64,6 +65,13 @@ export default function BannerStato({ progetto, onAvvia, onCambiaStato, readonly
       <div className="flex items-center gap-3 flex-wrap">
         <span className="text-sm text-gray-400">Stato:</span>
         <StatoBadge stato={progetto.stato} />
+        {/* Semaforo ritardabilità — asse diverso dallo stato: quello è ciò che
+            qualcuno ha dichiarato, questo è il rischio-ritardo calcolato. */}
+        <PastigliaSemaforo
+          semaforo={progetto.semaforo}
+          stato={progetto.stato}
+          livello="progetto"
+        />
         {divergenza && (
           <span className="text-xs text-yellow-400" title="Stato calcolato dalle fasi">
             ⚠ derivato: <strong>{progetto.stato_derivato}</strong>
