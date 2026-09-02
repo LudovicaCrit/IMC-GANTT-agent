@@ -661,6 +661,16 @@ class Consuntivo(Base):
     # sovrascrittura e senza autore; questo è cosa disse quel dipendente in
     # quella settimana, e resta. Vedi migration e1f2a3b4c5d6.
     stato_dichiarato = Column(String(20), nullable=True)
+    # presa_visione: «l'ho guardato, è ancora fermo, non è avanzato» (nodo F-2,
+    #   02/09/2026). È una TRACCIA SENZA AVANZAMENTO: fa contare l'unità come
+    #   dichiarata senza costringere chi compila a inventare un progresso.
+    #   NON è `compilato`, che dice «questa riga è stata salvata» e vale True
+    #   anche per la riga-padre di un task scomposto (derivazione a 0 ore) o per
+    #   un pezzo a cui è stata cancellata la nota. Le due devono poter
+    #   convivere: si prende visione e poi si scrive anche una nota.
+    #   Vedi migration e7f8a9b0c1d2.
+    presa_visione = Column(Boolean, nullable=False, default=False,
+                           server_default="false")
     created_at = Column(DateTime, default=datetime.utcnow)
 
     __table_args__ = (
@@ -693,6 +703,13 @@ class ConsuntivoSottotask(Base):
     # stato_dichiarato: sottoinsieme STATI_DICHIARABILI, stessa semantica di
     # Consuntivo.stato_dichiarato. NULL = «non si è espresso sullo stato».
     stato_dichiarato = Column(String(20), nullable=True)
+    # presa_visione: gemella esatta di Consuntivo.presa_visione — «l'ho
+    #   guardato, è ancora fermo». Sta su ENTRAMBE le tabelle perché ogni
+    #   colonna della dichiarazione esiste su entrambe: metterla solo qui (o
+    #   solo di là) rifarebbe l'asimmetria task/sottotask che la migration
+    #   d6e7f8a9b0c1 è servita a togliere. Vedi migration e7f8a9b0c1d2.
+    presa_visione = Column(Boolean, nullable=False, default=False,
+                           server_default="false")
     # percentuale: avanzamento 0-100 dichiarato sullo slider. Integer perché lo
     # slider è a passi interi: un Float introdurrebbe una precisione decimale
     # che nessuno intende su una stima soggettiva.
