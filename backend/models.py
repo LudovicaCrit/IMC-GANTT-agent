@@ -6,8 +6,16 @@ Gerarchia: Progetto → Fase → Task/Deliverable
 Configurazione: Ruolo, Competenza, FaseStandard
 Autenticazione: Utente con JWT (user/manager)
 
-Funziona con SQLite (sviluppo) e PostgreSQL (produzione).
-Cambiare solo DATABASE_URL per switchare.
+RICHIEDE POSTGRES. Non è una preferenza di deploy: il modello usa tipi che
+esistono solo lì. `SalSnapshot.stato` e `BollettinoEconomico.stato` sono
+`JSONB` (dialects.postgresql), che su SQLite non compila nemmeno — l'import di
+questo modulo fallirebbe prima di arrivare a una query.
+
+Fino al 06/05/2026 il prototipo girava su SQLite e questa intestazione diceva
+«funziona con SQLite (sviluppo) e PostgreSQL (produzione)». Dopo la migrazione
+è rimasta lì a dire una cosa non più vera, insieme a un default
+`sqlite:///imcgroup.db` che puntava a un file che non sarebbe più nato. Via
+entrambi il 02/09/2026: vedi `DATABASE_URL` sotto.
 """
 
 import os
@@ -23,7 +31,35 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 
 # ── Configurazione ──
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///imcgroup.db")
+# NESSUN DEFAULT, e l'assenza è un errore che si dichiara subito.
+#
+# Il default di prima — `sqlite:///imcgroup.db` — trasformava una configurazione
+# mancante in un guasto travestito: SQLAlchemy creava volentieri l'engine, il
+# file nasceva vuoto nella working directory, e l'errore arrivava molto più
+# tardi sotto forma di tabella inesistente o di JSONB non supportato. Cioè un
+# problema di `.env` si presentava come un bug applicativo, in un punto lontano
+# da dove era stato commesso.
+#
+# Non si mette nemmeno un default Postgres «sensato» (host locale, nome db
+# indovinato): mascherebbe la stessa configurazione mancante un livello più in
+# là, e su un altro host fallirebbe con «connection refused» — un messaggio che
+# accusa il database invece della variabile che nessuno ha impostato.
+#
+# È la stessa disciplina di `data.py`, che dal 07/08/2026 verifica Postgres
+# all'import e distingue i tre guasti (irraggiungibile / senza schema / vuoto)
+# con tre messaggi diversi: là si accerta che il database RISPONDA, qui che
+# qualcuno abbia detto DOVE cercarlo. Questo controllo viene prima ed è il
+# gradino mancante — `data.py` non poteva dare un messaggio utile su una URL
+# inventata da noi.
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    raise RuntimeError(
+        "DATABASE_URL non impostata: l'applicazione richiede PostgreSQL.\n"
+        "Crea backend/.env con la riga:\n"
+        "    DATABASE_URL=postgresql://utente:password@localhost:5432/gantt_db\n"
+        "(SQLite non è più supportato dal 06/05/2026: il modello usa colonne "
+        "JSONB, che esistono solo su Postgres.)"
+    )
 
 engine = create_engine(DATABASE_URL, echo=False)
 SessionLocal = sessionmaker(bind=engine)
