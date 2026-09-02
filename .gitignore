@@ -38,3 +38,4 @@ backup_*.sql
 *.bak
 backend/cookies.txt
 auth_gantt.zip
+console.md
