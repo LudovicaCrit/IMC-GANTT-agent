@@ -281,6 +281,89 @@ export async function deleteTask(taskId) {
 }
 
 // ═════════════════════════════════════════════════════════════════════════
+//  SOTTOTASK — CRUD (Step 2 sottotask, backend del 30/07/2026)
+// ═════════════════════════════════════════════════════════════════════════
+//  I pezzi in cui il PM scompone un task dal Cantiere. Il backend è completo
+//  dal 30/07/2026 ma non era mai stato chiamato da nessuna parte: è la ragione
+//  per cui in DB non esiste un solo sottotask, e con esso tutto il motore che
+//  ci gira sopra (avanzamento per pezzi, semaforo di livello sottotask,
+//  presa-visione) è invisibile. Queste cinque funzioni sono il ponte mancante.
+//
+//  ERRORI: nessuna li ingoia. `apiFetch` alza già su 4xx estraendo `detail`
+//  dal body, e i tre casi che il Cantiere deve saper rendere — 404 padre
+//  inesistente, 400 stato non ammesso, 409 pezzo con dichiarazioni — arrivano
+//  al chiamante come `Error` col messaggio del backend.
+
+export async function listaSottotask(taskId) {
+  // → { task: { task_id, nome, ore_pianificate, scostamento }, sottotask: [...] }
+  // `scostamento` è {somma_stime_sottotask, ore_pianificate_task, differenza}
+  // oppure null quando non c'è niente da segnalare. `differenza` = piano −
+  // somma: POSITIVA = piano non ancora coperto dai pezzi, NEGATIVA = i pezzi
+  // sforano (stessa convenzione di ore_rimanenti in routes/fasi.py).
+  // Ogni pezzo porta `n_dichiarazioni`: > 0 ⇒ non eliminabile, vedi sotto.
+  return apiFetch(`${API_BASE}/sottotask/${taskId}`);
+}
+
+export async function creaSottotask(data) {
+  // Body: { task_id, nome, ore_stimate?, ordine? }
+  // `ordine` omesso → il backend usa max(ordine)+1, partendo da 1.
+  // `stato` NON si manda: nasce sempre "Da iniziare" server-side.
+  // `dipendente_id` NON si manda in questo giro: il pezzo eredita
+  // l'assegnatario del task (NULL = eredità). Valorizzarlo con la stessa
+  // persona del task creerebbe un override finto che sopravvive a una
+  // riassegnazione — e un pezzo con override su un altro dipendente oggi non
+  // comparirebbe nella SUA Consuntivazione, perché /me parte dai task della
+  // persona e non dai pezzi.
+  return apiFetch(`${API_BASE}/sottotask`, { method: 'POST', body: data });
+}
+
+export async function modificaSottotask(sottotaskId, dati) {
+  // Body: campi parziali { nome?, ore_stimate?, ordine?, stato? }.
+  // `stato` ammette solo i tre di PIANIFICAZIONE (Da iniziare / Sospeso /
+  // Annullato) — non i tre dichiarabili, che sono l'asse del dipendente. La
+  // validazione è del backend, che risponde 400 con un messaggio che rimanda
+  // alla Consuntivazione: qui si passa quello che si riceve.
+  return apiFetch(`${API_BASE}/sottotask/${sottotaskId}`, {
+    method: 'PATCH',
+    body: dati,
+  });
+}
+
+export async function riordinaSottotask(taskId, ordini) {
+  // Body: { sottotask: [{ sottotask_id, ordine }, ...] } → { riordinati: N }
+  // BATCH e "replace": si manda lo STATO FINALE delle righe da cambiare, non
+  // una sequenza di spostamenti — il risultato non dipende dall'ordine di
+  // applicazione. Non serve elencare tutti i pezzi del task: quelli non citati
+  // restano dove sono, quindi uno scambio con le frecce è una sola chiamata
+  // con due righe.
+  return apiFetch(`${API_BASE}/sottotask/${taskId}/riordina`, {
+    method: 'PUT',
+    body: { sottotask: ordini },
+  });
+}
+
+export async function eliminaSottotask(sottotaskId) {
+  // 204 se il pezzo non ha dichiarazioni; 409 con il CONTEGGIO se ne ha —
+  // quel lavoro è successo e la storia serve, quindi il backend propone
+  // "Annullato" (toglie dal piano conservando il dato) invece di negare e
+  // basta. Il 409 arriva qui come Error col messaggio del backend, e il
+  // Cantiere lo rende: `n_dichiarazioni` nella lista permette di prevenirlo
+  // disabilitando il cestino prima ancora di provare.
+  //
+  // `rawResponse` NON è un vezzo: su 204 il body è vuoto e il `res.json()`
+  // finale di apiFetch alzerebbe `SyntaxError: Unexpected end of JSON input`
+  // — cioè un DELETE riuscito verrebbe riportato come errore. (Verificato: è
+  // ciò che accade oggi a `deleteFase` e `deleteProgetto`, che sono gli altri
+  // due 204 del progetto. Difetto preesistente, non toccato qui.)
+  // Il controllo sugli errori resta intatto: apiFetch alza su 4xx PRIMA di
+  // arrivare al ramo rawResponse, quindi il 409 continua a propagarsi.
+  await apiFetch(`${API_BASE}/sottotask/${sottotaskId}`, {
+    method: 'DELETE',
+    rawResponse: true,
+  });
+}
+
+// ═════════════════════════════════════════════════════════════════════════
 //  RISORSE — saturazione (Step 2.4-bis §14.4)
 // ═════════════════════════════════════════════════════════════════════════
 
