@@ -2724,7 +2724,8 @@ def salva_consuntivo(dipendente_id, settimana, ore_per_task, stati_per_task,
                      spese_lista=None, note_per_task=None,
                      avanzamenti_sottotask=None, ore_effettive_sottotask=None,
                      bloccati_sottotask=None, note_sottotask=None,
-                     percentuale_per_task=None, ore_effettive_per_task=None):
+                     percentuale_per_task=None, ore_effettive_per_task=None,
+                     viste_task=None, viste_sottotask=None):
     """
     Salva il consuntivo settimanale completo di un dipendente.
 
@@ -2772,6 +2773,33 @@ def salva_consuntivo(dipendente_id, settimana, ore_per_task, stati_per_task,
     invece di aggiornare quella esistente. In lettura le due righe cadono
     entrambe nel range lun..dom e si sommano: 6h corrette in 8h diventavano
     14h. Stesso meccanismo su PresenzaSettimanale (UNIQUE dip+settimana).
+
+    PRESA IN VISIONE — `viste_task` e `viste_sottotask` (nodo F-2, 02/09/2026)
+    -------------------------------------------------------------------------
+    Due insiemi di id: le unità su cui il dipendente ha confermato «l'ho
+    guardata, è ancora ferma». Scrivono `presa_visione=True` sulla riga della
+    settimana, creandola se non c'è — la presa-visione può benissimo essere
+    l'UNICA cosa che quella persona fa su quell'unità quella settimana, ed è
+    proprio il caso che questo nodo esiste per rendere registrabile.
+
+    COSA NON TOCCANO, e non per omissione: `percentuale` e `stato_dichiarato`.
+    Una presa-visione non è un avanzamento e non è uno sblocco. Un pezzo
+    Bloccato preso in visione resta Bloccato — se toccasse lo stato, confermare
+    «è ancora fermo» avrebbe l'effetto di dire «non è più fermo», che è il
+    contrario. È la ragione per cui questo è un canale a sé e non il riuso di
+    `avanzamenti_sottotask`: là dentro l'id fa riderivare lo stato.
+
+    PORTANO SOLO ID. Una nota nuova viaggia in `note_per_task`/`note_sottotask`
+    come qualunque nota scritta a mano, e si salva normalmente. La
+    `nota_ereditata` che `/me` espone non ha modo di tornare indietro da qui: il
+    canale non ha un campo dove metterla, e questo impedisce per costruzione che
+    il dipendente si ritrovi a firmare le parole scritte da un collega in una
+    settimana precedente.
+
+    `compilato=True` e `data_compilazione` si valorizzano come per ogni altra
+    scrittura: l'utente HA toccato la riga. Ma restano due fatti distinti —
+    `compilato` dice «salvata», `presa_visione` dice «confermata ferma» — e la
+    migration e7f8a9b0c1d2 spiega perché non potevano essere la stessa colonna.
     """
     from models import PresenzaSettimanale, Spesa, Sottotask, ConsuntivoSottotask
 
@@ -2783,6 +2811,9 @@ def salva_consuntivo(dipendente_id, settimana, ore_per_task, stati_per_task,
         bloccati_sottotask = set(bloccati_sottotask or ())
         percentuale_per_task = percentuale_per_task or {}
         ore_effettive_per_task = ore_effettive_per_task or {}
+        # Nodo F-2. `set` e non dict: portano solo appartenenza, nessun valore.
+        viste_task = set(viste_task or ())
+        viste_sottotask = set(viste_sottotask or ())
         # `note_sottotask` NON si normalizza a {}: None e {} vogliono dire cose
         # diverse (non gestisco le note / le gestisco e questa volta nessuna),
         # esattamente come `note_per_task`.
@@ -2792,6 +2823,10 @@ def salva_consuntivo(dipendente_id, settimana, ore_per_task, stati_per_task,
         tocca_sottotask = bool(
             avanzamenti_sottotask or ore_effettive_sottotask
             or bloccati_sottotask or note_sottotask
+            # Nodo F-2: una presa-visione È un salvataggio sui pezzi. Senza
+            # questo termine il blocco sotto non girerebbe e la conferma
+            # «ancora ferma» non verrebbe scritta da nessuna parte.
+            or viste_sottotask
         )
         avvisi = []          # segnalazioni non bloccanti, tornano al chiamante
 
@@ -2824,6 +2859,9 @@ def salva_consuntivo(dipendente_id, settimana, ore_per_task, stati_per_task,
         sottotask_toccati = dict.fromkeys(
             list(avanzamenti_sottotask) + list(ore_effettive_sottotask)
             + sorted(bloccati_sottotask) + list(note_sottotask or {})
+            # Nodo F-2: un pezzo preso in visione entra nel giro anche se non
+            # porta null'altro — la sua riga va creata o aggiornata comunque.
+            + sorted(viste_sottotask)
         )
         for sottotask_id in sottotask_toccati:
             riga = session.query(ConsuntivoSottotask).filter(
@@ -2865,6 +2903,20 @@ def salva_consuntivo(dipendente_id, settimana, ore_per_task, stati_per_task,
                 riga.stato_dichiarato = _stato_da_avanzamento(
                     riga.percentuale, sottotask_id in bloccati_sottotask
                 )
+
+            # Nodo F-2: la presa-visione si scrive DOPO il ricalcolo dello stato
+            # e non lo tocca — è il punto in cui l'asimmetria col canale degli
+            # avanzamenti diventa codice. `viste_sottotask` non compare
+            # nell'`if` qui sopra: un pezzo Bloccato confermato «ancora fermo»
+            # NON viene riderivato, quindi resta Bloccato. Se la presa-visione
+            # passasse per `avanzamenti_sottotask`, ricadrebbe in quel ramo e
+            # `_stato_da_avanzamento` lo sbloccherebbe in silenzio — confermare
+            # «è ancora fermo» avrebbe l'effetto di dire «non è più fermo».
+            # Si SCRIVE e non si alterna: `= True` solo quando l'id è arrivato,
+            # perché un salvataggio che non parla di questo pezzo non deve
+            # cancellare una conferma data prima nella stessa settimana.
+            if sottotask_id in viste_sottotask:
+                riga.presa_visione = True
 
             riga.compilato = True
             riga.data_compilazione = datetime.utcnow()
@@ -3098,6 +3150,8 @@ def salva_consuntivo(dipendente_id, settimana, ore_per_task, stati_per_task,
         task_toccati = dict.fromkeys(
             list(ore_per_task) + list(stati_per_task) + list(note_per_task or {})
             + sorted(task_unita)
+            # Nodo F-2: un task preso in visione entra anche se non porta altro.
+            + sorted(viste_task)
         )
         stati_dichiarati = {}   # task_id → stato, da propagare dopo il commit
         for task_id in task_toccati:
@@ -3127,9 +3181,17 @@ def salva_consuntivo(dipendente_id, settimana, ore_per_task, stati_per_task,
             # sarebbe vero e la riga Consuntivo non verrebbe mai scritta. La
             # settimana risulterebbe non compilata su quel task pur avendo il
             # dipendente mosso (o volutamente non mosso) lo slider.
+            #
+            # `task_id not in viste_task` è il quinto termine (nodo F-2): una
+            # presa-visione è una dichiarazione, non un silenzio, ed è spesso
+            # l'UNICA cosa che quel salvataggio dice su quel task. Senza questo
+            # termine la riga non verrebbe mai scritta e la conferma «ancora
+            # ferma» sparirebbe — proprio il caso che il nodo esiste per
+            # registrare.
             if (not stato and not nota_pervenuta and not ore
                     and task_id not in derivate_per_task
-                    and task_id not in task_unita):
+                    and task_id not in task_unita
+                    and task_id not in viste_task):
                 continue
 
             # motivo_fermo è un flag, non un archivio: va RIALLINEATO a ogni
@@ -3175,6 +3237,17 @@ def salva_consuntivo(dipendente_id, settimana, ore_per_task, stati_per_task,
                 existing.compilato = True
                 existing.data_compilazione = datetime.utcnow()
                 existing.motivo_fermo = motivo
+                # Nodo F-2. `= True` solo quando l'id è arrivato, mai `= False`
+                # altrimenti: un salvataggio che non parla di questo task non
+                # deve cancellare una conferma data prima nella stessa
+                # settimana. È l'opposto di `motivo_fermo`, che sopra si
+                # RIALLINEA a ogni giro perché è un flag derivato dallo stato —
+                # questa invece è una dichiarazione, e le dichiarazioni non si
+                # ritirano da sole.
+                # Non tocca `percentuale` né `stato_dichiarato`: una
+                # presa-visione non è un avanzamento e non è uno sblocco.
+                if task_id in viste_task:
+                    existing.presa_visione = True
                 # Lo stato dichiarato resta anche sulla riga della settimana, non
                 # solo su Task.stato: quest'ultimo è a sovrascrittura e non dice né
                 # chi né quando. `stato` assente = non pervenuto, la colonna non si
@@ -3199,6 +3272,10 @@ def salva_consuntivo(dipendente_id, settimana, ore_per_task, stati_per_task,
                     stato_dichiarato=stato,
                     percentuale=percentuale_per_task.get(task_id),
                     ore_effettive=ore_effettive_per_task.get(task_id),
+                    # Nodo F-2: la riga può nascere DALLA SOLA presa-visione —
+                    # è il caso normale di un task fermo che qualcuno conferma
+                    # senza avere altro da dire.
+                    presa_visione=task_id in viste_task,
                 ))
 
             if stato:

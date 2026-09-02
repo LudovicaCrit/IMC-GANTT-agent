@@ -246,6 +246,34 @@ class SalvaConsuntivoRequest(BaseModel):
     # MODIFICATE, e appiattire i tre casi su due cancellerebbe testo che
     # nessuno ha chiesto di cancellare.
     note_sottotask: Optional[dict[int, str]] = None
+    # ── PRESA IN VISIONE (nodo F-2, 02/09/2026) ──────────────────────────
+    # Le unità su cui il dipendente ha confermato «l'ho guardata, è ancora
+    # ferma, non è avanzata». È una TRACCIA SENZA AVANZAMENTO: fa risultare
+    # l'unità dichiarata nel contatore della Consuntivazione senza costringere
+    # nessuno a inventare un progresso che non c'è.
+    #
+    # DUE LISTE DI SOLI ID, e un canale PROPRIO invece del riuso di
+    # `percentuale_per_task` / `avanzamenti_sottotask`. Non è ridondanza: per un
+    # SOTTOTASK rimandare la percentuale invariata farebbe ricalcolare
+    # `stato_dichiarato` (il data layer lo riderivata quando il pezzo compare
+    # fra gli avanzamenti o fra i bloccati), e un pezzo Bloccato preso in
+    # visione risulterebbe SBLOCCATO in silenzio. È il bug che il commento
+    # «NON si manda la percentuale quando si ritocca solo la nota di un pezzo
+    # fermo» già previene nel form: qui si evita alla radice, non mandando mai
+    # la percentuale per dire «l'ho vista».
+    #
+    # PORTANO SOLO L'ID. Una nota nuova, se c'è, viaggia in `note_per_task` /
+    # `note_sottotask` come qualunque altra nota scritta a mano. La
+    # `nota_ereditata` che /me espone NON deve mai tornare indietro da qui né da
+    # lì: è il promemoria di quello che qualcuno ha scritto in una settimana
+    # precedente, e rispedirla come nota di questa settimana farebbe firmare al
+    # dipendente parole non sue. Il canale a soli id rende la cosa impossibile
+    # per costruzione.
+    #
+    # `set` e non lista, come `bloccati_sottotask`: è un'appartenenza, e i
+    # duplicati non vogliono dire niente. Pydantic accetta un array JSON.
+    viste_task: set[str] = set()
+    viste_sottotask: set[int] = set()
     # Presenze: None = «non gestisco questo campo, non toccarlo» (stessa
     # convenzione di `spese` e `note_per_task`). I default 3/2/0 di prima non
     # erano dati dichiarati ma un'ipotesi di comodo, e finivano scritti in DB a
@@ -870,6 +898,8 @@ def salva_consuntivo_endpoint(
             note_sottotask=req.note_sottotask,
             percentuale_per_task=req.percentuale_per_task,
             ore_effettive_per_task=req.ore_effettive_per_task,
+            viste_task=req.viste_task,
+            viste_sottotask=req.viste_sottotask,
         )
         # `avvisi`: segnalazioni non bloccanti del motore ore-derivate (Step 4).
         # Lista vuota nel caso normale — il campo c'è sempre, così il client non
