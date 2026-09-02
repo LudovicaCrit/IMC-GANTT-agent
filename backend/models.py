@@ -367,8 +367,29 @@ class Fase(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     progetto = relationship("Progetto", back_populates="fasi")
+    # `Task.id` come SECONDO criterio, e non è cosmetico: al 02/09/2026 tutti e
+    # 114 i task in DB hanno `ordine` NULL — la colonna non viene mai
+    # inizializzata da nessun percorso di scrittura. Ordinare per la sola
+    # `ordine` significa quindi non ordinare affatto: Postgres restituisce
+    # l'ordine FISICO delle righe, che cambia a ogni UPDATE perché MVCC scrive
+    # una nuova versione della tupla. Misurato: un `UPDATE task SET
+    # ore_pianificate = ore_pianificate` — che non cambia un solo valore —
+    # spostava T012 dalla prima alla terza posizione della fase 8. In GANTT,
+    # Elenco e Cantiere i task di una fase si riordinavano da soli dopo una
+    # modifica qualsiasi.
+    #
+    # Questa relationship è l'UNICO punto da correggere per quattro lettori:
+    # `gantt_strutturato` e `semaforo_progetti` non ordinano per conto loro,
+    # iterano `f.task` e si affidano a qui. `_serializza_stato_progetto` faceva
+    # già `(Task.ordine, Task.id)` di suo, ed è il precedente.
+    #
+    # Gli id sono `T` + 3 cifre con zero-padding (T001…T114, zero eccezioni),
+    # quindi l'ordine lessicografico coincide con quello di creazione.
+    # I NULL finiscono in coda (ASC di Postgres): oggi sono tutti, domani — se
+    # `ordine` verrà popolato — saranno i task non ancora ordinati, che è
+    # esattamente dove devono stare. Questa riga regge in entrambi i mondi.
     task = relationship("Task", back_populates="fase_rel", cascade="all, delete-orphan",
-                        order_by="Task.ordine")
+                        order_by="Task.ordine, Task.id")
 
 
 class Task(Base):
@@ -454,9 +475,17 @@ class Task(Base):
     # Sottotask: la scomposizione del task fatta dal PM. Condivisa, uguale per
     # tutti i collaboratori del task. Cascade delete allineato alla FK
     # ON DELETE CASCADE della migration (il sottotask non sopravvive al padre).
+    # Stesso spareggio di `Fase.task`, per lo stesso motivo un passo più in là.
+    # Qui i dati sono sani — un sottotask nasce con `ordine = max+1` — ma
+    # `PUT /riordina` è un "replace" che non impone l'unicità: due pezzi
+    # possono legittimamente finire sullo stesso ordine, e da lì in poi la loro
+    # posizione relativa dipenderebbe da quale riga Postgres tira fuori per
+    # prima. Le tre query che leggono i sottotask (`lista_sottotask_task`,
+    # `/me`, `gantt_strutturato`) ordinano già per `(ordine, id)`: questa
+    # relationship era l'unica rimasta con la forma fragile.
     sottotask = relationship("Sottotask", back_populates="task",
                              cascade="all, delete-orphan",
-                             order_by="Sottotask.ordine")
+                             order_by="Sottotask.ordine, Sottotask.id")
 
 
 class DipendenzaTask(Base):
