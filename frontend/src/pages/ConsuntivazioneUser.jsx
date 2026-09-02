@@ -27,6 +27,75 @@ const TOOLTIP = {
 /* ── Helpers ──────────────────────────────────────────────────────── */
 const fmtH = (n) => `${(n ?? 0).toFixed(1).replace(/\.0$/, '')}h`
 
+/* ── «Questa unità è stata dichiarata?» ────────────────────────────────
+ * Nodo F-1. La domanda è UNA e la risposta sta in UN posto, perché la fanno
+ * in due: un TASK ATOMICO e un SOTTOTASK. Il payload di /me li rende
+ * simmetrici apposta — «i tre campi che il frontend serve per rendere lo
+ * slider del task, gemelli di quelli che ogni pezzo porta già» — quindi lo
+ * stesso criterio attraversa entrambi senza un `if` sul tipo.
+ *
+ * `riga`     : la riga COME ARRIVA DAL SERVER (t o p), non filtrata da accessor.
+ * `pendenti` : la modifica locale non ancora salvata — `modifiche[task_id]` per
+ *              un task, `modificheSottotask[id]` per un pezzo. Le due mappe
+ *              hanno grana diversa e restano separate: qui si passa quella
+ *              giusta, la funzione non deve saperlo.
+ *
+ * SI LEGGE IL CAMPO GREZZO, MAI `valore()`/`valoreSottotask()`. Quegli
+ * accessor cadono sulla baseline quando la dichiarazione manca
+ * (`p.percentuale ?? p.baseline_pct`) — è giusto per uno slider, che non deve
+ * mai ripartire da zero, ed è fatale qui: `percentuale` non sarebbe MAI null e
+ * ogni unità risulterebbe dichiarata. Il contatore direbbe sempre M/M.
+ *
+ * F-2 aggiungerà qui la PRESA VISIONE del fermo — un quinto termine in questo
+ * `||`, e nient'altro da toccare: è la ragione per cui questa funzione esiste
+ * separata invece di stare inline nel `useMemo`.
+ */
+const unitaDichiarata = (riga, pendenti) => {
+  // 1. Modifiche pendenti: contano SUBITO, prima del salvataggio. Chi muove
+  //    lo slider deve vedere il contatore salire, altrimenti sembra rotto.
+  //    Solo i tre campi che sono una dichiarazione: `ore_effettive` non c'è
+  //    (decisione presa) e `ore` è ormai derivata, non scritta a mano.
+  if (pendenti && (pendenti.percentuale !== undefined ||
+                   pendenti.bloccato !== undefined ||
+                   pendenti.nota !== undefined)) return true
+
+  // 2. Quello che il server ha già registrato per QUESTA settimana.
+  //    `percentuale` è `d.percentuale if d else None`: null = non pervenuta.
+  if (riga.percentuale != null) return true
+  if (riga.stato_dichiarato != null) return true
+  if ((riga.nota ?? '').trim() !== '') return true
+
+  return false
+}
+
+/* ── Le unità COMPILABILI della settimana ──────────────────────────────
+ * Nodo F-1. L'unità di conteggio non è il task: è il pezzo di lavoro su cui
+ * si dichiara. Un task scomposto NON conta per sé — «lo stato vive sui pezzi»
+ * — contano i suoi sottotask, uno per uno. Un task con 3 pezzi vale 3.
+ *
+ * COMPILABILI, non «mostrate». Un pezzo affidato a un collega compare in /me
+ * ma è in sola lettura (`bloccatoInput = soloLettura || !mio` in
+ * PezzoSottotask): contarlo renderebbe il denominatore IRRAGGIUNGIBILE — 2/5
+ * per sempre, con tre unità che chi guarda non può toccare in nessun modo. Un
+ * contatore a cui non si può arrivare non è un obiettivo, è un rimprovero.
+ * I task atomici non hanno questo problema: /me li filtra già per dipendente.
+ *
+ * Restituisce coppie {riga, pendenti} già appaiate alla mappa locale giusta,
+ * così il chiamante non deve più distinguere i due tipi.
+ */
+const unitaCompilabili = (taskSettimana, dipendenteId, modifiche, modificheSottotask) =>
+  (taskSettimana ?? []).flatMap((t) => {
+    const pezzi = t.sottotask ?? []
+    // La chiave `sottotask` arriva da /me SOLO sui task scomposti: la sua
+    // presenza è il discriminante, come nel submit (`if (pezzi.length) continue`).
+    if (pezzi.length === 0) {
+      return [{ riga: t, pendenti: modifiche[t.task_id] }]
+    }
+    return pezzi
+      .filter((p) => p.assegnatario_id === dipendenteId)
+      .map((p) => ({ riga: p, pendenti: modificheSottotask[p.id] }))
+  })
+
 const fmtData = (iso) => {
   if (!iso) return ''
   const d = new Date(iso)
@@ -162,15 +231,22 @@ export default function ConsuntivazioneUser() {
   /* ── Totali ── */
   const totali = useMemo(() => {
     const task = dati?.task_settimana ?? []
+    // Le due somme di ore restano sul TASK: sono grandezze del task, e la
+    // riga del task le mostra aggregate anche quando è scomposto.
     const previste = task.reduce((s, t) => s + (t.ore_pianificate_settimana ?? 0), 0)
     const dichiarate = task.reduce((s, t) => s + (parseFloat(valore(t, 'ore')) || 0), 0)
-    const dichiarati = task.filter((t) => {
-      const m = modifiche[t.task_id]
-      if (m && m.stato !== undefined) return m.stato !== null
-      return t.stato_dichiarato != null
-    }).length
-    return { previste, dichiarate, dichiarati, totale: task.length }
-  }, [dati, modifiche])
+
+    // Il contatore invece conta UNITÀ DI LAVORO, non righe di task (nodo F-1).
+    // Prima contava `stato_dichiarato` sul task e `task.length`: dopo
+    // l'avanzamento uniforme quel criterio è morto due volte — su un task
+    // scomposto lo stato del task resta vuoto (vive sui pezzi), e sul task
+    // atomico i tre pulsanti di stato non esistono più (5c). Un task con 3
+    // sottotask tutti compilati usciva 0/1.
+    const unita = unitaCompilabili(task, dati?.dipendente_id, modifiche, modificheSottotask)
+    const dichiarati = unita.filter((u) => unitaDichiarata(u.riga, u.pendenti)).length
+
+    return { previste, dichiarate, dichiarati, totale: unita.length }
+  }, [dati, modifiche, modificheSottotask])
 
   /* ── Settimana corrente selezionabile? ── */
   const settimanaInfo = dati?.settimane_disponibili?.find((s) => s.lunedi === dati?.settimana)
