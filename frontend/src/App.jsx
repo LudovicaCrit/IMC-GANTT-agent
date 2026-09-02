@@ -77,8 +77,27 @@ function MainLayout() {
         {/* Divider */}
         <div className="mx-2 mb-2" style={{ height: 1, backgroundColor: 'var(--color-border-subtle)' }} />
 
-        {/* Navigation */}
-        <nav className="flex-1 px-2 py-1">
+        {/* Navigation — l'UNICA parte che scorre.
+            Logo sopra, «Comprimi» e footer utente sotto restano sempre fermi e
+            raggiungibili: far scorrere l'intero <aside> porterebbe via
+            l'identità e il logout, che è peggio del problema.
+
+            `min-h-0` NON è ridondante ed è la metà che conta. Un figlio flex ha
+            `min-height: auto`, cioè non può rimpicciolirsi sotto l'altezza del
+            proprio contenuto: con `flex-1` da solo questo <nav> cresceva oltre
+            lo spazio disponibile e SPINGEVA i fratelli fuori dall'<aside>, che
+            è alto h-screen e li tagliava via senza barra. Sbloccarlo con
+            `min-h-0` è ciò che permette a `overflow-y-auto` di entrare in
+            funzione: senza, non ci sarebbe mai eccedenza da far scorrere.
+
+            Si vedeva solo sui profili MANAGEMENT: `navItems` ha 12 voci, di cui
+            9 con `requiresManager`. Un dipendente ne vede 3 e non sfora su
+            nessuno schermo; un manager ne vede 12, ~500px di sole voci, e su un
+            portatile perdeva la coda della lista e il footer.
+
+            `auto` e non `scroll`: la barra compare solo quando serve, quindi per
+            chi oggi ci sta comodo non cambia niente. */}
+        <nav className="flex-1 min-h-0 overflow-y-auto px-2 py-1">
           {visibleNavItems.map(item => (
             <NavLink
               key={item.to}
