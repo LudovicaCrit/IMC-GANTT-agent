@@ -101,6 +101,25 @@ export async function apiFetch(url, options = {}) {
 
   // ── Successo ────────────────────────────────────────────────────────
   if (rawResponse) return res;
+
+  // 204 No Content / 205 Reset Content: il body è vuoto PER SPECIFICA, e
+  // `res.json()` su un body vuoto alza `SyntaxError: Unexpected end of JSON
+  // input`. Senza questo ramo un DELETE RIUSCITO veniva riportato al chiamante
+  // come errore — e i chiamanti sono `try { await deleteFase(...) } catch { alert }`,
+  // quindi l'utente vedeva un avviso di fallimento su un'operazione andata a
+  // buon fine. Valeva per `deleteFase` e `deleteProgetto`; `eliminaSottotask`
+  // si difendeva da sola con `rawResponse: true`, un cerotto che ora non serve.
+  //
+  // Si guarda lo STATUS e non la lunghezza del body: «nessun contenuto» è il
+  // contratto della risposta, non una sua proprietà accidentale.
+  //
+  // Nessun altro chiamante ne è toccato: in tutto il backend le risposte a body
+  // vuoto sono esattamente i tre DELETE 204 (fasi, progetti, sottotask). Le tre
+  // `Response(...)` esplicite di routes/gantt.py hanno `content` valorizzato e
+  // passano da `rawResponse` per il blob; un handler FastAPI che restituisce
+  // None serializza `null`, che è JSON valido e continua a parsarsi come prima.
+  if (res.status === 204 || res.status === 205) return null;
+
   return res.json();
 }
 
@@ -350,17 +369,12 @@ export async function eliminaSottotask(sottotaskId) {
   // Cantiere lo rende: `n_dichiarazioni` nella lista permette di prevenirlo
   // disabilitando il cestino prima ancora di provare.
   //
-  // `rawResponse` NON è un vezzo: su 204 il body è vuoto e il `res.json()`
-  // finale di apiFetch alzerebbe `SyntaxError: Unexpected end of JSON input`
-  // — cioè un DELETE riuscito verrebbe riportato come errore. (Verificato: è
-  // ciò che accade oggi a `deleteFase` e `deleteProgetto`, che sono gli altri
-  // due 204 del progetto. Difetto preesistente, non toccato qui.)
-  // Il controllo sugli errori resta intatto: apiFetch alza su 4xx PRIMA di
-  // arrivare al ramo rawResponse, quindi il 409 continua a propagarsi.
-  await apiFetch(`${API_BASE}/sottotask/${sottotaskId}`, {
-    method: 'DELETE',
-    rawResponse: true,
-  });
+  // Il 204 lo gestisce `apiFetch`, che su «no content» torna null senza tentare
+  // il parsing. Fino al 02/09/2026 questa funzione usava `rawResponse: true`
+  // per aggirare quel parsing da sola: era un cerotto sul sintomo, e gli altri
+  // due DELETE del progetto — che non ce l'avevano — riportavano come errore
+  // ogni cancellazione riuscita. Ora la cura è alla radice e il cerotto è via.
+  await apiFetch(`${API_BASE}/sottotask/${sottotaskId}`, { method: 'DELETE' });
 }
 
 // ═════════════════════════════════════════════════════════════════════════
