@@ -53,17 +53,25 @@ const fmtH = (n) => `${(n ?? 0).toFixed(1).replace(/\.0$/, '')}h`
 const unitaDichiarata = (riga, pendenti) => {
   // 1. Modifiche pendenti: contano SUBITO, prima del salvataggio. Chi muove
   //    lo slider deve vedere il contatore salire, altrimenti sembra rotto.
-  //    Solo i tre campi che sono una dichiarazione: `ore_effettive` non c'è
+  //    Solo i campi che sono una dichiarazione: `ore_effettive` non c'è
   //    (decisione presa) e `ore` è ormai derivata, non scritta a mano.
   if (pendenti && (pendenti.percentuale !== undefined ||
                    pendenti.bloccato !== undefined ||
-                   pendenti.nota !== undefined)) return true
+                   pendenti.nota !== undefined ||
+                   // Nodo F-2: il gesto appena fatto, non ancora salvato.
+                   pendenti.presaVisione !== undefined)) return true
 
   // 2. Quello che il server ha già registrato per QUESTA settimana.
   //    `percentuale` è `d.percentuale if d else None`: null = non pervenuta.
   if (riga.percentuale != null) return true
   if (riga.stato_dichiarato != null) return true
   if ((riga.nota ?? '').trim() !== '') return true
+  // Nodo F-2: «l'ho guardata, è ancora ferma» è una dichiarazione a tutti gli
+  // effetti — è il motivo per cui questo nodo esiste. NON si legge
+  // `nota_ereditata`: è il promemoria di una settimana precedente, non una
+  // traccia di questa, e contarla direbbe «dichiarato» di chi non ha aperto
+  // la pagina.
+  if (riga.presa_visione === true) return true
 
   return false
 }
@@ -100,6 +108,44 @@ const fmtData = (iso) => {
   if (!iso) return ''
   const d = new Date(iso)
   return d.toLocaleDateString('it-IT', { day: 'numeric', month: 'short' })
+}
+
+/* ── Il promemoria della nota ereditata ────────────────────────────────
+ * Nodo F-2 (b). Mostra il perché di un fermo scritto in una settimana
+ * PRECEDENTE, così chi compila non deve ridigitare «aspetto le credenziali»
+ * ogni lunedì.
+ *
+ * SOLA LETTURA, E FUORI DAL CAMPO-NOTA. È la regola più importante di questo
+ * componente, e non è una scelta di stile. Se il testo ereditato finisse
+ * PRECOMPILATO nel `<textarea>` della nota, al salvataggio partirebbe in
+ * `note_per_task` / `note_sottotask` come nota PROPRIA di questa settimana, e
+ * il backend non ha modo di distinguerla: la barriera costruita nel data layer
+ * è sul canale della presa-visione (`viste_*` porta solo id), NON sul campo
+ * nota. Il risultato sarebbe che il dipendente firma parole scritte da un
+ * collega — o da sé stesso settimane fa — senza averle riscritte.
+ * Quindi: un <p>, non un input. Nessun `value`, nessun `onChange`.
+ *
+ * QUANDO SI MOSTRA — le due condizioni arrivano dal docstring di
+ * `task_settimana_dipendente`, che le ha decise e non le applica di proposito
+ * («qui non si filtra, si espone il fatto»):
+ *   - l'unità è FERMA: chi ha mosso il cursore ha già detto la sua, e un
+ *     promemoria di un vecchio fermo sarebbe fuori tempo;
+ *   - non ha già una nota PROPRIA questa settimana: se l'utente ha scritto,
+ *     il promemoria ha finito il suo lavoro e sparisce.
+ */
+function PromemoriaNota({ testo, da, mostra }) {
+  if (!mostra || !testo) return null
+  return (
+    <p className="text-[11px] text-gray-500 italic mt-1 flex items-start gap-1.5">
+      <span className="text-gray-600 not-italic shrink-0" aria-hidden="true">↺</span>
+      <span className="min-w-0">
+        <span className="text-gray-600 not-italic">
+          {da ? `Settimana del ${fmtData(da)}: ` : 'In precedenza: '}
+        </span>
+        «{testo}»
+      </span>
+    </p>
+  )
 }
 
 /* ── Pagina ───────────────────────────────────────────────────────── */
@@ -177,6 +223,9 @@ export default function ConsuntivazioneUser() {
     if (campo === 'percentuale') return t.percentuale ?? t.baseline_pct ?? 0
     if (campo === 'ore_effettive') return t.ore_effettive ?? ''
     if (campo === 'bloccato') return t.stato_dichiarato === 'Bloccato'
+    // Nodo F-2. `=== true` e non truthy: /me manda sempre il campo, false
+    // incluso, e la domanda ha una risposta anche quando la riga non esiste.
+    if (campo === 'presaVisione') return t.presa_visione === true
     return undefined
   }
 
@@ -200,6 +249,7 @@ export default function ConsuntivazioneUser() {
     if (campo === 'ore_effettive') return p.ore_effettive ?? ''
     if (campo === 'bloccato') return p.stato_dichiarato === 'Bloccato'
     if (campo === 'nota') return p.nota ?? ''
+    if (campo === 'presaVisione') return p.presa_visione === true
     return undefined
   }
 
@@ -315,6 +365,12 @@ export default function ConsuntivazioneUser() {
     const ore_effettive_sottotask = {}
     const bloccati_sottotask = []
     const note_sottotask = {}
+    // Nodo F-2: le unità confermate «ancora ferme». Due liste di SOLI ID — è il
+    // canale dedicato del backend, e porta solo appartenenza: nessuna
+    // percentuale (su un pezzo la sbloccherebbe) e nessuna nota (la
+    // `nota_ereditata` non deve poter tornare indietro come nota propria).
+    const viste_task = []
+    const viste_sottotask = []
 
     for (const p of pezzi) {
       const m = modificheSottotask[p.id]
@@ -333,6 +389,7 @@ export default function ConsuntivazioneUser() {
         ore_effettive_sottotask[id] = parseFloat(m.ore_effettive)
       }
       if (bloccato) bloccati_sottotask.push(p.id)
+      if (valoreSottotask(p, 'presaVisione')) viste_sottotask.push(p.id)
       if (m.nota !== undefined) note_sottotask[id] = m.nota
     }
 
@@ -373,6 +430,10 @@ export default function ConsuntivazioneUser() {
         ore_effettive_per_task[t.task_id] = parseFloat(m.ore_effettive)
       }
       if (valore(t, 'bloccato')) stati_per_task[t.task_id] = 'Bloccato'
+      // Il gesto vale solo se ACCESO: toglierlo non manda nulla, e il backend
+      // scrive `presa_visione = True` senza mai riportarlo a False — una
+      // conferma data non si ritira da sola a metà settimana.
+      if (valore(t, 'presaVisione')) viste_task.push(t.task_id)
     }
 
     try {
@@ -390,6 +451,8 @@ export default function ConsuntivazioneUser() {
           ore_effettive_sottotask,
           bloccati_sottotask,
           note_sottotask,
+          viste_task,
+          viste_sottotask,
         },
       })
       setSalvataggio('ok')
@@ -621,6 +684,7 @@ function RigaTask({
   pct,
   oreEffettive,
   bloccato,
+  presaVisione,
   modificata,
   notaAperta,
   soloLettura,
@@ -692,6 +756,7 @@ function RigaTask({
                 baseline={t.baseline_pct ?? 0}
                 oreEffettive={oreEffettive}
                 bloccato={bloccato}
+                presaVisione={presaVisione}
                 disabilitato={soloLettura}
                 titoloBloccato="Il task è fermo: dovrai scrivere perché"
                 titoloOreEffettive={TOOLTIP.oreEffettiveTask}
@@ -729,6 +794,11 @@ function RigaTask({
           >
             {haNota ? '✎' : '+'}
           </button>
+          <PromemoriaNota
+            testo={t.nota_ereditata}
+            da={t.nota_ereditata_da}
+            mostra={!scomposto && Number(pct) === Number(t.baseline_pct ?? 0) && !haNota}
+          />
         </td>
       </tr>
 
@@ -775,6 +845,7 @@ function RigaTask({
                   pct={valoreSottotask(p, 'percentuale')}
                   oreEffettive={valoreSottotask(p, 'ore_effettive')}
                   bloccato={valoreSottotask(p, 'bloccato')}
+                  presaVisione={valoreSottotask(p, 'presaVisione')}
                   nota={valoreSottotask(p, 'nota')}
                   notaAperta={Boolean(noteSottotaskAperte[p.id])}
                   onModifica={(campo, val) => onModificaSottotask(p.id, campo, val)}
@@ -800,6 +871,7 @@ function PezzoSottotask({
   pct,
   oreEffettive,
   bloccato,
+  presaVisione,
   nota,
   notaAperta,
   soloLettura,
@@ -831,6 +903,7 @@ function PezzoSottotask({
           baseline={p.baseline_pct}
           oreEffettive={oreEffettive}
           bloccato={bloccato}
+          presaVisione={presaVisione}
           disabilitato={bloccatoInput}
           titoloBloccato="Il pezzo è fermo: dovrai scrivere perché"
           titoloOreEffettive={TOOLTIP.oreEffettive}
@@ -851,6 +924,15 @@ function PezzoSottotask({
           {haNota ? '✎' : '+'}
         </button>
       </div>
+
+      {/* Il perché di un fermo, scritto in una settimana precedente. Sotto la
+          riga e FUORI dal textarea: vedi PromemoriaNota per cosa succederebbe
+          se finisse dentro il campo. */}
+      <PromemoriaNota
+        testo={p.nota_ereditata}
+        da={p.nota_ereditata_da}
+        mostra={Number(pct) === Number(p.baseline_pct) && !haNota}
+      />
 
       {notaAperta && (
         <div className="pb-2 pr-1">
@@ -900,6 +982,7 @@ function ControlliAvanzamento({
   baseline,
   oreEffettive,
   bloccato,
+  presaVisione,
   disabilitato,
   titoloBloccato,
   titoloOreEffettive,
@@ -914,6 +997,15 @@ function ControlliAvanzamento({
     : pct >= 100 ? 'Completato'
     : pct > 0 ? 'In corso'
     : null
+
+  // FERMA = il cursore non si è mosso rispetto a dove il lavoro era arrivato.
+  // `pct` arriva già risolto dagli accessor, che cadono sulla baseline quando
+  // la dichiarazione di questa settimana manca: quindi questo confronto copre
+  // insieme «non pervenuta» e «dichiarata uguale a prima», che sono i due casi
+  // in cui la presa-visione ha senso. Chi ha mosso il cursore ha già
+  // dichiarato, e il gesto sparisce — offrirglielo sarebbe chiedere due volte
+  // la stessa cosa.
+  const ferma = Number(pct) === Number(baseline)
 
   return (
     <>
@@ -973,6 +1065,31 @@ function ControlliAvanzamento({
       >
         Bloccato
       </button>
+
+      {/* Presa in visione — solo sulle unità FERME (nodo F-2).
+          «Confermo, ancora fermo»: una traccia senza avanzamento, che fa
+          risultare l'unità dichiarata senza costringere a inventare un
+          progresso. Manda SOLO l'id (viste_task / viste_sottotask): non
+          tocca la percentuale, e su un pezzo Bloccato è la differenza fra
+          confermare il fermo e sbloccarlo in silenzio.
+          Convive con «Bloccato»: un pezzo bloccato è fermo per definizione,
+          ed è proprio quello su cui la conferma settimanale serve di più. */}
+      {ferma && (
+        <button
+          disabled={disabilitato}
+          onClick={() => onModifica('presaVisione', !presaVisione)}
+          title={presaVisione
+            ? 'Hai confermato che è ancora fermo. Clicca per annullare.'
+            : 'Confermo di averlo guardato: è ancora fermo, non è avanzato'}
+          className={`px-2 py-1 rounded-md text-xs font-medium border transition-colors shrink-0 ${
+            presaVisione
+              ? 'bg-slate-600 text-white border-slate-500'
+              : 'text-slate-300/60 border-gray-700 hover:border-slate-600'
+          } ${disabilitato ? 'opacity-40 cursor-not-allowed' : ''}`}
+        >
+          {presaVisione ? '✓ Fermo' : 'Ancora fermo'}
+        </button>
+      )}
 
       {/* Stato derivato, in sola lettura: è il riflesso dello slider */}
       <div className="w-20 text-center shrink-0">
