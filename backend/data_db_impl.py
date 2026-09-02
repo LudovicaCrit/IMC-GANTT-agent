@@ -946,6 +946,133 @@ def _baseline_percentuali(session, tipo, ids, settimana):
     return {unita_id: pct for unita_id, (_sett, pct) in migliore.items()}
 
 
+def _nota_ereditata_payload(coppia):
+    """(settimana, nota) → i due campi del payload. Sempre presenti, anche None.
+
+    Scritto una volta perché i due punti che lo usano — i sottotask e i
+    task-unità — devono produrre la stessa forma: sono la stessa informazione su
+    due entità, e il frontend li legge con lo stesso codice.
+
+    Le chiavi ci sono SEMPRE, anche quando non c'è nulla da ereditare. Qui non
+    vale la convenzione «chiave assente = niente da dire» di `scostamento` e
+    `sottotask`: quelle segnalano al frontend di cambiare RENDER, questa è un
+    valore da mostrare o no, e `null` lo dice già. Chiavi che appaiono e
+    scompaiono a seconda della storia costringerebbero ogni lettore a
+    difendersi con un `?.`.
+    """
+    sett, nota = coppia if coppia else (None, None)
+    return {
+        "nota_ereditata": nota,
+        "nota_ereditata_da": sett.isoformat() if sett else None,
+    }
+
+
+def _note_ereditate(session, tipo, ids, settimana):
+    """{id: (settimana, nota)} dell'ultima NOTA non vuota PRECEDENTE a `settimana`.
+
+    Nodo F-2 (02/09/2026), parte (b). Il perché di un fermo non cambia ogni
+    lunedì: chi aspetta le credenziali del cliente da tre settimane non deve
+    ridigitare «aspetto le credenziali» tre volte. Questa funzione va a
+    riprendere l'ultima spiegazione scritta e la rende disponibile alla
+    settimana corrente.
+
+    GEMELLA DI `_baseline_percentuali`, e non per somiglianza: stessa domanda
+    («qual è l'ultima cosa detta su questa unità prima d'ora»), stessa forma
+    (batch, una query, riduzione in Python), stesso `if` che sceglie SOLO la
+    coppia (tabella, colonna-che-identifica-l'unità). Da lì in giù non si sa più
+    se si parli di task o di sottotask, e non deve importare: se la regola che
+    decide QUALE riga vince divergesse fra i due tipi, il bug sarebbe invisibile
+    — nessuna query fallirebbe e nessun test di forma se ne accorgerebbe.
+
+    EREDITÀ A LETTURA, NON COPIA — è la scelta (b2) fatta in ricognizione. La
+    nota vecchia NON viene duplicata sulla riga della settimana nuova: resta
+    dov'è, e la si va a leggere. Copiarla avrebbe significato scrivere una riga
+    che l'utente non ha toccato, con `compilato=True` e `data_compilazione`
+    valorizzati — e il contatore di F-1 l'avrebbe contata come dichiarata,
+    dicendo «5/5 compilati» a chi non ha aperto la pagina.
+
+    PER UNITÀ, NON PER DIPENDENTE, come la baseline. Il fatto raccontato è del
+    LAVORO («questo pezzo è fermo perché mancano le credenziali»), non della
+    persona che l'ha scritto: se il pezzo passa di mano, il motivo del fermo
+    deve seguirlo. È la scelta meno ovvia delle due — la nota è firmata, la
+    percentuale no — e va guardata di nuovo al sotto-edit della SCRITTURA: una
+    nota ereditata non deve mai finire salvata come nota PROPRIA di chi la
+    legge, o si ritroverebbe a firmare le parole di un collega.
+
+    NOTE VUOTE ESCLUSE due volte, in SQL e in Python. In DB la nota assente è
+    NULL — `_nota_task` normalizza "" e i soli spazi — ma il filtro `IS NOT
+    NULL` da solo si fiderebbe di quella normalizzazione per ogni riga mai
+    scritta, comprese quelle del seed e di eventuali import futuri. Lo `strip()`
+    nella riduzione costa nulla e rende la funzione vera per costruzione invece
+    che per convenzione.
+
+    IL PAREGGIO — se due righe della stessa settimana hanno entrambe una nota
+    (possibile: la UNIQUE include il dipendente), vince quella scritta DOPO,
+    cioè con l'`id` più alto. La baseline in questo caso prende la percentuale
+    più ALTA, che è una regola di merito; qui il merito non esiste — due
+    spiegazioni non si ordinano — e l'unica cosa sensata è l'ultima parola detta
+    sull'argomento. Serve comunque una regola: senza, l'esito dipenderebbe
+    dall'ordine in cui Postgres restituisce le righe, che cambia da solo dopo un
+    UPDATE.
+
+    RESTITUISCE LA COPPIA (settimana, nota) e non la sola nota — a differenza
+    della baseline, che torna il solo valore. La provenienza serve: «aspetto le
+    credenziali» scritto la settimana scorsa e scritto due mesi fa non si
+    leggono allo stesso modo, e il payload la espone come `nota_ereditata_da`.
+
+    NESSUN FILTRO su «l'unità è ferma» o «ha già una nota sua»: qui si
+    restituisce il fatto, non la decisione di mostrarlo. Vedi
+    `task_settimana_dipendente` per il perché.
+    """
+    from models import ConsuntivoSottotask
+
+    if not ids:
+        return {}
+
+    # ── L'UNICO punto in cui i due tipi divergono ────────────────────────
+    if tipo == "sottotask":
+        Dichiarazione = ConsuntivoSottotask
+        colonna_unita = ConsuntivoSottotask.sottotask_id
+    elif tipo == "task":
+        Dichiarazione = Consuntivo
+        colonna_unita = Consuntivo.task_id
+    else:
+        raise ValueError(
+            f"tipo '{tipo}' non ammesso per le note ereditate: attesi {TIPI_UNITA}."
+        )
+
+    storiche = (
+        session.query(
+            colonna_unita,
+            Dichiarazione.settimana,
+            Dichiarazione.nota,
+            Dichiarazione.id,
+        )
+        .filter(
+            colonna_unita.in_(list(ids)),
+            Dichiarazione.settimana < settimana,
+            Dichiarazione.nota.isnot(None),
+        )
+        .all()
+    )
+
+    # ── La riduzione: scritta UNA volta, per entrambi i tipi ─────────────
+    migliore = {}      # id unità → (settimana, nota, id_riga)
+    for unita_id, sett_storica, nota, riga_id in storiche:
+        if not (nota or "").strip():
+            continue
+        corrente = migliore.get(unita_id)
+        if corrente is None or sett_storica > corrente[0]:
+            migliore[unita_id] = (sett_storica, nota, riga_id)
+        elif sett_storica == corrente[0] and riga_id > corrente[2]:
+            migliore[unita_id] = (sett_storica, nota, riga_id)
+
+    return {
+        unita_id: (sett, nota)
+        for unita_id, (sett, nota, _riga_id) in migliore.items()
+    }
+
+
 def _prima_settimana_dopo(session, tipo, ids, settimana):
     """{id: settimana} della PRIMA dichiarazione con percentuale dopo `settimana`.
 
@@ -1553,6 +1680,39 @@ def task_settimana_dipendente(dipendente_id, settimana=None):
     non ha una colonna — il ritardo non si «dichiara», succede: la finestra del
     task si è chiusa e il task non è chiuso. Il frontend lo rende come
     segnalazione automatica accanto al task, non come opzione della tendina.
+
+    NODO F-2 (02/09/2026) — tre campi nuovi su OGNI UNITÀ, cioè sui sottotask e
+    sui task NON scomposti, gemelli esatti fra i due:
+      presa_visione (bool)        «l'ho guardato, è ancora fermo». False quando
+                                  la riga non c'è: la domanda ha risposta, ed è
+                                  no. Vedi migration e7f8a9b0c1d2 per il perché
+                                  è una colonna sua e non `compilato`.
+      nota_ereditata (str|None)   l'ultima nota non vuota scritta su quell'unità
+                                  PRIMA di questa settimana.
+      nota_ereditata_da (str|None) la settimana da cui viene, in ISO.
+
+    EREDITÀ A LETTURA, NON COPIA: la nota vecchia resta dov'è ed è `/me` che va
+    a prenderla (`_note_ereditate`). Nessuna riga viene scritta per l'utente,
+    quindi il contatore di F-1 non conta come dichiarato chi non ha aperto la
+    pagina.
+
+    `nota_ereditata` È SEPARATA DA `nota` E NON VA FUSA. `nota` è ciò che il
+    dipendente ha scritto QUESTA settimana ed è una dichiarazione;
+    `nota_ereditata` è un promemoria di ciò che era già stato detto e non lo è.
+    Fonderle farebbe leggere a `unitaDichiarata` (contatore F-1) una traccia che
+    non esiste, e ogni unità con una nota vecchia risulterebbe dichiarata: lo
+    stesso guasto silenzioso dell'accessor che cade sulla baseline.
+
+    QUI NON SI FILTRA, SI ESPONE IL FATTO. La nota ereditata si restituisce
+    sempre che esista, anche quando l'unità ha già una nota propria o è
+    avanzata. Decidere SE mostrarla è resa, e le due condizioni — «non ha una
+    nota sua questa settimana» (`nota is None`) e «è ferma» (`percentuale` nulla
+    oppure uguale a `baseline_pct`) — si calcolano interamente da campi che il
+    payload porta già. Filtrare qui significherebbe scrivere la definizione di
+    «ferma» in un secondo posto, dopo che il semaforo ha già mostrato cosa
+    costa una regola in due copie; e farebbe apparire e sparire un campo a
+    seconda di cosa l'utente ha appena digitato, che è più difficile da leggere
+    di un campo stabile.
     """
     from sqlalchemy.orm import joinedload
     from sqlalchemy import func, or_, and_
@@ -1591,7 +1751,10 @@ def task_settimana_dipendente(dipendente_id, settimana=None):
                           # Step 4 (07/08/2026): la dichiarazione del task come
                           # UNITÀ di lavoro. Due colonne in più sulla query che
                           # c'era già, non una query nuova.
-                          Consuntivo.percentuale, Consuntivo.ore_effettive)
+                          Consuntivo.percentuale, Consuntivo.ore_effettive,
+                          # Nodo F-2 (02/09/2026): una colonna in più sulla
+                          # stessa query, come sopra.
+                          Consuntivo.presa_visione)
             .filter(
                 Consuntivo.dipendente_id == dipendente_id,
                 Consuntivo.settimana >= lun,
@@ -1627,8 +1790,10 @@ def task_settimana_dipendente(dipendente_id, settimana=None):
         sottotask_rows = []
         dich_sottotask = {}
         baseline_sottotask = {}
+        note_ered_sottotask = {}
         task_unita = []
         baseline_task = {}
+        note_ered_task = {}
         if task_ids:
             sottotask_rows = (
                 session.query(Sottotask)
@@ -1666,6 +1831,13 @@ def task_settimana_dipendente(dipendente_id, settimana=None):
                 baseline_sottotask = _baseline_percentuali(
                     session, "sottotask", sottotask_ids, lun
                 )
+                # Nodo F-2 (b): il perché di un fermo, ripescato all'indietro.
+                # Stessa forma della baseline qui sopra — una query, batch — e
+                # per la stessa ragione: sono la stessa domanda su due colonne
+                # diverse.
+                note_ered_sottotask = _note_ereditate(
+                    session, "sottotask", sottotask_ids, lun
+                )
 
             # ── Baseline dei TASK-UNITÀ (Step 4, 07/08/2026) ──────────────
             # Solo per i task NON scomposti: su un task con pezzi la
@@ -1680,6 +1852,12 @@ def task_settimana_dipendente(dipendente_id, settimana=None):
                 # Stessa funzione della baseline dei pezzi, con tipo="task": il
                 # cursore deve partire dal punto da cui partirà il conto.
                 baseline_task = _baseline_percentuali(
+                    session, "task", task_unita, lun
+                )
+                # Nodo F-2 (b), gemella per i task-unità. Solo per i NON
+                # scomposti: su un task con pezzi la nota-del-perché sta sui
+                # pezzi, come tutto il resto della dichiarazione.
+                note_ered_task = _note_ereditate(
                     session, "task", task_unita, lun
                 )
     finally:
@@ -1709,8 +1887,23 @@ def task_settimana_dipendente(dipendente_id, settimana=None):
             "stato_dichiarato": d.stato_dichiarato if d else None,
             "nota": d.nota if d else None,
             "ore_effettive": d.ore_effettive if d else None,
+            # Nodo F-2 (a): «l'ho guardato, è ancora fermo». È una traccia
+            # SENZA avanzamento, e sta accanto agli altri campi della
+            # dichiarazione perché è una dichiarazione anche lei. False — non
+            # None — quando la riga non c'è: la domanda «l'ha preso in visione?»
+            # ha risposta, ed è no.
+            "presa_visione": bool(d.presa_visione) if d else False,
             # Da dove riparte l'avanzamento: 0 = mai dichiarato prima.
             "baseline_pct": baseline_sottotask.get(s.id, 0),
+            # Nodo F-2 (b): l'ultima nota scritta su questo pezzo PRIMA di
+            # questa settimana, con la settimana da cui viene.
+            # DUE CAMPI DISTINTI DA `nota`, e la separazione non è cosmetica: se
+            # la nota ereditata finisse dentro `nota`, `unitaDichiarata` del
+            # contatore F-1 la leggerebbe come traccia e conterebbe come
+            # dichiarata ogni unità con una nota vecchia. È la stessa trappola
+            # dell'accessor `valoreSottotask`, che cade sulla baseline e
+            # renderebbe ogni percentuale non-nulla.
+            **_nota_ereditata_payload(note_ered_sottotask.get(s.id)),
         })
 
     consumate_per_task = {}
@@ -1719,14 +1912,20 @@ def task_settimana_dipendente(dipendente_id, settimana=None):
     stato_dichiarato_per_task = {}
     percentuale_per_task = {}
     ore_effettive_per_task = {}
+    presa_visione_per_task = set()
     for (tid, ore, nota, compilato, stato_dich,
-         pct, ore_eff) in cons_rows:
+         pct, ore_eff, presa_vis) in cons_rows:
         consumate_per_task[tid] = consumate_per_task.get(tid, 0.0) + float(ore or 0)
         # Come lo stato e la nota: non si sommano, vince la prima valorizzata.
         if pct is not None and tid not in percentuale_per_task:
             percentuale_per_task[tid] = pct
         if ore_eff is not None and tid not in ore_effettive_per_task:
             ore_effettive_per_task[tid] = ore_eff
+        # Nodo F-2 (a). Un set e non un dict: se nel range ci fossero due righe,
+        # basta che UNA porti la presa-visione perché il task risulti guardato —
+        # «l'ho visto» non si annulla per il fatto che un'altra riga taccia.
+        if presa_vis:
+            presa_visione_per_task.add(tid)
         if compilato:
             dichiarati.add(tid)
         # Come la nota: non si somma, e la prima valorizzata vince.
@@ -1823,6 +2022,13 @@ def task_settimana_dipendente(dipendente_id, settimana=None):
                 "percentuale": percentuale_per_task.get(t.id),
                 "baseline_pct": baseline_task.get(t.id),
                 "ore_effettive": ore_effettive_per_task.get(t.id),
+                # Nodo F-2 (a) e (b), gemelli esatti di quelli sui pezzi — e
+                # stanno qui, dentro il ramo dei NON scomposti, per la stessa
+                # ragione degli altri tre: su un task con pezzi sarebbero la
+                # doppia verità che il motore rifiuta, e il payload di quei task
+                # deve restare identico a prima.
+                "presa_visione": t.id in presa_visione_per_task,
+                **_nota_ereditata_payload(note_ered_task.get(t.id)),
             })
 
         # `sottotask` compare SOLO sui task scomposti — la chiave assente è essa
