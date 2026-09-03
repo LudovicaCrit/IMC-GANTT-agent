@@ -33,11 +33,19 @@ CAMPI_PROGETTO = {
     "data_inizio", "data_fine", "budget_ore", "pm_id",
     "ore_vendute_totali", "ore_consumate_totali", "n_fasi", "fasi",
     "semaforo",
+    # Urgenza (A1, 03/09/2026): sul progetto è un campo solo, sempre
+    # valorizzato — è NOT NULL perché è la radice dell'eredità delle fasi.
+    "urgenza",
 }
 CAMPI_FASE = {
     "id", "nome", "ordine", "stato", "data_inizio", "data_fine",
     "ore_vendute", "ore_pianificate", "ore_consumate", "n_task", "tasks",
     "semaforo",
+    # Urgenza sulla fase: DUE campi, grezzo e risolto. `urgenza` null =
+    # «eredita dal progetto»; `urgenza_risolta` è il valore effettivo. Servono
+    # entrambi perché il Cantiere possa distinguere una scelta del PM da
+    # un'eredità (vedi il commento in gantt_strutturato).
+    "urgenza", "urgenza_risolta",
 }
 CAMPI_TASK = {
     "id", "nome", "stato", "ore_stimate", "ore_pianificate", "ore_consumate",

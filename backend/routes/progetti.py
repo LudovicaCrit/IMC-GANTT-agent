@@ -92,13 +92,13 @@ from datetime import date as date_type
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import func, case
 
 from deps import require_manager
 from models import (
     get_session, Utente, Progetto, Fase, Task, DipendenzaTask,
-    STATI_PROGETTO, STATI_PROGETTO_ATTIVI, URGENZA_DEFAULT,
+    STATI_PROGETTO, STATI_PROGETTO_ATTIVI, URGENZA_DEFAULT, LIVELLI_URGENZA,
 )
 from data import ore_consuntivate_progetto, tasso_compilazione_progetto
 from data_db_impl import _next_progetto_id, genera_id_task_multipli, _to_dt
@@ -110,6 +110,30 @@ from data_db_impl import _next_progetto_id, genera_id_task_multipli, _to_dt
 # allineata al CHECK constraint del DB tramite migration D3).
 STATI_PROGETTO_AMMESSI = STATI_PROGETTO
 STATI_ATTIVI = STATI_PROGETTO_ATTIVI
+
+
+def _valida_urgenza(valore):
+    """Alza 400 se `valore` non è un livello ammesso. None passa (= non tocca).
+
+    UN messaggio, DUE DTO: creazione e PATCH fanno la stessa domanda, e due
+    copie del testo divergerebbero al primo ritocco.
+
+    `HTTPException` e non `ValueError`, per la ragione già scelta in
+    `SottotaskUpdate._valida_stato_pianificazione`: si vuole un 400 con una
+    frase leggibile, non il dump 422 di pydantic. Senza questo controllo il
+    valore arriverebbe intatto al CHECK `ck_progetti_urgenza` e tornerebbe come
+    IntegrityError, cioè un 500 opaco su un errore del client.
+
+    I livelli NON si ri-elencano qui: si legge `LIVELLI_URGENZA`, così il
+    messaggio resta vero se la scala cambia.
+    """
+    if valore is not None and valore not in LIVELLI_URGENZA:
+        raise HTTPException(
+            400,
+            f"Urgenza '{valore}' non ammessa: deve essere uno di "
+            f"{', '.join(LIVELLI_URGENZA)}.",
+        )
+    return valore
 
 
 class ProgettoCreate(BaseModel):
@@ -127,8 +151,8 @@ class ProgettoCreate(BaseModel):
     # urgenza (ex `ritardabilita`, rinominata il 03/09/2026). Il default NON è
     # più "media": quel valore ora violerebbe `ck_progetti_urgenza` e ogni
     # creazione fallirebbe con un IntegrityError. Vedi models.LIVELLI_URGENZA.
-    # NB: la VALIDAZIONE dei 4 livelli (400 parlante invece del 500 del CHECK)
-    # arriva col sotto-edit 2, insieme alla risoluzione dell'eredità.
+    # I 4 livelli sono validati da `_valida_urgenza` (400 parlante invece del
+    # 500 che darebbe il CHECK del DB).
     urgenza: Optional[str] = Field(default=URGENZA_DEFAULT, max_length=16)
     data_inizio: Optional[date_type] = None
     data_fine: Optional[date_type] = None
@@ -141,6 +165,11 @@ class ProgettoCreate(BaseModel):
     pm_id: Optional[str] = Field(default=None, max_length=10)
     scadenza_bando: Optional[date_type] = None
     note: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _urgenza_ammessa(self):
+        _valida_urgenza(self.urgenza)
+        return self
 
 
 class ProgettoUpdate(BaseModel):
@@ -164,6 +193,14 @@ class ProgettoUpdate(BaseModel):
     motivo_sospensione: Optional[str] = None
     lezioni_apprese: Optional[str] = None
     note: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _urgenza_ammessa(self):
+        # Qui `None` significa «non toccare» (semantica PATCH), non «azzera»:
+        # `Progetto.urgenza` è NOT NULL e non si può svuotare. `_valida_urgenza`
+        # lascia passare None proprio per questo.
+        _valida_urgenza(self.urgenza)
+        return self
 
 
 # ── DTO endpoint transazionale (Step 2.7, 20/05/2026) ────────────────────

@@ -180,6 +180,37 @@ LIVELLI_URGENZA = ("Bassa", "Medio-Bassa", "Medio-Alta", "Alta")
 URGENZA_DEFAULT = "Medio-Bassa"
 
 
+def urgenza_fase_risolta(fase, progetto):
+    """L'urgenza EFFETTIVA di una fase: la sua, o quella del progetto.
+
+        fase.urgenza or progetto.urgenza
+
+    UNA REGOLA, UN POSTO. È una riga sola, e proprio per questo è il tipo di
+    regola che si riscrive volentieri in ogni lettore — e che poi diverge. Il
+    precedente in casa lo dimostra: la risoluzione gemella dell'assegnatario
+    (`sottotask.dipendente_id or task.dipendente_id`) è documentata in QUATTRO
+    punti (models, routes/sottotask, data_db_impl ×2) ma implementata inline,
+    quindi ogni nuovo lettore la ricopia a memoria. Qui si parte con la funzione,
+    prima che i lettori siano più di uno.
+
+    IL PATTERN — `or` e non `if is None`. Un override a stringa vuota (che il
+    CHECK ck_fasi_urgenza rifiuta, ma che un client distratto potrebbe tentare)
+    deve ricadere sull'eredità come farebbe un NULL: è la stessa scelta, con la
+    stessa motivazione, del commento in `task_settimana_dipendente` sulla
+    risoluzione dell'assegnatario.
+
+    NON PUÒ TORNARE None: `Progetto.urgenza` è NOT NULL proprio perché è la
+    radice dell'eredità. Se un giorno tornasse nullable, questa funzione
+    comincerebbe a restituire None in silenzio e il chiamante lo scoprirebbe
+    altrove — è la ragione per cui quel NOT NULL non è un dettaglio.
+
+    Pura: due oggetti, nessuna query. Chi la chiama ha già la fase e il suo
+    progetto sotto mano (la relationship `Fase.progetto` o il loop che li
+    attraversa entrambi).
+    """
+    return fase.urgenza or progetto.urgenza
+
+
 def _check_in(colonna, valori, ammetti_null=False):
     """Espressione SQL `col IN (...)` per i CheckConstraint dei modelli.
 
