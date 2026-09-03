@@ -155,6 +155,63 @@ STATI_PIANIFICAZIONE_SOTTOTASK = ("Da iniziare", "Sospeso", "Annullato")
 # (ck_dipendenza_task_tipo). Anche nel modello, su DipendenzaTask.
 TIPI_DIPENDENZA = ("FS", "SS", "FF", "SF")
 
+# Urgenza dichiarata dal PM (A1, 03/09/2026). È INPUT UMANO, non un dato d'uso:
+# dice quanto quel lavoro non può aspettare, e nessuna logica lo deduce.
+#
+# QUATTRO livelli SENZA CENTRO, di proposito: una scala dispari lascia sempre la
+# via di fuga del "medio", e il campo che questa sostituisce ne era la prova —
+# 38 progetti su 38 fermi sul default, perché nessuno era costretto a scegliere
+# da che parte stare.
+#
+# Nasce dalla RINOMINA di `Progetto.ritardabilita` (migration f8a9b0c1d2e3), che
+# era già questo con il nome sbagliato e per giunta INVERSO: alta ritardabilità
+# significa bassa urgenza. Non convivono: leggerne una per l'altra darebbe la
+# risposta opposta.
+#
+# Ordine dal meno al più urgente — la posizione nella tupla È la scala, e ci si
+# può confrontare con l'indice quando lo strato 2 modulerà le soglie del
+# semaforo. OGGI NESSUNA LOGICA LO LEGGE, ed è voluto: il dato si raccoglie
+# adesso, si userà quando ci saranno avanzamenti veri da modulare.
+LIVELLI_URGENZA = ("Bassa", "Medio-Bassa", "Medio-Alta", "Alta")
+
+# Il valore dei progetti che non ne hanno mai scelto uno. Vedi la migration per
+# perché si arrotonda VERSO IL BASSO: promuovere un default a "Medio-Alta"
+# attribuirebbe al PM una dichiarazione che non ha mai fatto.
+URGENZA_DEFAULT = "Medio-Bassa"
+
+
+def _check_in(colonna, valori, ammetti_null=False):
+    """Espressione SQL `col IN (...)` per i CheckConstraint dei modelli.
+
+    I CHECK stanno in `__table_args__` e NON solo nelle migration, ed è una
+    correzione: `ck_progetti_stato_ammessi`, `ck_fasi_stato_ammessi` e
+    `ck_task_stato_ammessi` erano creati dalle migration c3d4e5f6a7b8 e
+    d4e5f6a7b8c9 ma NON esistevano nel database — verificato su pg_constraint.
+    `alembic check` non se ne accorgeva perché confronta i MODELLI con lo
+    schema, e quei vincoli nel modello non c'erano.
+
+    L'ipotesi è che il database sia stato ricreato con `create_tables()`
+    (`Base.metadata.create_all`), che dei CHECK dichiarati solo in migration non
+    sa nulla. Dichiarandoli qui sopravvivono a un `create_all`, e i commenti che
+    li citano come garanzie attive tornano veri.
+    """
+    clausola = f"{colonna} IN ({', '.join(repr(v) for v in valori)})"
+    return f"{colonna} IS NULL OR {clausola}" if ammetti_null else clausola
+
+
+# Stati ammessi DAL DATABASE per un task: i sei dichiarabili/pianificabili PIÙ
+# "Eliminato". Il CHECK è più largo della costante `STATI_TASK`, e non è una
+# svista: il soft-delete scrive `stato = "Eliminato"` (routes/tasks.py, via
+# `modifica_task`) ed è raggiungibile dal cestino nel Cantiere. Un CHECK
+# costruito sulla sola `STATI_TASK` — com'era dichiarato nella migration
+# d4e5f6a7b8c9 — farebbe fallire ogni eliminazione con un IntegrityError.
+#
+# "Eliminato" NON va aggiunto a `STATI_TASK` perché quella costante alimenta la
+# tendina dello stato nel Cantiere (frontend `_costanti.js`): il PM se lo
+# ritroverebbe fra le opzioni selezionabili a mano. Il vincolo dice cosa il
+# database ACCETTA, la costante cosa si può SCEGLIERE: la seconda è più stretta.
+STATI_TASK_IN_DB = STATI_TASK + ("Eliminato",)
+
 
 # ══════════════════════════════════════════════════════════════════════
 # CONFIGURAZIONE — Entità gestite dalla pagina admin
@@ -315,7 +372,17 @@ class Progetto(Base):
     # spacchettato in N progetti distinti: mansioni continuative, corsi, innovazione).
     tipologia = Column(String(20), nullable=False, default="ordinario")  # "ordinario" | "bando" | "interna"
     priorita = Column(String(10), nullable=False, default="media")
-    ritardabilita = Column(String(10), nullable=True, default="media")
+    # urgenza: quanto questo progetto non può aspettare. Vedi LIVELLI_URGENZA.
+    #   Fino al 03/09/2026 si chiamava `ritardabilita` ed era il suo INVERSO —
+    #   stesso dato, nome sbagliato, mai letto da nessuna logica.
+    #   NOT NULL con default: il progetto è la RADICE dell'eredità, e una radice
+    #   NULL renderebbe irrisolvibile l'urgenza di tutte le sue fasi
+    #   (`fase.urgenza or progetto.urgenza` tornerebbe None). Il default lato DB
+    #   serve anche perché tre punti creano Progetto fuori dal DTO (seed.py,
+    #   add_p010.py, le due route di creazione).
+    #   Migration f8a9b0c1d2e3.
+    urgenza = Column(String(16), nullable=False,
+                     default=URGENZA_DEFAULT, server_default=URGENZA_DEFAULT)
     data_inizio = Column(Date, nullable=True)
     data_fine = Column(Date, nullable=True)
     budget_ore = Column(Integer, nullable=True)
@@ -341,6 +408,15 @@ class Progetto(Base):
     note = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # I CHECK stanno QUI e non solo nelle migration: vedi `_check_in` in cima al
+    # modulo per il perché (i tre sugli stati erano dichiarati e assenti).
+    __table_args__ = (
+        CheckConstraint(_check_in("stato", STATI_PROGETTO),
+                        name="ck_progetti_stato_ammessi"),
+        CheckConstraint(_check_in("urgenza", LIVELLI_URGENZA),
+                        name="ck_progetti_urgenza"),
+    )
 
     azienda_rel = relationship("Azienda", back_populates="progetti")
     fasi = relationship("Fase", back_populates="progetto", cascade="all, delete-orphan",
@@ -398,9 +474,29 @@ class Fase(Base):
     ore_vendute = Column(Float, nullable=True)
     ore_pianificate = Column(Float, nullable=True)
     stato = Column(String(20), nullable=False, default="Da iniziare")
+    # urgenza: OVERRIDE dell'urgenza del progetto (A1, 03/09/2026).
+    #   NULL — il caso normale — vuol dire «eredita dal progetto». La
+    #   risoluzione è `fase.urgenza or progetto.urgenza`, gemella esatta di
+    #   `sottotask.dipendente_id or task.dipendente_id`.
+    #   nullable=True e SENZA default NON è una lacuna da riempire: il NULL È
+    #   l'informazione. Un valore copiato dal progetto alla creazione sembrerebbe
+    #   identico oggi e DIVERGEREBBE domani, appena il PM cambia l'urgenza del
+    #   progetto — la fase resterebbe ferma al valore di ieri senza che nessuno
+    #   l'abbia deciso. È lo stesso ragionamento, parola per parola, del commento
+    #   su Sottotask.dipendente_id.
+    #   Migration f8a9b0c1d2e3.
+    urgenza = Column(String(16), nullable=True)
     note = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        CheckConstraint(_check_in("stato", STATI_FASE),
+                        name="ck_fasi_stato_ammessi"),
+        # `ammetti_null`: sulla fase il NULL è legittimo e significa «eredita».
+        CheckConstraint(_check_in("urgenza", LIVELLI_URGENZA, ammetti_null=True),
+                        name="ck_fasi_urgenza"),
+    )
 
     progetto = relationship("Progetto", back_populates="fasi")
     # `Task.id` come SECONDO criterio, e non è cosmetico: al 02/09/2026 tutti e
@@ -489,6 +585,16 @@ class Task(Base):
     assegnazioni = relationship("Assegnazione", back_populates="task", cascade="all, delete-orphan")
     consuntivi = relationship("Consuntivo", back_populates="task")
     dipendente_id = Column(String(10), ForeignKey("dipendenti.id"), nullable=True)
+
+    # `STATI_TASK_IN_DB` e non `STATI_TASK`: il CHECK ammette anche "Eliminato",
+    # che il soft-delete scrive e la costante non contiene. Vedi il commento su
+    # STATI_TASK_IN_DB in cima al modulo — costruirlo sulla sola STATI_TASK,
+    # com'era dichiarato nella migration d4e5f6a7b8c9, farebbe fallire ogni
+    # eliminazione dal Cantiere con un IntegrityError.
+    __table_args__ = (
+        CheckConstraint(_check_in("stato", STATI_TASK_IN_DB),
+                        name="ck_task_stato_ammessi"),
+    )
 
     # Dipendenze entranti: righe di DipendenzaTask in cui questo task è
     # successore (cioè i suoi predecessori). Dipendenze uscenti: dove è

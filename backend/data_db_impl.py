@@ -3500,7 +3500,11 @@ def _serializza_stato_progetto(pid):
         progetto = {
             "id": p.id, "nome": p.nome, "cliente": p.cliente,
             "stato": p.stato, "tipologia": p.tipologia,
-            "priorita": p.priorita, "ritardabilita": p.ritardabilita,
+            # `urgenza` (ex `ritardabilita`, rinominata il 03/09/2026). La forma
+            # dello snapshot cambia, ed è indolore: `sal_snapshot` ha 0 righe,
+            # quindi non esiste una foto vecchia da leggere in due formati. Se
+            # ce ne fossero state, sarebbe servito alzare `schema_version`.
+            "priorita": p.priorita, "urgenza": p.urgenza,
             "data_inizio": _iso(p.data_inizio), "data_fine": _iso(p.data_fine),
             "fase_corrente": p.fase_corrente, "sede": p.sede,
             "pm_id": p.pm_id, "pm_nome": _nome_dip(session, p.pm_id),

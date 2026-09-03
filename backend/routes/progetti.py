@@ -98,7 +98,7 @@ from sqlalchemy import func, case
 from deps import require_manager
 from models import (
     get_session, Utente, Progetto, Fase, Task, DipendenzaTask,
-    STATI_PROGETTO, STATI_PROGETTO_ATTIVI,
+    STATI_PROGETTO, STATI_PROGETTO_ATTIVI, URGENZA_DEFAULT,
 )
 from data import ore_consuntivate_progetto, tasso_compilazione_progetto
 from data_db_impl import _next_progetto_id, genera_id_task_multipli, _to_dt
@@ -124,7 +124,12 @@ class ProgettoCreate(BaseModel):
     stato: str = Field(default="Bozza", max_length=30)
     tipologia: str = Field(default="ordinario", max_length=20)
     priorita: str = Field(default="media", max_length=10)
-    ritardabilita: Optional[str] = Field(default="media", max_length=10)
+    # urgenza (ex `ritardabilita`, rinominata il 03/09/2026). Il default NON è
+    # più "media": quel valore ora violerebbe `ck_progetti_urgenza` e ogni
+    # creazione fallirebbe con un IntegrityError. Vedi models.LIVELLI_URGENZA.
+    # NB: la VALIDAZIONE dei 4 livelli (400 parlante invece del 500 del CHECK)
+    # arriva col sotto-edit 2, insieme alla risoluzione dell'eredità.
+    urgenza: Optional[str] = Field(default=URGENZA_DEFAULT, max_length=16)
     data_inizio: Optional[date_type] = None
     data_fine: Optional[date_type] = None
     budget_ore: Optional[int] = Field(default=None, ge=0)
@@ -145,7 +150,7 @@ class ProgettoUpdate(BaseModel):
     stato: Optional[str] = Field(default=None, max_length=30)
     tipologia: Optional[str] = Field(default=None, max_length=20)
     priorita: Optional[str] = Field(default=None, max_length=10)
-    ritardabilita: Optional[str] = Field(default=None, max_length=10)
+    urgenza: Optional[str] = Field(default=None, max_length=16)
     data_inizio: Optional[date_type] = None
     data_fine: Optional[date_type] = None
     budget_ore: Optional[int] = Field(default=None, ge=0)
@@ -328,7 +333,7 @@ def crea_progetto(req: ProgettoCreate, _: Utente = Depends(require_manager)):
             stato=req.stato,
             tipologia=req.tipologia,
             priorita=req.priorita,
-            ritardabilita=req.ritardabilita,
+            urgenza=req.urgenza,
             data_inizio=req.data_inizio,
             data_fine=req.data_fine,
             budget_ore=req.budget_ore,
@@ -405,7 +410,7 @@ def crea_progetto_completo(req: ProgettoCompletoCreate, _: Utente = Depends(requ
 
         nuovo = Progetto(
             id=progetto_id, nome=p.nome, cliente=p.cliente, stato=p.stato,
-            tipologia=p.tipologia, priorita=p.priorita, ritardabilita=p.ritardabilita,
+            tipologia=p.tipologia, priorita=p.priorita, urgenza=p.urgenza,
             data_inizio=p.data_inizio, data_fine=p.data_fine, budget_ore=p.budget_ore,
             giornate_vendute=p.giornate_vendute, valore_contratto=p.valore_contratto,
             descrizione=p.descrizione, fase_corrente=p.fase_corrente, sede=p.sede,
@@ -572,7 +577,7 @@ def completa_progetto(progetto_id: str, req: ProgettoCompletoCreate,
         progetto.stato = p.stato
         progetto.tipologia = p.tipologia
         progetto.priorita = p.priorita
-        progetto.ritardabilita = p.ritardabilita
+        progetto.urgenza = p.urgenza
         progetto.data_inizio = p.data_inizio
         progetto.data_fine = p.data_fine
         progetto.budget_ore = p.budget_ore
