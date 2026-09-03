@@ -1,297 +1,233 @@
-import React, { useState, useEffect } from 'react'
-import { fetchDipendenti, fetchTasks } from '../api'
+/**
+ * ═════════════════════════════════════════════════════════════════════════
+ * AttivitaInterne.jsx — Chi passa quanto tempo su lavoro non-cliente
+ * ═════════════════════════════════════════════════════════════════════════
+ *
+ * RISCRITTA il 03/09/2026, e non per stile: la versione precedente mostrava
+ * dati SBAGLIATI e permetteva una scrittura pericolosa.
+ *
+ * IL BUG. Le attività interne erano modellate come task di un progetto-
+ * contenitore, `P010`, e la pagina faceva `fetchTasks('P010')`. Ma P010 è stato
+ * RIUSATO per un progetto-cliente vero — «AIoT Smart City Maida», Comune di
+ * Maida — mentre le interne diventavano 27 progetti `tipologia='interna'`.
+ * Quindi la pagina:
+ *   - mostrava i 5 task del progetto Maida spacciandoli per attività interne;
+ *   - NON mostrava nessuna delle 27 interne vere;
+ *   - col form di creazione, scriveva task dentro un progetto FATTURABILE.
+ *
+ * COSA MOSTRA ORA — l'asse è la PERSONA, non il progetto. La domanda a cui
+ * questa pagina risponde è «chi passa quanto tempo su cosa che non è cliente»,
+ * e un elenco piatto dei 27 progetti la direbbe peggio: 19 su 27 sono mansioni
+ * continuative con la stessa finestra annuale, e in fila sarebbero una lista
+ * amorfa. Ogni riga porta comunque il progetto interno di appartenenza, così è
+ * chiaro SU COSA.
+ *
+ * IL FORM DI CREAZIONE È STATO RIMOSSO, non riparato. Nel modello nuovo il
+ * gesto è diventato ambiguo: «crea un'attività interna» significava «aggiungi
+ * un task al contenitore», ma i contenitori ora sono 27. Le sue sette
+ * `CATEGORIE` cablate non corrispondono ai progetti reali — a «Formazione»
+ * corrispondono almeno tre progetti distinti (PC01, PI15, PI15b). Aggiungere un
+ * task a un progetto interno si fa dal Cantiere, dove tutte e 27 sono già
+ * visibili e modificabili.
+ *
+ * QUI SI GUARDA, NON SI DICHIARA. Le ore interne le dichiara il dipendente
+ * dalla sua Consuntivazione: i task interni compaiono in `/me` come tutti gli
+ * altri, con lo slider e le ore derivate (verificato — 15 dipendenti su 18 ne
+ * hanno). Questa è una vista manageriale.
+ *
+ * ~h/sett è un'APPROSSIMAZIONE, e va letta come tale: il piano del task
+ * spalmato sulle settimane di durata, la stessa formula (e lo stesso debito di
+ * distribuzione uniforme) di `carico_settimanale_dipendente`. Le ore REALI
+ * stanno nei consuntivi.
+ */
 
-const CATEGORIE = [
-  'Formazione',
-  'Amministrazione',
-  'Coordinamento',
-  'HR e recruiting',
-  'Strategia e relazioni',
-  'Vendita e networking',
-  'Altro',
-]
+import React, { useState, useEffect } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { fetchAttivitaInterne, eliminaAttivitaInterna } from '../api'
+
+/* I colori delle tre famiglie. Servono a distinguere a colpo d'occhio un corso
+ * da una mansione continuativa: sono cose diverse che convivono nella stessa
+ * riga-persona. Palette del design system, tono basso — è una categoria, non
+ * un allarme. */
+const STILE_FAMIGLIA = {
+  'Corsi': 'bg-sky-900/40 text-sky-300 border-sky-800/60',
+  'Mansioni continuative': 'bg-surface-800 text-gray-400 border-border-default',
+  'Sviluppo interno': 'bg-violet-900/30 text-violet-300 border-violet-800/60',
+  'Altre': 'bg-surface-800 text-gray-500 border-border-subtle',
+}
+
+function ChipFamiglia({ famiglia }) {
+  const cls = STILE_FAMIGLIA[famiglia] || STILE_FAMIGLIA['Altre']
+  return (
+    <span className={`text-[10px] px-1.5 py-0.5 rounded border ${cls} shrink-0`}>
+      {famiglia}
+    </span>
+  )
+}
+
+const fmtMese = (iso) =>
+  iso ? new Date(iso).toLocaleDateString('it-IT', { month: 'short', year: '2-digit' }) : '?'
 
 export default function AttivitaInterne() {
-  const [dipendenti, setDipendenti] = useState([])
-  const [attivita, setAttivita] = useState([])
+  const [dati, setDati] = useState(null)
   const [loading, setLoading] = useState(true)
-  const [showForm, setShowForm] = useState(false)
-  const [saving, setSaving] = useState(false)
-  const [feedback, setFeedback] = useState(null)
+  const [errore, setErrore] = useState(null)
+  const [filtro, setFiltro] = useState(null)   // null = tutte le famiglie
+  const navigate = useNavigate()
 
-  // Form fields
-  const [formDip, setFormDip] = useState([])
-  const [formNome, setFormNome] = useState('')
-  const [formCategoria, setFormCategoria] = useState('Formazione')
-  const [formOreSett, setFormOreSett] = useState(4)
-  const [formInizio, setFormInizio] = useState('')
-  const [formFine, setFormFine] = useState('')
-  const [formNote, setFormNote] = useState('')
-
-  const caricaDati = () => {
+  const carica = () => {
     setLoading(true)
-    Promise.all([fetchDipendenti(), fetchTasks('P010')])
-      .then(([d, t]) => {
-        setDipendenti(d)
-        setAttivita(t)
-      })
-      .catch(() => {})
+    fetchAttivitaInterne()
+      .then(setDati)
+      .catch((e) => setErrore(e.message || 'Errore di caricamento'))
       .finally(() => setLoading(false))
   }
 
-  useEffect(() => { caricaDati() }, [])
+  useEffect(carica, [])
 
-  const resetForm = () => {
-    setFormDip([])
-    setFormNome('')
-    setFormCategoria('Formazione')
-    setFormOreSett(4)
-    setFormInizio('')
-    setFormFine('')
-    setFormNote('')
-    setShowForm(false)
-  }
-
-  const handleSalva = async () => {
-    if (formDip.length === 0 || !formNome || !formInizio || !formFine) {
-      setFeedback({ tipo: 'errore', msg: 'Compila tutti i campi obbligatori (almeno una persona).' })
-      return
-    }
-
-    const inizio = new Date(formInizio)
-    const fine = new Date(formFine)
-    if (fine <= inizio) {
-      setFeedback({ tipo: 'errore', msg: 'La data di fine deve essere dopo la data di inizio.' })
-      return
-    }
-
-    const settimane = Math.max(1, Math.round((fine - inizio) / (7 * 86400000)))
-    const oreTotali = formOreSett * settimane
-
-    setSaving(true)
+  const elimina = async (a) => {
+    if (!confirm(`Eliminare «${a.nome}»?\n\nIl task viene archiviato (soft delete), le ore già dichiarate restano.`)) return
     try {
-      // Chiamate sequenziali per evitare conflitti ID nel backend
-      for (const dipId of formDip) {
-        const res = await fetch('/api/attivita-interne', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            dipendente_id: dipId,
-            nome: formNome,
-            categoria: formCategoria,
-            ore_settimanali: formOreSett,
-            ore_stimate: oreTotali,
-            data_inizio: formInizio,
-            data_fine: formFine,
-            note: formNote,
-          }),
-        })
-        if (!res.ok) throw new Error(`Errore per ${dipId}`)
-      }
-      const nomi = formDip.map(id => dipendenti.find(d => d.id === id)?.nome || id)
-      setFeedback({ tipo: 'ok', msg: `Attività "${formNome}" aggiunta per ${nomi.join(', ')}.` })
-      resetForm()
-      caricaDati()
-    } catch (err) {
-      setFeedback({ tipo: 'errore', msg: 'Errore nel salvataggio: ' + err.message })
-    } finally {
-      setSaving(false)
+      await eliminaAttivitaInterna(a.task_id)
+      carica()
+    } catch (e) {
+      // Il backend manda messaggi scritti per essere letti — per esempio se il
+      // task non è di un progetto interno. Non si sostituiscono con un generico.
+      setErrore(e.message)
     }
   }
 
-  const handleElimina = async (taskId, taskNome) => {
-    if (!confirm(`Eliminare "${taskNome}"?`)) return
-    try {
-      const res = await fetch(`/api/attivita-interne/${taskId}`, { method: 'DELETE' })
-      if (!res.ok) throw new Error('Errore')
-      setFeedback({ tipo: 'ok', msg: `"${taskNome}" eliminata.` })
-      caricaDati()
-    } catch (err) {
-      setFeedback({ tipo: 'errore', msg: 'Errore nell\'eliminazione.' })
-    }
-  }
+  if (loading) return <p className="text-gray-400">Caricamento…</p>
 
-  if (loading) return <p className="text-gray-400">Caricamento...</p>
+  const tot = dati?.totali ?? { n_progetti: 0, n_task: 0, n_persone: 0, per_famiglia: {} }
+  const famiglie = Object.entries(tot.per_famiglia || {})
 
-  // Raggruppa attività per persona
-  const perPersona = {}
-  attivita.forEach(a => {
-    if (!perPersona[a.dipendente_id]) perPersona[a.dipendente_id] = []
-    perPersona[a.dipendente_id].push(a)
-  })
-
-  // Calcola ore settimanali stimate per ogni attività
-  const calcolaOreSett = (a) => {
-    const inizio = new Date(a.data_inizio)
-    const fine = new Date(a.data_fine)
-    const settimane = Math.max(1, Math.round((fine - inizio) / (7 * 86400000)))
-    return (a.ore_stimate / settimane).toFixed(1)
-  }
+  // Il filtro agisce sulle ATTIVITÀ, non sulle persone: una persona resta
+  // visibile finché le resta almeno un'attività della famiglia scelta.
+  const persone = (dati?.per_persona ?? [])
+    .map((g) => ({ ...g, attivita: filtro ? g.attivita.filter((a) => a.famiglia === filtro) : g.attivita }))
+    .filter((g) => g.attivita.length > 0)
 
   return (
-    <div>
-      <div className="flex justify-between items-start mb-6">
-        <div>
-          <h1 className="text-2xl font-bold">🏢 Attività Interne</h1>
-          <p className="text-gray-400 mt-1">Attività non a progetto: formazione, amministrazione, coordinamento, HR.</p>
-          <p className="text-xs text-gray-500 mt-1">Queste attività completano il quadro settimanale di ogni persona e sono registrabili tramite consuntivazione.</p>
+    <div className="max-w-5xl">
+      <div className="flex items-baseline justify-between gap-4 mb-1">
+        <h1 className="text-xl font-semibold">Attività interne</h1>
+        <p className="text-xs text-gray-500">
+          {tot.n_progetti} progetti · {tot.n_task} attività · {tot.n_persone} persone
+        </p>
+      </div>
+      <p className="text-xs text-gray-500 mb-4">
+        Lavoro senza cliente: formazione, mansioni continuative, sviluppo interno.
+        Le ore si dichiarano dalla{' '}
+        <button onClick={() => navigate('/consuntivazione-new')}
+          className="text-accent-300 hover:text-accent-400">Consuntivazione</button>
+        ; per aggiungere un'attività, aprila dal{' '}
+        <button onClick={() => navigate('/cantiere')}
+          className="text-accent-300 hover:text-accent-400">Cantiere</button>
+        {' '}sul progetto interno relativo.
+      </p>
+
+      {errore && (
+        <div className="text-xs bg-red-900/30 border border-red-800 text-red-200 rounded-md px-3 py-2 mb-4">
+          {errore}
         </div>
+      )}
+
+      {/* Filtro per famiglia — chip cliccabili, non una tendina: sono tre. */}
+      <div className="flex flex-wrap gap-2 mb-4">
         <button
-          onClick={() => setShowForm(!showForm)}
-          className="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded-lg text-sm font-medium transition-colors"
+          onClick={() => setFiltro(null)}
+          className={`text-xs px-3 py-1 rounded-lg border transition-colors ${
+            filtro === null
+              ? 'bg-accent-600 text-white border-accent-500'
+              : 'border-border-default text-gray-400 hover:text-gray-200'
+          }`}
         >
-          {showForm ? '✕ Chiudi' : '+ Nuova attività'}
+          Tutte <span className="font-data">{tot.n_progetti}</span>
         </button>
+        {famiglie.map(([f, n]) => (
+          <button
+            key={f}
+            onClick={() => setFiltro(filtro === f ? null : f)}
+            className={`text-xs px-3 py-1 rounded-lg border transition-colors ${
+              filtro === f
+                ? 'bg-accent-600 text-white border-accent-500'
+                : 'border-border-default text-gray-400 hover:text-gray-200'
+            }`}
+          >
+            {f} <span className="font-data">{n}</span>
+          </button>
+        ))}
       </div>
 
-      {/* Feedback */}
-      {feedback && (
-        <div className={`mb-4 p-3 rounded-lg text-sm ${feedback.tipo === 'ok' ? 'bg-green-900/20 border border-green-700 text-green-300' : 'bg-red-900/20 border border-red-700 text-red-300'}`}>
-          {feedback.msg}
-          <button onClick={() => setFeedback(null)} className="ml-3 text-xs underline">chiudi</button>
+      {persone.length === 0 ? (
+        <div className="card p-8 text-center">
+          <p className="text-gray-300 mb-1">Nessuna attività interna</p>
+          <p className="text-sm text-gray-500">
+            {filtro ? `Nessuna attività della famiglia «${filtro}».` : 'Non ci sono attività interne assegnate.'}
+          </p>
         </div>
-      )}
-
-      {/* Form nuova attività */}
-      {showForm && (
-        <div className="bg-gray-900 rounded-xl border border-gray-800 p-5 mb-6">
-          <h3 className="font-semibold mb-4">Nuova attività interna</h3>
-          <div className="grid grid-cols-2 gap-4">
-            <div className="col-span-2">
-              <label className="block text-xs text-gray-400 mb-2">Persone * <span className="text-gray-600">(seleziona una o più)</span></label>
-              <div className="grid grid-cols-3 gap-1.5 max-h-48 overflow-y-auto bg-gray-800 border border-gray-700 rounded-lg p-3">
-                <button type="button" onClick={() => {
-                  if (formDip.length === dipendenti.length) setFormDip([])
-                  else setFormDip(dipendenti.map(d => d.id))
-                }} className="col-span-3 text-xs text-blue-400 hover:text-blue-300 text-left mb-1">
-                  {formDip.length === dipendenti.length ? '☐ Deseleziona tutti' : '☑ Seleziona tutti'}
-                </button>
-                {dipendenti.map(d => {
-                  const checked = formDip.includes(d.id)
-                  return (
-                    <label key={d.id} className={`flex items-center gap-2 p-1.5 rounded cursor-pointer text-sm transition-colors ${checked ? 'bg-blue-900/30' : 'hover:bg-gray-700/50'}`}>
-                      <input type="checkbox" checked={checked}
-                        onChange={() => {
-                          if (checked) setFormDip(formDip.filter(id => id !== d.id))
-                          else setFormDip([...formDip, d.id])
-                        }}
-                        className="rounded border-gray-600" />
-                      <span className={checked ? 'text-white' : 'text-gray-400'}>{d.nome}</span>
-                      <span className="text-[10px] text-gray-600">{d.profilo}</span>
-                    </label>
-                  )
-                })}
+      ) : (
+        <div className="space-y-3">
+          {persone.map((g) => (
+            <div key={g.dipendente_id} className="card p-4">
+              <div className="flex items-baseline justify-between gap-3 mb-2">
+                <div className="min-w-0">
+                  <span className="font-semibold text-gray-100">{g.nome}</span>
+                  <span className="text-xs text-gray-500 ml-2">
+                    {g.profilo}{g.ore_sett ? ` · ${g.ore_sett}h/sett` : ''}
+                  </span>
+                </div>
+                <span className="text-sm text-accent-300 font-data shrink-0">
+                  ~{g.ore_settimana_interne}h/sett
+                </span>
               </div>
-              {formDip.length > 0 && <p className="text-xs text-blue-400 mt-1">{formDip.length} persone selezionate</p>}
-            </div>
-            <div>
-              <label className="block text-xs text-gray-400 mb-1">Nome attività *</label>
-              <input type="text" value={formNome} onChange={e => setFormNome(e.target.value)}
-                placeholder="es. Corso inglese B2, Gestione presenze..."
-                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm" />
-            </div>
-            <div>
-              <label className="block text-xs text-gray-400 mb-1">Categoria</label>
-              <select value={formCategoria} onChange={e => setFormCategoria(e.target.value)}
-                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm">
-                {CATEGORIE.map(c => <option key={c} value={c}>{c}</option>)}
-              </select>
-            </div>
-            <div>
-              <label className="block text-xs text-gray-400 mb-1">Ore settimanali stimate</label>
-              <input type="number" min="1" max="40" value={formOreSett} onChange={e => setFormOreSett(parseInt(e.target.value) || 1)}
-                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm" />
-            </div>
-            <div>
-              <label className="block text-xs text-gray-400 mb-1">Data inizio *</label>
-              <input type="date" value={formInizio} onChange={e => setFormInizio(e.target.value)}
-                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm" />
-            </div>
-            <div>
-              <label className="block text-xs text-gray-400 mb-1">Data fine *</label>
-              <input type="date" value={formFine} onChange={e => setFormFine(e.target.value)}
-                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm" />
-            </div>
-            <div className="col-span-2">
-              <label className="block text-xs text-gray-400 mb-1">Note (opzionale)</label>
-              <input type="text" value={formNote} onChange={e => setFormNote(e.target.value)}
-                placeholder="es. Certificazione obbligatoria, provider XYZ..."
-                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm" />
-            </div>
-          </div>
-          <div className="flex gap-3 mt-4">
-            <button onClick={handleSalva} disabled={saving}
-              className="px-5 py-2 bg-green-600 hover:bg-green-500 disabled:bg-gray-600 rounded-lg text-sm font-medium transition-colors">
-              {saving ? 'Salvataggio...' : '✅ Salva attività'}
-            </button>
-            <button onClick={resetForm}
-              className="px-5 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm transition-colors">
-              Annulla
-            </button>
-          </div>
-          {formDip.length > 0 && formOreSett && formInizio && formFine && (
-            <p className="text-xs text-gray-500 mt-3">
-              Ore totali stimate: {formOreSett * Math.max(1, Math.round((new Date(formFine) - new Date(formInizio)) / (7 * 86400000)))}h
-              su {Math.max(1, Math.round((new Date(formFine) - new Date(formInizio)) / (7 * 86400000)))} settimane
-            </p>
-          )}
-        </div>
-      )}
 
-      {/* Tabella attività raggruppate per persona */}
-      <div className="space-y-4">
-        {dipendenti
-          .filter(d => perPersona[d.id] && perPersona[d.id].length > 0)
-          .sort((a, b) => a.nome.localeCompare(b.nome))
-          .map(d => {
-            const tasks = perPersona[d.id]
-            const totOreSett = tasks.reduce((s, a) => s + parseFloat(calcolaOreSett(a)), 0)
-            return (
-              <div key={d.id} className="bg-gray-900 rounded-xl border border-gray-800 p-4">
-                <div className="flex justify-between items-center mb-3">
-                  <div>
-                    <span className="font-semibold">{d.nome}</span>
-                    <span className="text-xs text-gray-500 ml-2">{d.profilo} · {d.ore_sett}h/sett</span>
+              <div className="space-y-1">
+                {g.attivita.map((a) => (
+                  <div key={a.task_id}
+                    className="flex items-center gap-3 px-2.5 py-1.5 rounded-lg bg-surface-800/50 text-sm">
+                    <ChipFamiglia famiglia={a.famiglia} />
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-gray-200 truncate">{a.nome}</span>
+                      <span className="block text-[11px] text-gray-500 truncate">
+                        <span className="font-mono text-gray-600">{a.progetto_id}</span>
+                        {' '}{a.progetto_nome}
+                      </span>
+                    </span>
+                    <span className="text-[11px] text-gray-500 shrink-0 hidden sm:inline">
+                      {fmtMese(a.data_inizio)} → {fmtMese(a.data_fine)}
+                    </span>
+                    <span className="text-xs font-data text-gray-400 w-16 text-right shrink-0">
+                      {a.ore_settimana != null ? `~${a.ore_settimana}h/sett` : '—'}
+                    </span>
+                    <button
+                      onClick={() => elimina(a)}
+                      title="Archivia questa attività (soft delete)"
+                      className="text-xs text-red-500 hover:text-red-400 px-1 shrink-0"
+                    >
+                      ✕
+                    </button>
                   </div>
-                  <span className="text-sm font-mono text-blue-400">~{totOreSett.toFixed(0)}h/sett interne</span>
-                </div>
-                <div className="space-y-1.5">
-                  {tasks.map(a => (
-                    <div key={a.id} className="flex items-center justify-between p-2.5 rounded-lg bg-gray-800/50 text-sm">
-                      <div className="flex-1 min-w-0">
-                        <span className="font-medium">{a.nome}</span>
-                        <span className="text-xs text-gray-500 ml-2">{a.fase}</span>
-                      </div>
-                      <div className="flex items-center gap-4">
-                        <span className="text-xs text-gray-400">
-                          {new Date(a.data_inizio).toLocaleDateString('it-IT', { month: 'short', year: '2-digit' })} → {new Date(a.data_fine).toLocaleDateString('it-IT', { month: 'short', year: '2-digit' })}
-                        </span>
-                        <span className="text-xs font-mono w-16 text-right text-blue-300">~{calcolaOreSett(a)}h/sett</span>
-                        <button onClick={() => handleElimina(a.id, a.nome)}
-                          className="text-xs text-red-500 hover:text-red-400 transition-colors px-2">✕</button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
+                ))}
               </div>
-            )
-          })}
-      </div>
+            </div>
+          ))}
+        </div>
+      )}
 
-      {/* Persone senza attività interne */}
-      {dipendenti.filter(d => !perPersona[d.id] || perPersona[d.id].length === 0).length > 0 && (
-        <div className="mt-6 bg-gray-900 rounded-xl border border-gray-800 p-4">
-          <h3 className="font-semibold mb-3 text-sm">Senza attività interne assegnate</h3>
-          <div className="flex flex-wrap gap-2">
-            {dipendenti
-              .filter(d => !perPersona[d.id] || perPersona[d.id].length === 0)
-              .map(d => (
-                <button key={d.id} onClick={() => { setFormDip([d.id]); setShowForm(true) }}
-                  className="text-xs px-3 py-1.5 rounded-lg border border-yellow-700 bg-yellow-900/20 text-yellow-300 hover:bg-yellow-900/40 transition-colors cursor-pointer">
-                  + {d.nome}
-                </button>
-              ))}
-          </div>
+      {/* Le attività senza assegnatario: se ce ne fossero, non devono sparire —
+          sono lavoro pianificato che nessuno sta facendo. */}
+      {(dati?.senza_assegnatario?.length ?? 0) > 0 && (
+        <div className="card p-4 mt-3 border-amber-900/40">
+          <h3 className="text-sm font-semibold text-amber-300 mb-2">
+            Senza assegnatario ({dati.senza_assegnatario.length})
+          </h3>
+          {dati.senza_assegnatario.map((a) => (
+            <div key={a.task_id} className="text-sm text-gray-300 py-1">
+              {a.nome} <span className="text-xs text-gray-500">· {a.progetto_nome}</span>
+            </div>
+          ))}
         </div>
       )}
     </div>

@@ -461,6 +461,22 @@ export async function caricaBozza(_progettoId) {
 //  HOME — dashboard management/PM
 // ═════════════════════════════════════════════════════════════════════════
 
+export async function fetchAttivitaInterne() {
+  // → { progetti, per_persona, senza_assegnatario, totali }
+  //
+  // Le ATTIVITÀ INTERNE sono 27 PROGETTI `tipologia='interna'`, non i task di
+  // un contenitore: fino al 03/09/2026 questa pagina chiamava
+  // `fetchTasks('P010')`, ma P010 è stato riusato per un progetto-cliente
+  // (AIoT Smart City Maida) — mostrava i suoi task e permetteva di scriverci
+  // dentro. Il nuovo endpoint filtra per tipologia e Maida è fuori portata.
+  return apiFetch(`${API_BASE}/attivita-interne`);
+}
+
+export async function eliminaAttivitaInterna(taskId) {
+  // 400 se il task NON appartiene a un progetto interno (Maida compreso).
+  return apiFetch(`${API_BASE}/attivita-interne/${taskId}`, { method: 'DELETE' });
+}
+
 export async function fetchHomeDashboard() {
   // → { rami: [{azienda_id, azienda, polso, attenzione}], interne, team }
   //
