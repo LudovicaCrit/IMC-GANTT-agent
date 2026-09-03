@@ -401,20 +401,51 @@ def ore_consuntivate_progetto(pid):
     session.close()
     return total or 0
 
-def progetti_attivi_visibili(current_user):
-    """Id dei progetti ATTIVI visibili a `current_user` (filtro self-or-manager).
+def progetti_attivi_visibili(current_user, solo_attivi=True):
+    """Id dei progetti visibili a `current_user` (filtro self-or-manager).
 
     Confina nello strato dati la conoscenza del DB del filtro di visibilità,
     così lo stesso filtro è riusabile identico dalla Home management, dalla Home
     dipendente e dalla Consuntivazione (coerente col Blocco 4 e con la futura
     conversione ORM).
 
-    Attivi = Progetto.stato in STATI_PROGETTO_ATTIVI.
-    Identità:
-      - manager → tutti gli attivi;
+    DUE DOMANDE, NON UNA — ed è la ragione del parametro (03/09/2026)
+    ----------------------------------------------------------------
+    «Chi può vedere questo progetto?» e «quali stati mi interessano?» sono
+    indipendenti, ma stavano annodate: la funzione rispondeva solo per gli
+    attivi, e chi voleva un altro scope avrebbe dovuto riscrivere la regola
+    d'identità. Il parametro le separa senza sdoppiare nulla.
+
+    `solo_attivi=True`  (DEFAULT) — solo STATI_PROGETTO_ATTIVI. È il
+        comportamento storico, invariato: i chiamanti che non passano il
+        parametro non cambiano di una virgola.
+    `solo_attivi=False` — TUTTI gli stati, stessa identica regola di identità.
+
+    LA REGOLA DI CHI-VEDE-COSA È UNA SOLA, e il parametro non la sfiora: sotto,
+    `filtro_stato` è una lista di condizioni che si aggiunge o resta vuota,
+    mentre i due rami dell'identità (manager / PM+membro) sono scritti una volta
+    e valgono per entrambi gli scope. Se un domani cambiasse chi vede cosa,
+    cambierebbe in un punto. È la stessa disciplina di `_baseline_percentuali`,
+    dove l'`if` sceglie SOLO la coppia (tabella, colonna) e il resto è comune.
+
+    CHI USA `False`, e perché: il POLSO della Home (`/home/dashboard`). Un
+    progetto COMPLETATO non chiede decisioni — quindi resta fuori
+    dall'«attenzione», che continua a usare il default — ma è la vittoria più
+    leggibile che ci sia, e una Home che mostra solo ciò che va male diventa una
+    pagina che si smette di aprire. Il polso conta anche le chiusure; le cose da
+    guardare no.
+
+    NOTA SUL NOME. Con `solo_attivi=False` il nome della funzione è
+    imperfetto — restituisce i visibili, non gli «attivi visibili». Rinominarla
+    toccherebbe i chiamanti e il vocabolario di tre docstring: si è preferito il
+    parametro con default esplicito, che non muove nulla di ciò che già funziona.
+
+    Identità (identica nei due scope — dove qui si legge «attivi», con
+    `solo_attivi=False` si legge «di qualunque stato»):
+      - manager → tutti;
       - altrimenti → UNIONE (senza duplicati) di:
-          a) progetti attivi di cui è PM (Progetto.pm_id == dipendente_id);
-          b) progetti attivi con almeno un task assegnato a lui
+          a) progetti di cui è PM (Progetto.pm_id == dipendente_id);
+          b) progetti con almeno un task assegnato a lui
              (Task.dipendente_id == dipendente_id), anche se il PM è un altro.
              Così un membro vede i progetti su cui lavora, non solo quelli che
              dirige.
@@ -444,24 +475,30 @@ def progetti_attivi_visibili(current_user):
 
     session = get_session()
     try:
+        # L'UNICO punto in cui `solo_attivi` interviene: una lista di condizioni
+        # da spalmare sui tre rami. Vuota = nessun filtro sugli stati. Da qui in
+        # giù non si sa più quale scope sia stato chiesto, e non deve importare —
+        # la regola di CHI VEDE COSA è la stessa per entrambi.
+        filtro_stato = (
+            [Progetto.stato.in_(STATI_PROGETTO_ATTIVI)] if solo_attivi else []
+        )
+
         if current_user.ruolo_app == "manager":
-            q = session.query(Progetto.id).filter(
-                Progetto.stato.in_(STATI_PROGETTO_ATTIVI)
-            )
+            q = session.query(Progetto.id).filter(*filtro_stato)
             return [pid for (pid,) in q.all()]
 
         did = current_user.dipendente_id
-        # a) progetti attivi di cui è PM
+        # a) progetti di cui è PM
         pm_q = session.query(Progetto.id).filter(
-            Progetto.stato.in_(STATI_PROGETTO_ATTIVI),
+            *filtro_stato,
             Progetto.pm_id == did,
         )
-        # b) progetti attivi con almeno un task assegnato a lui
+        # b) progetti con almeno un task assegnato a lui
         membro_q = (
             session.query(Progetto.id)
             .join(Task, Task.progetto_id == Progetto.id)
             .filter(
-                Progetto.stato.in_(STATI_PROGETTO_ATTIVI),
+                *filtro_stato,
                 Task.dipendente_id == did,
             )
         )
