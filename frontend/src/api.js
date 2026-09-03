@@ -458,6 +458,23 @@ export async function caricaBozza(_progettoId) {
 }
 
 // ═════════════════════════════════════════════════════════════════════════
+//  HOME — dashboard management/PM
+// ═════════════════════════════════════════════════════════════════════════
+
+export async function fetchHomeDashboard() {
+  // → { rami: [{azienda_id, azienda, polso, attenzione}], interne, team }
+  //
+  // `get_current_user` e NON manager-only: funziona per manager, PM e membri.
+  // È la ragione per cui esiste — la vecchia Home chiamava /progetti e
+  // /dipendenti (entrambi require_manager) e per un dipendente si rompeva con
+  // un 403 dentro un Promise.all, lasciando la pagina bianca.
+  //
+  // I `rami` sono quelli che chi guarda ha DAVVERO: 0, 1 o 2. Non due blocchi
+  // fissi — un PM di una sola società non deve vedere una colonna vuota.
+  return apiFetch(`${API_BASE}/home/dashboard`);
+}
+
+// ═════════════════════════════════════════════════════════════════════════
 //  CONSUNTIVI
 // ═════════════════════════════════════════════════════════════════════════
 

@@ -166,8 +166,20 @@ def _voce_attenzione(p, nodo, sforamenti, oggi):
         "nome": p.nome,
         "cliente": p.cliente,
         "pm_id": p.pm_id,
+        # `stato` e `figli_rossi` servono al SOLO consumatore di questa voce, e
+        # senza di loro direbbe il falso. `PastigliaSemaforo` (frontend) li
+        # legge per costruire il tooltip:
+        #   - `stato` distingue i DUE GRIGI. P006 è grigio perché SOSPESO, non
+        #     perché gli manchi la data (ce l'ha, 2026-03-31): senza lo stato il
+        #     tooltip direbbe «manca la data di fine», che è falso.
+        #   - `figli_rossi` dentro il sotto-oggetto `semaforo`, dove la
+        #     pastiglia lo cerca: con `origine="figli"` e il campo assente
+        #     scriverebbe «0 fasi sono in ritardo».
+        # Sono entrambi già in mano qui: non costano una query.
+        "stato": p.stato,
         "semaforo": {"colore": colore,
-                     "origine": nodo["origine"] if nodo else None},
+                     "origine": nodo["origine"] if nodo else None,
+                     "figli_rossi": nodo["figli_rossi"] if nodo else 0},
         "urgenza": p.urgenza,
         "data_fine": p.data_fine.isoformat() if p.data_fine else None,
         "motivi": motivi,
