@@ -23,6 +23,13 @@ const TOOLTIP = {
   // non lo è. Il tooltip lo dice in entrambi i casi.
   oreDerivate: 'Calcolate dall\'avanzamento: quanto è avanzato per la sua ' +
                'stima, oppure le ore reali dove le hai scritte a mano.',
+  // Le due caselle-ore guardano INDIETRO («quanto è costato»), questa guarda
+  // AVANTI. Il tooltip lo dice esplicitamente perché sono adiacenti e si
+  // somigliano: senza, «ore» e «ore» a due centimetri di distanza si
+  // confondono, e il campo verrebbe compilato con il numero sbagliato.
+  residuo: 'Quante ore mancano ancora per finire, secondo te. È una STIMA ' +
+           'in avanti, non le ore fatte. Vuoto = non l\'hai stimato; ' +
+           '0 = non manca più niente. Scrivi nella nota che cosa resta da fare.',
 }
 
 /* ── Helpers ──────────────────────────────────────────────────────── */
@@ -146,6 +153,12 @@ export default function ConsuntivazioneUser() {
     // numero.
     if (campo === 'percentuale') return t.percentuale ?? t.baseline_pct ?? 0
     if (campo === 'ore_effettive') return t.ore_effettive ?? ''
+    // `?? ''` e non `?? 0`: il campo vuoto significa «non stimato», e uno zero
+    // precompilato direbbe «non manca più niente» a nome di chi non ha ancora
+    // risposto. Sono le due facce della stessa distinzione NULL/0.0 che la
+    // colonna porta in DB — qui diventa «casella vuota» contro «ci ho scritto
+    // zero», e il form non deve appiattirle.
+    if (campo === 'ore_stimate_residue') return t.ore_stimate_residue ?? ''
     if (campo === 'bloccato') return t.stato_dichiarato === 'Bloccato'
     // Nodo F-2. `=== true` e non truthy: /me manda sempre il campo, false
     // incluso, e la domanda ha una risposta anche quando la riga non esiste.
@@ -171,6 +184,7 @@ export default function ConsuntivazioneUser() {
     // 40% suggerirebbe di aver disfatto il lavoro.
     if (campo === 'percentuale') return p.percentuale ?? p.baseline_pct
     if (campo === 'ore_effettive') return p.ore_effettive ?? ''
+    if (campo === 'ore_stimate_residue') return p.ore_stimate_residue ?? ''
     if (campo === 'bloccato') return p.stato_dichiarato === 'Bloccato'
     if (campo === 'nota') return p.nota ?? ''
     if (campo === 'presaVisione') return p.presa_visione === true
@@ -287,6 +301,7 @@ export default function ConsuntivazioneUser() {
      */
     const avanzamenti_sottotask = {}
     const ore_effettive_sottotask = {}
+    const ore_stimate_residue_sottotask = {}
     const bloccati_sottotask = []
     const note_sottotask = {}
     // Nodo F-2: le unità confermate «ancora ferme». Due liste di SOLI ID — è il
@@ -311,6 +326,15 @@ export default function ConsuntivazioneUser() {
       // derivazione invece di riattivarla.
       if (m.ore_effettive !== undefined && String(m.ore_effettive).trim() !== '') {
         ore_effettive_sottotask[id] = parseFloat(m.ore_effettive)
+      }
+      // Stessa condizione delle ore effettive, e per la stessa ragione: campo
+      // svuotato = chiave assente = non toccare la stima già salvata. Qui però
+      // lo ZERO va mandato, ed è il motivo per cui il test è su `trim() !== ''`
+      // e non sulla verità del valore: «0» è «non manca più niente», la
+      // dichiarazione più informativa che questo campo possa portare.
+      if (m.ore_stimate_residue !== undefined
+          && String(m.ore_stimate_residue).trim() !== '') {
+        ore_stimate_residue_sottotask[id] = parseFloat(m.ore_stimate_residue)
       }
       if (bloccato) bloccati_sottotask.push(p.id)
       if (valoreSottotask(p, 'presaVisione')) viste_sottotask.push(p.id)
@@ -337,6 +361,7 @@ export default function ConsuntivazioneUser() {
      */
     const percentuale_per_task = {}
     const ore_effettive_per_task = {}
+    const ore_stimate_residue_per_task = {}
 
     for (const t of dati.task_settimana ?? []) {
       const m = modifiche[t.task_id]
@@ -352,6 +377,15 @@ export default function ConsuntivazioneUser() {
       // derivazione invece di riattivarla.
       if (m.ore_effettive !== undefined && String(m.ore_effettive).trim() !== '') {
         ore_effettive_per_task[t.task_id] = parseFloat(m.ore_effettive)
+      }
+      // La stima residua è l'UNICO campo che può viaggiare da solo: mandarla
+      // senza percentuale e senza ore è una compilazione legittima — «non ho
+      // avanzato, ma ora so che ne mancano 20». Il backend la riconosce come
+      // tale (è il sesto termine della guardia in `salva_consuntivo`), quindi
+      // qui non serve accompagnarla con nient'altro.
+      if (m.ore_stimate_residue !== undefined
+          && String(m.ore_stimate_residue).trim() !== '') {
+        ore_stimate_residue_per_task[t.task_id] = parseFloat(m.ore_stimate_residue)
       }
       if (valore(t, 'bloccato')) stati_per_task[t.task_id] = 'Bloccato'
       // Il gesto vale solo se ACCESO: toglierlo non manda nulla, e il backend
@@ -371,8 +405,10 @@ export default function ConsuntivazioneUser() {
           note_per_task,
           percentuale_per_task,
           ore_effettive_per_task,
+          ore_stimate_residue_per_task,
           avanzamenti_sottotask,
           ore_effettive_sottotask,
+          ore_stimate_residue_sottotask,
           bloccati_sottotask,
           note_sottotask,
           viste_task,
@@ -520,6 +556,7 @@ export default function ConsuntivazioneUser() {
                     nota={valore(t, 'nota') ?? ''}
                     pct={valore(t, 'percentuale')}
                     oreEffettive={valore(t, 'ore_effettive')}
+                    oreResidue={valore(t, 'ore_stimate_residue')}
                     bloccato={valore(t, 'bloccato')}
                     modificata={Boolean(modifiche[t.task_id])}
                     notaAperta={Boolean(noteAperte[t.task_id])}
@@ -607,6 +644,7 @@ function RigaTask({
   nota,
   pct,
   oreEffettive,
+  oreResidue,
   bloccato,
   presaVisione,
   modificata,
@@ -717,6 +755,7 @@ function RigaTask({
                 pct={pct}
                 baseline={t.baseline_pct ?? 0}
                 oreEffettive={oreEffettive}
+                oreResidue={oreResidue}
                 bloccato={bloccato}
                 presaVisione={presaVisione}
                 disabilitato={soloLettura}
@@ -806,6 +845,7 @@ function RigaTask({
                   soloLettura={soloLettura}
                   pct={valoreSottotask(p, 'percentuale')}
                   oreEffettive={valoreSottotask(p, 'ore_effettive')}
+                  oreResidue={valoreSottotask(p, 'ore_stimate_residue')}
                   bloccato={valoreSottotask(p, 'bloccato')}
                   presaVisione={valoreSottotask(p, 'presaVisione')}
                   nota={valoreSottotask(p, 'nota')}
@@ -832,6 +872,7 @@ function PezzoSottotask({
   mio,
   pct,
   oreEffettive,
+  oreResidue,
   bloccato,
   presaVisione,
   nota,
@@ -864,6 +905,7 @@ function PezzoSottotask({
           pct={pct}
           baseline={p.baseline_pct}
           oreEffettive={oreEffettive}
+          oreResidue={oreResidue}
           bloccato={bloccato}
           presaVisione={presaVisione}
           disabilitato={bloccatoInput}
@@ -943,6 +985,7 @@ function ControlliAvanzamento({
   pct,
   baseline,
   oreEffettive,
+  oreResidue,
   bloccato,
   presaVisione,
   disabilitato,
@@ -1011,6 +1054,33 @@ function ControlliAvanzamento({
                    border border-gray-700 focus:outline-none focus:ring-2
                    focus:ring-blue-600 focus:border-blue-600
                    disabled:opacity-40 placeholder:text-gray-700"
+      />
+
+      {/* STIMA RESIDUA — l'unico campo che guarda avanti.
+          Tutto il resto di questa riga descrive il PASSATO: a che punto sono
+          arrivato, quanto è costato. Questo dice dove si va a finire, ed è
+          l'unica informazione che il sistema non può dedurre — `ore_rimanenti`
+          sa quanto BUDGET avanza, non quanto LAVORO manca.
+
+          Il bordo ambra lo separa dalla casella-ore che gli sta accanto: sono
+          entrambe «un numero di ore» e a due centimetri di distanza si
+          confondono. Il placeholder «resta» dice il verso in una parola, che è
+          ciò che si legge davvero — il tooltip lo legge chi ha già dubitato.
+
+          Il QUANTO qui, il COSA nella nota: sono due campi perché il numero si
+          aggrega e il testo si legge, e messi insieme sarebbero inservibili
+          entrambi. */}
+      <input
+        type="number" min="0" step="0.5"
+        disabled={disabilitato}
+        value={oreResidue}
+        onChange={(e) => onModifica('ore_stimate_residue', e.target.value)}
+        placeholder="resta"
+        title={TOOLTIP.residuo}
+        className="w-16 bg-gray-950 text-amber-200/90 rounded-md px-2 py-1 text-center text-sm
+                   border border-amber-800/50 focus:outline-none focus:ring-2
+                   focus:ring-amber-600 focus:border-amber-600
+                   disabled:opacity-40 placeholder:text-gray-700 placeholder:text-xs"
       />
 
       {/* Bloccato */}
