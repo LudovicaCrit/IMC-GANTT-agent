@@ -627,6 +627,13 @@ function RigaTask({
   const pezzi = t.sottotask ?? []
   const scomposto = pezzi.length > 0
 
+  // FUORI PIANO = scaduto E senza quota per questa settimana. Le due
+  // condizioni insieme, non `in_ritardo` da solo: un task scaduto MARTEDÌ ha
+  // ancora una quota per la settimana in corso, ed è in ritardo ma dentro il
+  // piano — mostrargli «fuori piano» sarebbe falso. Il caso che conta è la
+  // finestra chiusa PRIMA di questo lunedì, e lì la quota è esattamente 0.
+  const fuoriPiano = t.in_ritardo && t.ore_pianificate_settimana === 0
+
   return (
     <React.Fragment>
       <tr className={`border-t border-gray-800/60 ${
@@ -635,19 +642,50 @@ function RigaTask({
         {/* Task */}
         <td className="px-4 py-3">
           <p className="text-gray-200">{t.task_nome}</p>
-          <p className="text-xs text-gray-600 flex items-center gap-2">
+          <p className="text-xs text-gray-600 flex items-center gap-2 flex-wrap">
             <span>{t.task_id}</span>
             <span className="text-gray-500">· attualmente {t.stato}</span>
+            {/* SCADUTO MA LAVORABILE (04/09/2026). Prima diceva solo «oltre la
+                data prevista», ed era un'informazione a metà: constatava il
+                ritardo senza dire che si può fare qualcosa. Ora che il backend
+                tiene in Consuntivazione i task scaduti-ancora-vivi, questa
+                riga è spesso l'UNICA porta per dichiarare quelle ore — e va
+                detto, altrimenti si legge come un rimprovero invece che come
+                un invito. */}
             {t.in_ritardo && (
-              <span className="text-amber-500/80">· ⚠ oltre la data prevista</span>
+              <span className="text-amber-500/90">
+                · ⚠ scaduto il {fmtData(t.data_fine)} — puoi ancora dichiarare
+              </span>
             )}
           </p>
         </td>
 
-        {/* Previste */}
+        {/* Previste.
+            «FUORI PIANO» invece di «0h» — è il punto dove il recupero dei task
+            scaduti poteva ritorcersi contro. `_quota_settimana` spalma le ore
+            pianificate sulla durata del task: per un task la cui finestra è
+            già chiusa la quota di QUESTA settimana è 0, correttamente — non
+            era previsto nulla. Ma «0h» in una colonna che si chiama «previste»
+            si legge «niente da fare», ed è l'esatto contrario del motivo per
+            cui la riga è lì: è quella su cui il dipendente DEVE poter
+            scrivere. Un numero giusto che comunica il contrario di sé è peggio
+            di nessun numero, quindi qui si dicono le parole.
+
+            Il totale del task resta sotto: «fuori piano» dice che la SETTIMANA
+            non era pianificata, non che il task non abbia un piano. */}
         <td className="px-4 py-3 text-right">
           {t.ore_pianificate_settimana === null ? (
             <span className="text-gray-600">—</span>
+          ) : fuoriPiano ? (
+            <>
+              <span className="text-amber-400/90 font-medium text-xs"
+                    title="La finestra pianificata del task è chiusa: per questa settimana non erano previste ore. Puoi comunque dichiarare quelle che hai fatto.">
+                fuori piano
+              </span>
+              <p className="text-[11px] text-gray-600">
+                su {fmtH(t.ore_pianificate)} totali
+              </p>
+            </>
           ) : (
             <>
               <span className="text-blue-300 font-medium">

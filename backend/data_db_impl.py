@@ -1597,6 +1597,16 @@ def carico_settimanale_dipendente(did, settimana):
       - task del dipendente, stato NON in ("Completato", "Sospeso")
       - sovrapposizione con la settimana lunedì–venerdì
       - task senza data_inizio/data_fine (NULL): esclusi (in SQL WHERE)
+
+    ⚠ NON UNIFICARE QUESTA FINESTRA CON QUELLA DI `task_settimana_dipendente`.
+    Sono due copie della stessa condizione e la somiglianza invita a fonderle,
+    ma rispondono a domande opposte: là «cosa posso ancora dichiarare», qui
+    «quanto pesa questa settimana». Dal 04/09/2026 la prima ha un ramo in più
+    (il task SCADUTO ma ancora vivo, che resta consuntivabile); portarlo anche
+    qui farebbe consumare capacità a un task scaduto in OGNI settimana futura,
+    per sempre — il carico di ogni dipendente crescerebbe di un fantasma a ogni
+    scadenza mancata. E questa funzione ha una decina di chiamanti (Risorse,
+    Home, agent, contesto, dipendenti): l'errore si vedrebbe lontano da qui.
     """
     lun = settimana - timedelta(days=settimana.weekday())
     ven = lun + timedelta(days=4)
@@ -1757,21 +1767,85 @@ def task_settimana_dipendente(dipendente_id, settimana=None):
 
     lun = _lunedi(settimana)
     fine_sett = lun + timedelta(days=6)  # lun..dom, come /me e /settimana
+    # `oggi` sale QUI perché da ora serve a DUE cose: al ramo-4 del filtro e
+    # alla closure `_in_ritardo` più sotto. Un solo riferimento al presente per
+    # entrambe, invece di due `date.today()` che in teoria possono cadere a
+    # cavallo della mezzanotte e far divergere filtro e etichetta.
+    oggi = date.today()
+
+    # Gli stati che NON sono un ritardo del dipendente. Vocabolario definito una
+    # volta e usato in DUE forme — la condizione SQL del ramo-4 e `_in_ritardo`
+    # — perché un'espressione SQLAlchemy e un `in` su un oggetto Python non
+    # possono essere la stessa riga di codice. Il vocabolario però sì, ed è la
+    # sola parte che può davvero divergere: se un domani si decidesse che anche
+    # "Bloccato" non è un ritardo, cambiarlo qui cambierebbe insieme chi COMPARE
+    # e chi viene ETICHETTATO. Sono la stessa domanda e devono restare allineate.
+    STATI_NON_IN_RITARDO = ("Completato", "Sospeso")
 
     session = get_session()
     try:
+        # ── I rami della visibilità ───────────────────────────────────────
+        # 1-2. task senza date: non si può dire che NON intersecano.
+        # 3.   intersezione finestra-task × settimana (il criterio storico).
+        rami_finestra = [
+            Task.data_inizio.is_(None),
+            Task.data_fine.is_(None),
+            and_(Task.data_inizio <= fine_sett, Task.data_fine >= lun),
+        ]
+
+        # 4. SCADUTO MA ANCORA VIVO — la finestra è chiusa e il lavoro no.
+        #
+        # Prima di questo ramo un task con `data_fine` passata usciva dalla
+        # Consuntivazione e le ore fatte su di esso diventavano INDICHIARABILI:
+        # il dipendente doveva aspettare che il PM spostasse la data. Ma la
+        # scadenza di un piano non è la fine di un lavoro, e chi ci sta ancora
+        # lavorando deve poter scrivere le sue ore senza chiedere il permesso.
+        #
+        # NON È UNA REGOLA NUOVA: è la stessa di `_in_ritardo`, che vive venti
+        # righe più sotto e finora decideva solo l'ETICHETTA nel payload. Qui
+        # viene promossa a decidere anche l'ESISTENZA della riga — perché
+        # etichettare come «in ritardo» una riga che non si vede è una
+        # contraddizione che il codice portava senza accorgersene.
+        #
+        # «Sospeso» resta fuori, con «Completato»: è un parcheggio deciso dal
+        # PM, non un lavoro in corso, e riaprirlo ogni settimana per anni
+        # riempirebbe la Consuntivazione di righe su cui nessuno deve scrivere.
+        # «Bloccato» invece rientra: è la parola del DIPENDENTE per «sono fermo
+        # ma è ancora lavoro mio» (è in STATI_DICHIARABILI, dove "Sospeso" non
+        # c'è), ed è esattamente il caso che il nodo F-2 esiste per registrare.
+        #
+        # ⚠ IL CANCELLO `lun <= oggi` NON È ORNAMENTALE. La condizione del ramo
+        # non nomina la settimana richiesta: da sola scatterebbe identica per
+        # QUALSIASI settimana, comprese quelle future, e un task scaduto
+        # comparirebbe da qui all'infinito. Il confronto con `oggi` garantisce
+        # che il ramo non guardi la settimana visualizzata, non che si fermi —
+        # a fermarlo è questo `if`. La guardia della route
+        # (`/api/consuntivi/me` accetta solo corrente e precedente) copre già
+        # il caso, ma vive in un ALTRO file: questa funzione è pubblica nello
+        # strato dati e il suo docstring ne promette un secondo consumatore
+        # («la userà anche la Home-utente»). Deve difendersi da sé.
+        if lun <= oggi:
+            rami_finestra.append(
+                and_(
+                    Task.data_fine < oggi,
+                    Task.stato.notin_(STATI_NON_IN_RITARDO),
+                )
+            )
+
         tasks = (
             session.query(Task)
             .options(joinedload(Task.progetto))
             .filter(
                 Task.dipendente_id == dipendente_id,
-                Task.stato != "Annullato",
-                # intersezione finestra-task × settimana; date NULL incluse
-                or_(
-                    Task.data_inizio.is_(None),
-                    Task.data_fine.is_(None),
-                    and_(Task.data_inizio <= fine_sett, Task.data_fine >= lun),
-                ),
+                # «Eliminato» accanto ad «Annullato»: il soft-delete scrive
+                # quello stato e la riga resta in tabella, quindi un task
+                # cancellato con la finestra ancora aperta compariva nella
+                # Consuntivazione di chi ce l'aveva assegnato. In DB non ce n'è
+                # nemmeno uno oggi — era un buco latente, non un bug osservato —
+                # ma il ramo-4 allarga la visibilità e un latente allargato
+                # prima o poi si vede. `gantt_strutturato` filtra già entrambi.
+                Task.stato.notin_(("Annullato", "Eliminato")),
+                or_(*rami_finestra),
             )
             .order_by(Task.id)
             .all()
@@ -1989,18 +2063,22 @@ def task_settimana_dipendente(dipendente_id, settimana=None):
         weeks = max(1, (t.data_fine - t.data_inizio).days / 7)
         return round((t.ore_pianificate or 0) / weeks, 1)
 
-    oggi = date.today()
-
     def _in_ritardo(t):
         """Finestra chiusa (data_fine passata) e task non chiuso.
         Il confronto è con OGGI, non con la settimana visualizzata: un task
         scaduto resta in ritardo anche riaprendo la settimana scorsa.
         Date NULL → non si può dire che sia scaduto, quindi False.
         'Sospeso' è escluso con 'Completato': è una decisione del PM, non un
-        ritardo del dipendente — segnalarlo accuserebbe del contrario."""
+        ritardo del dipendente — segnalarlo accuserebbe del contrario.
+
+        STESSA REGOLA DEL RAMO-4 del filtro, in cima alla funzione: là decide
+        se la riga ESISTE, qui se va ETICHETTATA. Il vocabolario degli stati è
+        letteralmente lo stesso oggetto (`STATI_NON_IN_RITARDO`) proprio perché
+        le due risposte non possono divergere: una riga che compare per il
+        ramo-4 esce da qui con `in_ritardo=True`, sempre e per costruzione."""
         if t.data_fine is None:
             return False
-        return t.data_fine < oggi and t.stato not in ("Completato", "Sospeso")
+        return t.data_fine < oggi and t.stato not in STATI_NON_IN_RITARDO
 
     out = []
     for t in tasks:
