@@ -458,6 +458,51 @@ export async function caricaBozza(_progettoId) {
 }
 
 // ═════════════════════════════════════════════════════════════════════════
+//  SAL — snapshot storici del GANTT (DESIGN_SAL)
+// ═════════════════════════════════════════════════════════════════════════
+//  Un SAL è una FOTOGRAFIA immutabile e autocontenuta di un progetto in un
+//  istante: progetto, fasi, task, ore, date e stati come erano QUEL giorno.
+//  Non è un backup e non è ricalcolabile — è un atto («confermo che a oggi il
+//  progetto è così»), e per questo si consolida a mano.
+//
+//  Il backend esiste dal 26/06/2026 ma non era mai stato chiamato da nessuna
+//  parte: sei endpoint e zero client. Queste tre funzioni sono il ponte
+//  mancante — è il motivo per cui in tabella ci sono 0 snapshot.
+
+export async function consolidaSAL(progettoId, nota = null) {
+  // → { id, progetto_id, data_snapshot, consolidato_da, nota }
+  //
+  // Funziona su QUALSIASI progetto, anche in corso: un SAL si scatta a fine
+  // fase o prima di un cambio di scope, cioè quando il progetto è vivo.
+  // Limitarlo ai chiusi vorrebbe dire poterlo fare solo quando non serve più.
+  //
+  // `nota` è il campo che dà valore allo storico: senza, la lista è una fila di
+  // date. È lì che si scrive PERCHÉ si consolida.
+  return apiFetch(`${API_BASE}/sal/${progettoId}`, {
+    method: 'POST',
+    body: { nota },
+  });
+}
+
+export async function listaStoricoSAL(progettoId) {
+  // → [{ id, data_snapshot, consolidato_da, consolidato_da_nome, nota }] desc.
+  //
+  // SINTETICA: il backend NON include il JSON `stato`, che pesa. Il dettaglio
+  // si carica solo aprendo uno snapshot. Porta già `consolidato_da_nome`
+  // risolto, quindi non serve incrociare con i dipendenti.
+  return apiFetch(`${API_BASE}/sal/${progettoId}`);
+}
+
+export async function apriSnapshotSAL(snapshotId) {
+  // → { id, progetto_id, data_snapshot, consolidato_da_nome, nota, stato }
+  //
+  // `stato` è il JSONB congelato: { schema_version, progetto, fasi[{…, task[]}] }.
+  // Il backend risale PRIMA al progetto dello snapshot e applica lì il
+  // controllo: un id arbitrario non aggira l'autorizzazione.
+  return apiFetch(`${API_BASE}/sal/snapshot/${snapshotId}`);
+}
+
+// ═════════════════════════════════════════════════════════════════════════
 //  HOME — dashboard management/PM
 // ═════════════════════════════════════════════════════════════════════════
 
@@ -475,6 +520,15 @@ export async function fetchAttivitaInterne() {
 export async function eliminaAttivitaInterna(taskId) {
   // 400 se il task NON appartiene a un progetto interno (Maida compreso).
   return apiFetch(`${API_BASE}/attivita-interne/${taskId}`, { method: 'DELETE' });
+}
+
+export async function fetchConsuntiviMe(settimana = null) {
+  // «Le mie cose» della Home e la Consuntivazione leggono LO STESSO endpoint:
+  // i task della settimana con avanzamento, note ereditate, presa-visione e
+  // scadenza. Un secondo endpoint «riassunto per la Home» avrebbe significato
+  // due verità su cosa devo fare questa settimana.
+  const qs = settimana ? `?settimana=${settimana}` : '';
+  return apiFetch(`${API_BASE}/consuntivi/me${qs}`);
 }
 
 export async function fetchHomeDashboard() {

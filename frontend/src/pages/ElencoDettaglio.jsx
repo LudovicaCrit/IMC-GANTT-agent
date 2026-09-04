@@ -43,6 +43,8 @@ import KpiSintetici from '../components/cantiere/KpiSintetici'
 import SezioneAnagrafica from '../components/cantiere/SezioneAnagrafica'
 import SezionePersone from '../components/cantiere/SezionePersone'
 import SezioneFasiTask from '../components/cantiere/SezioneFasiTask'
+import SezioneSAL from '../components/_shared/SezioneSAL'
+import { useAuth } from '../contexts/AuthContext'
 
 
 // ─── Tab Scenari: snapshot deterministico (cloned from CantiereDettaglio) ──
@@ -173,6 +175,10 @@ function TabScenari({ progetto }) {
 export default function ElencoDettaglioPage() {
   const { progettoId } = useParams()
   const navigate = useNavigate()
+  // Il ruolo serve al solo pulsante «Consolida»: la LISTA degli snapshot resta
+  // visibile a chiunque apra questa pagina.
+  const { user } = useAuth()
+  const isManager = user?.ruolo_app === 'manager'
   const [progetto, setProgetto] = useState(null)
   const [dipendenti, setDipendenti] = useState([])
   const [loading, setLoading] = useState(true)
@@ -258,6 +264,14 @@ export default function ElencoDettaglioPage() {
           <TabButton attivo={tab === 'scenari'} onClick={() => setTab('scenari')}>
             🔍 Scenari
           </TabButton>
+          {/* Il SAL vive QUI e non in Archivio: una fotografia si scatta su un
+              progetto VIVO — a fine fase, prima di un cambio di scope — e
+              l'Archivio guarda solo i progetti chiusi, cioè quando non serve
+              più. Questa pagina è la «lente di lettura totale» del progetto in
+              qualunque stato, ed è il posto giusto. */}
+          <TabButton attivo={tab === 'sal'} onClick={() => setTab('sal')}>
+            📸 SAL
+          </TabButton>
         </div>
       </div>
 
@@ -276,6 +290,8 @@ export default function ElencoDettaglioPage() {
       )}
 
       {tab === 'scenari' && <TabScenari progetto={progetto} />}
+
+      {tab === 'sal' && <SezioneSAL progettoId={progettoId} isManager={isManager} />}
     </div>
   )
 }
