@@ -891,6 +891,26 @@ class Consuntivo(Base):
     #   dico io», che spegne la derivazione. È la ragione per cui è nullable
     #   mentre `ore_dichiarate` qui sopra è NOT NULL DEFAULT 0.
     ore_effettive = Column(Float, nullable=True)
+    # ore_stimate_residue: quante ore MANCANO ancora per finire, secondo chi ci
+    #   sta lavorando, dichiarate nella settimana in cui lo dice (04/09/2026).
+    #
+    #   NON è `ore_rimanenti` che `/me` già espone: quella è `ore_pianificate`
+    #   meno il consumato, aritmetica sul PIANO — dice quanto budget avanza, non
+    #   quanto lavoro manca. Coincidono solo se la stima iniziale era giusta.
+    #
+    #   INERTE, ed è la differenza da `ore_effettive` qui sopra, che le somiglia
+    #   per forma: quella entra in `_aggrega_ore_unita` e sostituisce la
+    #   derivata. Questa non tocca nulla — né ore derivate, né `ore_dichiarate`,
+    #   né `Task.stato`. Si scrive e si rilegge; i consumatori
+    #   (ri-stanziamento, aggregazione-PM, IA) sono futuri.
+    #
+    #   NULL = «non l'ho stimato»; 0.0 = «non manca niente, ho finito», che è
+    #   un'affermazione. È la ragione del nullable senza default: un default a 0
+    #   scriverebbe «ho finito» su ogni riga mai compilata.
+    #
+    #   Il QUANTO sta qui, il COSA in `nota`: il numero si aggrega, il testo si
+    #   legge. Migration b0c1d2e3f4a5, gemella su ConsuntivoSottotask.
+    ore_stimate_residue = Column(Float, nullable=True)
     # Lo stato che il DIPENDENTE ha dichiarato in questa settimana su questo
     # task. Valori: il sottoinsieme STATI_DICHIARABILI (vincolo nel DTO della
     # route, non un CHECK: la colonna dovrà accogliere anche le dichiarazioni
@@ -977,6 +997,16 @@ class ConsuntivoSottotask(Base):
     # da 0.0 = «zero ore effettive, e lo sto dicendo io». Un default a 0
     # spegnerebbe la derivazione su ogni riga.
     ore_effettive = Column(Float, nullable=True)
+    # ore_stimate_residue: gemella esatta di `Consuntivo.ore_stimate_residue` —
+    # «quante ore mancano ancora su questo PEZZO», per settimana. Le stesse
+    # ragioni, che là sono scritte per esteso: NULL = non stimato, 0.0 = non
+    # manca niente; INERTE (non entra in `_aggrega_ore_unita`, a differenza di
+    # `ore_effettive` qui sopra); il QUANTO qui, il COSA in `nota`.
+    #
+    # Aggiunte dalla STESSA migration (b0c1d2e3f4a5, un ciclo sui due nomi):
+    # `ore_effettive` fu invece introdotta da due migration a un mese di
+    # distanza, e nel frattempo le due tabelle non erano gemelle.
+    ore_stimate_residue = Column(Float, nullable=True)
     # nota: la nota-sottotask vive TUTTA qui, attaccata al pezzo che descrive.
     # «Obbligatoria se Bloccato» è validazione della route, non della colonna.
     nota = Column(Text, nullable=True)
