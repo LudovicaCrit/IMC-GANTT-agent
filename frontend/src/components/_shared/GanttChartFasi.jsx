@@ -16,7 +16,9 @@
 // - Nessuna logica di edit: questo è il GANTT "lente di lettura" (§3.2).
 //
 import React, { useState, useMemo, useRef, useEffect } from 'react'
-import { buildTimeline } from '../../pages/Gantt'
+// La scala arriva da _shared, non più dalla PAGINA Gantt (dipendenza al
+// contrario: un componente condiviso non deve trascinare una pagina).
+import { buildTimeline, barXW as barXWScala } from './timelineScale'
 
 // ── Colori per stato (allineati al legacy GanttChart) ────────────────
 // I task usano gli stessi 4 stati colorati del legacy. Le fasi hanno 5
@@ -262,12 +264,9 @@ export default function GanttChartFasi({ progetti, onTaskClick, onProgettoClick 
   // l'unico elemento absolute-positioned a tutta altezza nel body timeline.
   const totalHeight = rows.reduce((sum, r) => sum + r.height, 0)
 
-  // Helper: posizione X+W di una barra dato start/end
-  function barXW(start, end) {
-    const x = (new Date(start).getTime() - firstMonday.getTime()) / msPerPx
-    const w = Math.max(4, (new Date(end).getTime() - new Date(start).getTime()) / msPerPx)
-    return { x, w }
-  }
+  // Posizione X+W di una barra: la formula sta in _shared/timelineScale,
+  // così il mini-GANTT degli snapshot posiziona le barre allo stesso modo.
+  const barXW = (start, end) => barXWScala(timeline, start, end)
 
   return (
     <div className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">

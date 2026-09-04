@@ -16,59 +16,19 @@ const STATUS_COLORS = {
 // Una `const OGGI = new Date()` valutata al primo import resterebbe
 // congelata finché la pagina non viene refreshata, e la linea rossa
 // "oggi" diventerebbe disallineata (Debito #16 chiuso 19/05).
-function getOggi() { return new Date() }
 const LABEL_W = 300
-const WEEK_PX_DEFAULT = 48
-const WEEK_PX_MAX = 80
 const ROW_H = 40
 
-// ── Utility date ────────────────────────────────────────────────────
-function getMonday(d) {
-  const date = new Date(d)
-  const day = date.getDay()
-  const diff = day === 0 ? -6 : 1 - day
-  date.setDate(date.getDate() + diff)
-  date.setHours(0, 0, 0, 0)
-  return date
-}
-function addDays(d, n) { const r = new Date(d); r.setDate(r.getDate() + n); return r }
-function weeksBetween(a, b) { return Math.round((b.getTime() - a.getTime()) / (7 * 86400000)) }
-function fmtMonth(d) { return d.toLocaleDateString('it-IT', { month: 'short', year: '2-digit' }) }
+// ── Scala del tempo — ESTRATTA in _shared/timelineScale.js (04/09/2026) ──
+// `buildTimeline` e i suoi helper (getMonday/addDays/weeksBetween, le costanti
+// WEEK_PX_*) vivevano qui, e `_shared/GanttChartFasi.jsx` li importava DA QUESTA
+// PAGINA — un componente condiviso che dipende da una pagina. Ora la scala sta
+// in _shared e la usano sia il GANTT principale sia il mini-GANTT degli
+// snapshot SAL: una sola aritmetica, quindi barre che corrispondono fra le due
+// viste. Ri-esportata perché AnalisiInterventi la importa da qui.
+export { buildTimeline } from '../components/_shared/timelineScale'
+import { buildTimeline } from '../components/_shared/timelineScale'
 
-// ── Timeline builder (riusato anche da AnalisiInterventi) ───────────
-export function buildTimeline(tasks) {
-  if (!tasks || tasks.length === 0) return null
-  const starts = tasks.map(t => new Date(t.start).getTime())
-  const ends = tasks.map(t => new Date(t.end).getTime())
-  const minDate = addDays(new Date(Math.min(...starts)), -7)
-  const maxDate = addDays(new Date(Math.max(...ends)), 7)
-  const firstMonday = getMonday(minDate)
-  const lastMonday = getMonday(maxDate)
-  const totalWeeks = weeksBetween(firstMonday, lastMonday) + 1
-  const weekPx = Math.min(WEEK_PX_MAX, Math.max(WEEK_PX_DEFAULT, Math.floor(900 / totalWeeks)))
-  const totalWidth = totalWeeks * weekPx
-
-  const weeks = []
-  for (let i = 0; i < totalWeeks; i++) {
-    weeks.push({ monday: addDays(firstMonday, i * 7), x: i * weekPx })
-  }
-
-  const months = []
-  let curM = -1, curY = -1, mStart = 0
-  for (let i = 0; i < weeks.length; i++) {
-    const m = weeks[i].monday.getMonth(), y = weeks[i].monday.getFullYear()
-    if (m !== curM || y !== curY) {
-      if (curM !== -1) months[months.length - 1].width = weeks[i].x - mStart
-      months.push({ label: fmtMonth(weeks[i].monday), x: weeks[i].x })
-      mStart = weeks[i].x; curM = m; curY = y
-    }
-  }
-  if (months.length > 0) months[months.length - 1].width = totalWidth - months[months.length - 1].x
-
-  const oggi = getOggi()
-  const oggiX = ((oggi.getTime() - firstMonday.getTime()) / (totalWeeks * 7 * 86400000)) * totalWidth
-  return { firstMonday, totalWeeks, weekPx, totalWidth, weeks, months, oggiX }
-}
 
 // ── Componente GANTT riutilizzabile ─────────────────────────────────
 export function GanttChart({ tasks, title, changedIds, compact, onTaskClick }) {
