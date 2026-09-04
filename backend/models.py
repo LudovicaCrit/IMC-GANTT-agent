@@ -243,6 +243,33 @@ def _check_in(colonna, valori, ammetti_null=False):
 # database ACCETTA, la costante cosa si può SCEGLIERE: la seconda è più stretta.
 STATI_TASK_IN_DB = STATI_TASK + ("Eliminato",)
 
+# I RUOLI APPLICATIVI (Tappa 2, 04/09/2026). Fino a oggi erano due, e vivevano
+# solo in un commento accanto alla colonna: `# "user" | "manager"`.
+#
+#   manager — governa tutto: Cantiere, Economia, Risorse, Configurazione.
+#   pm      — dirige i PROPRI progetti (quelli dove è `Progetto.pm_id`).
+#   user    — opera sui task assegnati e dichiara le proprie ore.
+#
+# ⚠ IL 'pm' OGGI È TRATTATO COME UN 'user' DA TUTTE LE GUARDIE, ed è voluto: la
+# matrice dei poteri-PM non è ancora decisa, e questo passo introduce il DATO
+# senza toccare i permessi. Funziona perché tutti i 14 lettori di `ruolo_app`
+# confrontano con `"manager"` e mai con `"user"`: un valore nuovo cade sempre nel
+# ramo «non manager». Cambiare quei confronti è il lavoro successivo, non questo.
+#
+# Con UN'ECCEZIONE già attiva: `routes/sal.py::_autorizza_progetto` ammette
+# «manager OPPURE il PM di quel progetto». Un 'pm' conserva quindi il potere di
+# consolidare SAL e Bollettino sui suoi progetti — l'unico permesso-PM che il
+# sistema abbia mai avuto.
+#
+# L'ORDINE è dal più al meno ampio, ma NON è una gerarchia calcolabile: nessun
+# codice deduce che manager ⊃ pm ⊃ user. I permessi si dichiarano, non si
+# derivano dalla posizione in una tupla.
+#
+# CHECK a livello DB: `ck_utenti_ruolo_app`, dichiarato in `__table_args__` di
+# `Utente` (non solo nella migration a9b0c1d2e3f4 — vedi `_check_in` per il
+# perché quella distinzione conta).
+RUOLI_APP = ("manager", "pm", "user")
+
 
 # ══════════════════════════════════════════════════════════════════════
 # CONFIGURAZIONE — Entità gestite dalla pagina admin
@@ -313,12 +340,22 @@ class Utente(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     email = Column(String(120), nullable=False, unique=True)
     password_hash = Column(String(256), nullable=False)
-    ruolo_app = Column(String(20), nullable=False, default="user")  # "user" | "manager"
+    # Vedi RUOLI_APP in cima al modulo per i tre valori e per la ragione per cui
+    # oggi un 'pm' è trattato come un 'user' da tutte le guardie.
+    ruolo_app = Column(String(20), nullable=False, default="user")
     dipendente_id = Column(String(10), ForeignKey("dipendenti.id"), nullable=True)
     attivo = Column(Boolean, nullable=False, default=True)
     ultimo_login = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Il CHECK sta QUI e non solo nella migration: dichiarato solo là non
+    # sopravviverebbe a un `create_all()`, che è esattamente come i tre CHECK
+    # sugli stati erano spariti dal database (vedi `_check_in`).
+    __table_args__ = (
+        CheckConstraint(_check_in("ruolo_app", RUOLI_APP),
+                        name="ck_utenti_ruolo_app"),
+    )
 
     dipendente = relationship("Dipendente", back_populates="utente")
 
