@@ -2849,7 +2849,9 @@ def salva_consuntivo(dipendente_id, settimana, ore_per_task, stati_per_task,
                      avanzamenti_sottotask=None, ore_effettive_sottotask=None,
                      bloccati_sottotask=None, note_sottotask=None,
                      percentuale_per_task=None, ore_effettive_per_task=None,
-                     viste_task=None, viste_sottotask=None):
+                     viste_task=None, viste_sottotask=None,
+                     ore_stimate_residue_per_task=None,
+                     ore_stimate_residue_sottotask=None):
     """
     Salva il consuntivo settimanale completo di un dipendente.
 
@@ -2935,6 +2937,13 @@ def salva_consuntivo(dipendente_id, settimana, ore_per_task, stati_per_task,
         bloccati_sottotask = set(bloccati_sottotask or ())
         percentuale_per_task = percentuale_per_task or {}
         ore_effettive_per_task = ore_effettive_per_task or {}
+        # STIMA RESIDUA (04/09/2026) — «quante ore mancano», per unità.
+        # INERTE: non entra in `_aggrega_ore_unita`, non tocca `ore_dichiarate`
+        # né `Task.stato`. Si scrive sulla riga della settimana e si rilegge da
+        # `/me`, e basta — a differenza di `ore_effettive`, che le somiglia per
+        # forma ma è dentro il motore delle ore.
+        ore_stimate_residue_per_task = ore_stimate_residue_per_task or {}
+        ore_stimate_residue_sottotask = ore_stimate_residue_sottotask or {}
         # Nodo F-2. `set` e non dict: portano solo appartenenza, nessun valore.
         viste_task = set(viste_task or ())
         viste_sottotask = set(viste_sottotask or ())
@@ -2986,6 +2995,12 @@ def salva_consuntivo(dipendente_id, settimana, ore_per_task, stati_per_task,
             # Nodo F-2: un pezzo preso in visione entra nel giro anche se non
             # porta null'altro — la sua riga va creata o aggiornata comunque.
             + sorted(viste_sottotask)
+            # STIMA RESIDUA: stessa ragione di tutti gli altri termini di
+            # quest'unione. «Non ho avanzato, ma ora so che ne mancano 20» è
+            # una compilazione legittima e frequente — anzi, è proprio il caso
+            # per cui il campo esiste. Senza questo termine il pezzo non
+            # entrerebbe nel ciclo e il numero sparirebbe senza errore.
+            + list(ore_stimate_residue_sottotask)
         )
         for sottotask_id in sottotask_toccati:
             riga = session.query(ConsuntivoSottotask).filter(
@@ -3005,6 +3020,11 @@ def salva_consuntivo(dipendente_id, settimana, ore_per_task, stati_per_task,
                 riga.percentuale = avanzamenti_sottotask[sottotask_id]
             if sottotask_id in ore_effettive_sottotask:
                 riga.ore_effettive = ore_effettive_sottotask[sottotask_id]
+            # Stessa convenzione «chiave assente = non toccare»: dichiarare
+            # l'avanzamento la settimana dopo non deve azzerare una stima
+            # residua scritta prima.
+            if sottotask_id in ore_stimate_residue_sottotask:
+                riga.ore_stimate_residue = ore_stimate_residue_sottotask[sottotask_id]
 
             # Nota: stesso trattamento delle note-task, `_nota_task` compreso —
             # vuota o soli spazi diventa NULL, così `nota IS NOT NULL` significa
@@ -3276,6 +3296,24 @@ def salva_consuntivo(dipendente_id, settimana, ore_per_task, stati_per_task,
             + sorted(task_unita)
             # Nodo F-2: un task preso in visione entra anche se non porta altro.
             + sorted(viste_task)
+            # ── STIMA RESIDUA — ed è QUI, non fra i `candidati` sopra ──────
+            # Il caso «non ho avanzato, ma ora so che ne mancano 20» è quello
+            # per cui il campo esiste, e senza questo termine non entrerebbe
+            # nel ciclo: nessuna riga scritta, nessun errore, numero perso.
+            #
+            # ⚠ MA NON VA IN `candidati`/`task_unita`, e la differenza non è
+            # stilistica. Quell'insieme decide chi passa da `_aggrega_ore_unita`,
+            # cioè di chi si RICALCOLANO le ore. Un task che porta solo il
+            # residuo non ha né percentuale né ore effettive: `ore_derivate_unita`
+            # con `pct=None` restituisce `ore: 0.0` (non `None`), quel 3.0 → 0.0
+            # finirebbe in `derivate_per_task`, che poi VINCE su `ore_per_task`
+            # — e le ore già dichiarate nella settimana verrebbero azzerate da
+            # una dichiarazione che sulle ore non diceva nulla.
+            #
+            # Le due unioni rispondono a due domande diverse: `task_toccati` =
+            # «di chi scrivo la riga», `task_unita` = «di chi ricalcolo le ore».
+            # Il residuo è inerte, quindi appartiene solo alla prima.
+            + list(ore_stimate_residue_per_task)
         )
         stati_dichiarati = {}   # task_id → stato, da propagare dopo il commit
         for task_id in task_toccati:
@@ -3312,10 +3350,19 @@ def salva_consuntivo(dipendente_id, settimana, ore_per_task, stati_per_task,
             # termine la riga non verrebbe mai scritta e la conferma «ancora
             # ferma» sparirebbe — proprio il caso che il nodo esiste per
             # registrare.
+            # `ore_stimate_residue_per_task` è il SESTO termine, e la sua
+            # assenza è stata un bug vero per qualche minuto: il campo era già
+            # in `task_toccati`, la scrittura già pronta, e la riga non veniva
+            # comunque creata. Perché i cancelli sono DUE e fanno cose diverse
+            # — `task_toccati` decide chi si CONSIDERA, questo `continue` chi si
+            # SCRIVE — e una compilazione di solo residuo supera il primo e
+            # cadeva sul secondo, senza errore né avviso. Esattamente il modo in
+            # cui un dato sparisce in silenzio.
             if (not stato and not nota_pervenuta and not ore
                     and task_id not in derivate_per_task
                     and task_id not in task_unita
-                    and task_id not in viste_task):
+                    and task_id not in viste_task
+                    and task_id not in ore_stimate_residue_per_task):
                 continue
 
             # motivo_fermo è un flag, non un archivio: va RIALLINEATO a ogni
@@ -3358,6 +3405,11 @@ def salva_consuntivo(dipendente_id, settimana, ore_per_task, stati_per_task,
                     existing.percentuale = percentuale_per_task[task_id]
                 if task_id in ore_effettive_per_task:
                     existing.ore_effettive = ore_effettive_per_task[task_id]
+                # Stima residua, stessa convenzione: chiave assente = non
+                # toccare. Una settimana in cui si dichiara solo l'avanzamento
+                # non deve cancellare il «ne mancano 20» scritto prima.
+                if task_id in ore_stimate_residue_per_task:
+                    existing.ore_stimate_residue = ore_stimate_residue_per_task[task_id]
                 existing.compilato = True
                 existing.data_compilazione = datetime.utcnow()
                 existing.motivo_fermo = motivo
@@ -3396,6 +3448,10 @@ def salva_consuntivo(dipendente_id, settimana, ore_per_task, stati_per_task,
                     stato_dichiarato=stato,
                     percentuale=percentuale_per_task.get(task_id),
                     ore_effettive=ore_effettive_per_task.get(task_id),
+                    # `.get()` → None se non pervenuta, che in colonna è
+                    # «non stimato». La riga può nascere DALLA SOLA stima
+                    # residua, come dalla sola presa-visione.
+                    ore_stimate_residue=ore_stimate_residue_per_task.get(task_id),
                     # Nodo F-2: la riga può nascere DALLA SOLA presa-visione —
                     # è il caso normale di un task fermo che qualcuno conferma
                     # senza avere altro da dire.

@@ -209,6 +209,18 @@ class SalvaConsuntivoRequest(BaseModel):
     # dagli `avvisi` in risposta, non in silenzio.
     percentuale_per_task: dict[str, int] = {}
     ore_effettive_per_task: dict[str, float] = {}
+    # Ore che MANCANO ancora per finire il task, secondo chi ci lavora
+    # (04/09/2026): {task_id: ore}. Guarda AVANTI, mentre le due qui sopra
+    # guardano indietro — «a che punto sono» e «quanto è costato» raccontano il
+    # passato, questa è l'unica che dice dove si va a finire.
+    #
+    # Non è ricavabile da ciò che il backend già sa: `ore_rimanenti` in /me è
+    # `ore_pianificate` meno il consumato, cioè quanto BUDGET avanza. Quanto
+    # LAVORO manca lo sa solo chi lo sta facendo.
+    #
+    # Chiave assente = non stimato (NULL in colonna). Valore 0 = «non manca
+    # niente», che è un'affermazione e va potuta fare.
+    ore_stimate_residue_per_task: dict[str, float] = {}
     # Avanzamento dichiarato sui SOTTOTASK: {sottotask_id: percentuale 0-100}.
     # Step 4 (06/08/2026) — è l'input del motore ore-derivate: da qui NON
     # arrivano ore, arrivano percentuali, e le ore le calcola il backend
@@ -229,6 +241,10 @@ class SalvaConsuntivoRequest(BaseModel):
     # settimana: non si somma. Chiave assente = nessuna ora effettiva, si
     # deriva; è la stessa distinzione NULL/0.0 della colonna.
     ore_effettive_sottotask: dict[int, float] = {}
+    # Gemella di `ore_stimate_residue_per_task` sul PEZZO: {sottotask_id: ore
+    # che mancano}. Stessa convenzione — chiave assente = non stimato, 0 =
+    # «non manca niente». Chiavi int come gli altri dizionari-sottotask.
+    ore_stimate_residue_sottotask: dict[int, float] = {}
     # Quali sottotask il dipendente dichiara BLOCCATI questa settimana.
     # È un flag ESPLICITO e non derivabile dall'avanzamento: un pezzo può
     # essere bloccato al 40% (fermo lì, in attesa di qualcosa) e la percentuale
@@ -347,6 +363,18 @@ class SalvaConsuntivoRequest(BaseModel):
                     f"Ore effettive {ore} non valide sul task {tid}: "
                     f"non possono essere negative.",
                 )
+        # Residuo non negativo. Nessun massimo — «ne mancano 300» su un task
+        # pianificato 40 è una stima drammatica ma non è un errore di
+        # battitura da respingere: è esattamente l'allarme che questo campo
+        # esiste per far arrivare al PM prima dello sforamento.
+        for tid, ore in self.ore_stimate_residue_per_task.items():
+            if ore < 0:
+                raise HTTPException(
+                    400,
+                    f"Ore residue {ore} non valide sul task {tid}: non possono "
+                    f"essere negative. Zero è ammesso e significa «non manca "
+                    f"più niente».",
+                )
 
         for sid, pct in self.avanzamenti_sottotask.items():
             if pct < 0 or pct > 100:
@@ -368,6 +396,15 @@ class SalvaConsuntivoRequest(BaseModel):
                     f"Ore effettive {ore} non valide sul sottotask {sid}: "
                     f"non possono essere negative. Zero è ammesso e significa "
                     f"«questa settimana non è costato niente».",
+                )
+
+        for sid, ore in self.ore_stimate_residue_sottotask.items():
+            if ore < 0:
+                raise HTTPException(
+                    400,
+                    f"Ore residue {ore} non valide sul sottotask {sid}: non "
+                    f"possono essere negative. Zero è ammesso e significa "
+                    f"«non manca più niente».",
                 )
         return self
 
@@ -900,6 +937,8 @@ def salva_consuntivo_endpoint(
             ore_effettive_per_task=req.ore_effettive_per_task,
             viste_task=req.viste_task,
             viste_sottotask=req.viste_sottotask,
+            ore_stimate_residue_per_task=req.ore_stimate_residue_per_task,
+            ore_stimate_residue_sottotask=req.ore_stimate_residue_sottotask,
         )
         # `avvisi`: segnalazioni non bloccanti del motore ore-derivate (Step 4).
         # Lista vuota nel caso normale — il campo c'è sempre, così il client non
