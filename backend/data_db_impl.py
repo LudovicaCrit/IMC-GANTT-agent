@@ -1865,7 +1865,14 @@ def task_settimana_dipendente(dipendente_id, settimana=None):
                           Consuntivo.percentuale, Consuntivo.ore_effettive,
                           # Nodo F-2 (02/09/2026): una colonna in più sulla
                           # stessa query, come sopra.
-                          Consuntivo.presa_visione)
+                          Consuntivo.presa_visione,
+                          # Consuntivazione A (04/09/2026): idem. Serve a
+                          # RIPOPOLARE il campo quando si riapre una settimana
+                          # già compilata — senza, il residuo scritto lunedì
+                          # apparirebbe vuoto martedì, e un ri-salvataggio lo
+                          # lascerebbe intatto (chiave assente = non toccare)
+                          # facendo credere di averlo cancellato.
+                          Consuntivo.ore_stimate_residue)
             .filter(
                 Consuntivo.dipendente_id == dipendente_id,
                 Consuntivo.settimana >= lun,
@@ -1998,6 +2005,13 @@ def task_settimana_dipendente(dipendente_id, settimana=None):
             "stato_dichiarato": d.stato_dichiarato if d else None,
             "nota": d.nota if d else None,
             "ore_effettive": d.ore_effettive if d else None,
+            # Consuntivazione A: «quante ore mancano ancora su questo pezzo».
+            # None quando la riga non c'è O quando c'è ma nessuno ha stimato —
+            # i due casi collassano di proposito: per il form sono la stessa
+            # cosa, un campo vuoto da compilare. La distinzione conterebbe solo
+            # per chi analizza le dichiarazioni, e quel consumatore leggerà la
+            # colonna, non questo payload.
+            "ore_stimate_residue": d.ore_stimate_residue if d else None,
             # Nodo F-2 (a): «l'ho guardato, è ancora fermo». È una traccia
             # SENZA avanzamento, e sta accanto agli altri campi della
             # dichiarazione perché è una dichiarazione anche lei. False — non
@@ -2023,15 +2037,23 @@ def task_settimana_dipendente(dipendente_id, settimana=None):
     stato_dichiarato_per_task = {}
     percentuale_per_task = {}
     ore_effettive_per_task = {}
+    residuo_per_task = {}
     presa_visione_per_task = set()
     for (tid, ore, nota, compilato, stato_dich,
-         pct, ore_eff, presa_vis) in cons_rows:
+         pct, ore_eff, presa_vis, residuo) in cons_rows:
         consumate_per_task[tid] = consumate_per_task.get(tid, 0.0) + float(ore or 0)
         # Come lo stato e la nota: non si sommano, vince la prima valorizzata.
         if pct is not None and tid not in percentuale_per_task:
             percentuale_per_task[tid] = pct
         if ore_eff is not None and tid not in ore_effettive_per_task:
             ore_effettive_per_task[tid] = ore_eff
+        # Stessa regola: NON si somma. Due stime residue sulla stessa settimana
+        # non fanno «55 ore mancanti», fanno due opinioni sullo stesso lavoro, e
+        # sommarle produrrebbe un numero che nessuno ha detto. `is not None` e
+        # non un test di verità, perché 0.0 — «non manca più niente» — è una
+        # dichiarazione da preservare e un `if residuo:` la scarterebbe.
+        if residuo is not None and tid not in residuo_per_task:
+            residuo_per_task[tid] = residuo
         # Nodo F-2 (a). Un set e non un dict: se nel range ci fossero due righe,
         # basta che UNA porti la presa-visione perché il task risulti guardato —
         # «l'ho visto» non si annulla per il fatto che un'altra riga taccia.
@@ -2146,6 +2168,11 @@ def task_settimana_dipendente(dipendente_id, settimana=None):
                 "percentuale": percentuale_per_task.get(t.id),
                 "baseline_pct": baseline_task.get(t.id),
                 "ore_effettive": ore_effettive_per_task.get(t.id),
+                # Consuntivazione A, gemella di quella sui pezzi. Dentro questo
+                # ramo come tutte le altre: su un task SCOMPOSTO il residuo vive
+                # sui pezzi, e una stima-del-task accanto alle stime-dei-pezzi
+                # sarebbe la doppia verità che il motore rifiuta per le ore.
+                "ore_stimate_residue": residuo_per_task.get(t.id),
                 # Nodo F-2 (a) e (b), gemelli esatti di quelli sui pezzi — e
                 # stanno qui, dentro il ramo dei NON scomposti, per la stessa
                 # ragione degli altri tre: su un task con pezzi sarebbero la
