@@ -2021,6 +2021,15 @@ def task_settimana_dipendente(dipendente_id, settimana=None):
             # residuo del TASK (non del singolo/settimana): piano − consumato tot.
             "ore_rimanenti": round(pianificate - consumato_totale_task.get(t.id, 0.0), 1),
             "stato": t.stato,
+            # La SCADENZA del task (Tappa 2, 04/09/2026). `in_ritardo` qui
+            # accanto dice SE la finestra è chiusa; questa dice QUANDO si
+            # chiude — e finché è aperta è l'unica delle due che informa:
+            # «scade fra 3 giorni» è ciò che fa decidere, «non è in ritardo»
+            # no. Serve a «le mie cose» nella Home per evidenziare le scadenze
+            # imminenti, che senza questo campo non erano calcolabili.
+            # `data_inizio` non si espone: nella settimana corrente un task già
+            # cominciato non aggiunge nulla, e il payload cresce per niente.
+            "data_fine": t.data_fine.isoformat() if t.data_fine else None,
             "in_ritardo": _in_ritardo(t),
             # «A che punto sono», come l'ha scritta il dipendente in QUESTA
             # settimana (None se non ha scritto nulla). Serve a riaprire una

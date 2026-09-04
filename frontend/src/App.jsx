@@ -141,7 +141,10 @@ function MainLayout() {
                 </p>
               </div>
               <p className="text-[10px] uppercase tracking-wider text-gray-500 mt-1 ml-3.5">
-                {user?.ruolo_app === 'manager' ? 'Manager' : 'User'}
+                {/* Tre ruoli dal 04/09/2026 (models.RUOLI_APP). Il ternario
+                    binario di prima etichettava un 'pm' come «User»: il ruolo
+                    esisteva nel dato ma era invisibile a chi lo aveva. */}
+                {{ manager: 'Manager', pm: 'PM', user: 'User' }[user?.ruolo_app] ?? 'User'}
               </p>
             </div>
 
