@@ -678,7 +678,19 @@ def applica_modifiche(req: ApplicaRequest, _: Utente = Depends(require_manager))
                 data_fine=datetime.fromisoformat(nt.data_fine) if nt.data_fine else get_oggi(),
                 stato=nt.stato,
                 profilo_richiesto=nt.profilo_richiesto,
-                dipendente_id=nt.dipendente_id,
+                # `or None` come negli altri quattro punti di creazione
+                # (crea_task_singolo qui sopra e i tre wizard in
+                # routes/progetti.py): Postgres rifiuta `''` come valore di una
+                # FK, quindi la stringa vuota non diventava «nessun
+                # assegnatario» ma un IntegrityError — un 500 opaco al posto di
+                # un task legittimamente non assegnato.
+                #
+                # Mordeva più di quanto sembri: `NuovoTask.dipendente_id` ha
+                # DEFAULT `""`, quindi non serviva mandarlo vuoto — bastava
+                # OMETTERLO. Ogni task creato da /applica senza assegnatario
+                # falliva, ed è il caso normale quando si abbozza un piano
+                # prima di sapere chi ci lavorerà.
+                dipendente_id=nt.dipendente_id or None,
                 # Step 3.1 (25/05/2026): era `predecessore=nt.predecessore`.
                 # Vedi DipendenzaInput in cima al file.
                 dipendenze=[d.model_dump() for d in nt.dipendenze],

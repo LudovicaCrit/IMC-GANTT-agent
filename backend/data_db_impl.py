@@ -2631,7 +2631,16 @@ def _next_progetto_id():
 
 
 def aggiungi_task(progetto_id, nome, fase, ore_stimate, data_inizio, data_fine,
-                  stato="Da iniziare", profilo_richiesto="", dipendente_id="",
+                  stato="Da iniziare", profilo_richiesto="",
+                  # `None` e non `""`: il default finiva dritto in una colonna
+                  # FK, e Postgres rifiuta la stringa vuota — chiamare questa
+                  # funzione SENZA assegnatario produceva un IntegrityError
+                  # invece di un task non assegnato, che è ciò che il modello
+                  # ammette (`Task.dipendente_id` è nullable).
+                  # I chiamanti normalizzano già con `or None`; questo chiude
+                  # il caso che nessuna normalizzazione al call-site può
+                  # coprire — l'argomento omesso.
+                  dipendente_id=None,
                   dipendenze=None):
     """Crea un task. Step 2.1 D1: il parametro `fase` (stringa) viene risolto
     a `fase_id` cercando la `Fase` del progetto col nome corrispondente.
@@ -2771,7 +2780,19 @@ def aggiungi_task(progetto_id, nome, fase, ore_stimate, data_inizio, data_fine,
         data_inizio=data_inizio.date() if isinstance(data_inizio, datetime) else data_inizio,
         data_fine=data_fine.date() if isinstance(data_fine, datetime) else data_fine,
         stato=stato, profilo_richiesto=profilo_richiesto,
-        dipendente_id=dipendente_id,
+        # `or None` ANCHE QUI, non solo nei chiamanti. I quattro call-site
+        # normalizzano già, ma questa è una funzione pubblica dello strato dati:
+        # il default `None` copre l'argomento OMESSO, questo copre l'argomento
+        # passato ESPLICITAMENTE vuoto — che la verifica ha mostrato essere un
+        # caso ancora vivo (`aggiungi_task(..., dipendente_id="")` continuava a
+        # sollevare IntegrityError). Le due difese coprono buchi diversi:
+        # nessuna delle due da sola basta.
+        #
+        # NON tocca la guardia «un task In corso deve avere un assegnatario»:
+        # quella vive in routes/tasks.py, valuta lo stato FINALE dopo il merge,
+        # e riceve `None` — un'assenza pulita che sa già trattare — invece di
+        # `''`, che non le arrivava mai perché il flush moriva prima.
+        dipendente_id=dipendente_id or None,
     )
     session.add(task)
     # Flush esplicito: il task diventa visibile alle FK delle DipendenzaTask
