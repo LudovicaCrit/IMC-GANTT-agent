@@ -126,7 +126,7 @@ from sqlalchemy import func
 from deps import require_manager
 from models import (
     get_session,
-    Utente, Ruolo, Competenza, Dipendente,
+    Utente, Ruolo, Competenza, Dipendente, Azienda,
     DipendentiCompetenze, FaseStandard,
 )
 
@@ -144,6 +144,14 @@ class CompetenzaRequest(BaseModel):
 class DipendenteCfgRequest(BaseModel):
     nome: str
     profilo: str
+    # OPZIONALE nel DTO, OBBLIGATORIO alla creazione — e la differenza non è una
+    # scappatoia. Questo DTO è condiviso da POST e PATCH: `Dipendente.azienda_id`
+    # è NOT NULL e alla creazione va per forza deciso, ma in modifica il campo
+    # può mancare e significa «non cambiare azienda». Dichiararlo obbligatorio
+    # qui farebbe fallire con 422 ogni PATCH del form — che non lo manda e che
+    # oggi funziona: si aggiusterebbe l'azione rotta rompendo quella sana.
+    # La guardia sta quindi in `crea_dipendente`, dove il caso è distinguibile.
+    azienda_id: int | None = None
     ruolo_id: int | None = None
     ore_sett: int = 40
     costo_ora: float | None = None
@@ -277,6 +285,24 @@ def elimina_competenza(comp_id: int, _: Utente = Depends(require_manager)):
 # DIPENDENTI — CRUD arricchito (con ruolo, competenze M2M, costo_ora)
 # ═════════════════════════════════════════════════════════════════════════
 
+@router.get("/aziende")
+def lista_aziende(_: Utente = Depends(require_manager)):
+    """Le aziende del gruppo, per il selettore del form-dipendente.
+
+    Endpoint nuovo (07/09/2026): `Azienda` è una TABELLA, non due costanti.
+    Oggi contiene IMC-Improve e Innovation Plaza, ma il seed la costruisce dai
+    dati (`nomi_azienda` unisce le due canoniche a quelle referenziate), quindi
+    un terzo ramo del gruppo comparirebbe in DB senza che nessuno tocchi il
+    codice. Un `<select>` con due voci cablate nel frontend non lo vedrebbe, e
+    il primo assunto di quel ramo sarebbe ininseribile.
+    """
+    session = get_session()
+    aziende = session.query(Azienda).order_by(Azienda.nome).all()
+    result = [{"id": a.id, "nome": a.nome} for a in aziende]
+    session.close()
+    return result
+
+
 @router.get("/dipendenti")
 def lista_dipendenti_config(_: Utente = Depends(require_manager)):
     """Dipendenti con ruolo, competenze, costo_ora per la pagina Configurazione.
@@ -301,6 +327,14 @@ def lista_dipendenti_config(_: Utente = Depends(require_manager)):
             "costo_ora": d.costo_ora,
             "email": d.email or "",
             "sede": d.sede or "",
+            # `azienda_id` serve al form in MODIFICA: senza, il selettore non
+            # potrebbe mostrare l'azienda attuale e ogni salvataggio la
+            # rimanderebbe indietro vuota (= «non cambiare»), rendendo lo
+            # spostamento fra aziende impossibile proprio dove si edita.
+            # `azienda` (il nome) evita al client una seconda lettura per
+            # mostrare l'etichetta in elenco.
+            "azienda_id": d.azienda_id,
+            "azienda": d.azienda_rel.nome if d.azienda_rel else None,
             "competenze": [c[0] for c in comps],
         })
     session.close()
@@ -365,6 +399,43 @@ def _avvisi_competenze(scartati):
     ]
 
 
+def _azienda_valida_o_422(session, azienda_id, obbligatoria):
+    """Verifica che l'azienda esista. Alza 422 PARLANTE, mai 500.
+
+    `POST /config/dipendenti` era rotto da sempre: il DTO non aveva
+    `azienda_id`, l'endpoint non lo passava, e `Dipendente.azienda_id` è NOT
+    NULL — quindi ogni creazione moriva sul flush con un `NotNullViolation`,
+    cioè un 500 opaco su un vincolo che il chiamante non poteva nemmeno vedere
+    nel contratto dell'API. Creare un dipendente dalla Configurazione non ha
+    mai funzionato.
+
+    Le due domande sono separate perché lo sono davvero:
+      - «manca?»       → solo alla creazione è un errore (in modifica significa
+                         «lascia l'azienda com'è»);
+      - «esiste?»      → sempre, in entrambe. Un id inesistente violerebbe la
+                         FK, e una FK violata è di nuovo un 500.
+    """
+    if azienda_id is None:
+        if obbligatoria:
+            aziende = session.query(Azienda).order_by(Azienda.id).all()
+            raise HTTPException(
+                422,
+                "azienda_id è obbligatorio: ogni dipendente appartiene a "
+                "un'azienda del gruppo. Valori ammessi: "
+                + ", ".join(f"{a.id} ({a.nome})" for a in aziende),
+            )
+        return None
+    az = session.query(Azienda).filter(Azienda.id == azienda_id).first()
+    if az is None:
+        aziende = session.query(Azienda).order_by(Azienda.id).all()
+        raise HTTPException(
+            422,
+            f"azienda_id {azienda_id} non esiste. Valori ammessi: "
+            + ", ".join(f"{a.id} ({a.nome})" for a in aziende),
+        )
+    return az
+
+
 @router.post("/dipendenti")
 def crea_dipendente(req: DipendenteCfgRequest, _: Utente = Depends(require_manager)):
     """Crea un nuovo dipendente con ID generato automaticamente (D001, D002...).
@@ -372,6 +443,13 @@ def crea_dipendente(req: DipendenteCfgRequest, _: Utente = Depends(require_manag
     Associa anche le competenze M2M se passate nel payload.
     """
     session = get_session()
+    # PRIMA di generare l'id: se l'azienda non va bene, non si crea niente e
+    # non si consuma un numero della sequenza.
+    try:
+        _azienda_valida_o_422(session, req.azienda_id, obbligatoria=True)
+    except HTTPException:
+        session.close()
+        raise
     # Genera prossimo ID seguendo il formato DXXX
     max_id = session.query(func.max(Dipendente.id)).scalar()
     if max_id and max_id.startswith("D") and max_id[1:].isdigit():
@@ -382,6 +460,7 @@ def crea_dipendente(req: DipendenteCfgRequest, _: Utente = Depends(require_manag
 
     dip = Dipendente(
         id=new_id, nome=req.nome, profilo=req.profilo,
+        azienda_id=req.azienda_id,
         ruolo_id=req.ruolo_id, ore_sett=req.ore_sett,
         costo_ora=req.costo_ora, email=req.email, sede=req.sede,
         competenze=req.competenze,
@@ -409,6 +488,18 @@ def modifica_dipendente(dip_id: str, req: DipendenteCfgRequest, _: Utente = Depe
     if not dip:
         session.close()
         raise HTTPException(404, "Dipendente non trovato")
+
+    # `azienda_id` assente = «non cambiare», l'unico campo con questa
+    # convenzione perché è l'unico che il form non manda. Se arriva, si valida
+    # e si applica: spostare una persona fra IMC-Improve e Innovation Plaza
+    # diventa possibile, e prima non lo era da nessuna parte.
+    try:
+        _azienda_valida_o_422(session, req.azienda_id, obbligatoria=False)
+    except HTTPException:
+        session.close()
+        raise
+    if req.azienda_id is not None:
+        dip.azienda_id = req.azienda_id
 
     dip.nome = req.nome
     dip.profilo = req.profilo

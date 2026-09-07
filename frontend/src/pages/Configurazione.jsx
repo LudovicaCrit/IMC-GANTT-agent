@@ -202,26 +202,31 @@ function TabDipendenti() {
   const { items: dipendenti, loading, create, update, remove } = useCrud('dipendenti')
   const { items: ruoli } = useCrud('ruoli')
   const { items: competenze } = useCrud('competenze')
+  // Le aziende del gruppo arrivano da `/config/aziende` e non sono cablate qui:
+  // `Azienda` è una tabella che il seed costruisce dai dati, quindi un terzo
+  // ramo comparirebbe in DB senza toccare il codice — e un <select> con due
+  // voci fisse renderebbe ininseribile il primo assunto di quel ramo.
+  const { items: aziende } = useCrud('aziende')
 
   const [editId, setEditId] = useState(null)
-  const [form, setForm] = useState({ nome: '', profilo: '', ruolo_id: null, ore_sett: 40, costo_ora: null, email: '', competenze: [] })
+  const [form, setForm] = useState({ nome: '', profilo: '', azienda_id: null, ruolo_id: null, ore_sett: 40, costo_ora: null, email: '', competenze: [] })
   const [showNew, setShowNew] = useState(false)
 
   function startEdit(d) {
     setEditId(d.id)
-    setForm({ nome: d.nome, profilo: d.profilo, ruolo_id: d.ruolo_id, ore_sett: d.ore_sett, costo_ora: d.costo_ora, email: d.email, competenze: d.competenze || [] })
+    setForm({ nome: d.nome, profilo: d.profilo, azienda_id: d.azienda_id, ruolo_id: d.ruolo_id, ore_sett: d.ore_sett, costo_ora: d.costo_ora, email: d.email, competenze: d.competenze || [] })
   }
 
   function cancelEdit() {
     setEditId(null); setShowNew(false)
-    setForm({ nome: '', profilo: '', ruolo_id: null, ore_sett: 40, costo_ora: null, email: '', competenze: [] })
+    setForm({ nome: '', profilo: '', azienda_id: null, ruolo_id: null, ore_sett: 40, costo_ora: null, email: '', competenze: [] })
   }
 
   async function salva() {
     try {
       if (showNew) { await create(form); setShowNew(false) }
       else { await update(editId, form); setEditId(null) }
-      setForm({ nome: '', profilo: '', ruolo_id: null, ore_sett: 40, costo_ora: null, email: '', competenze: [] })
+      setForm({ nome: '', profilo: '', azienda_id: null, ruolo_id: null, ore_sett: 40, costo_ora: null, email: '', competenze: [] })
     } catch (e) { alert(e.message) }
   }
 
@@ -274,6 +279,24 @@ function TabDipendenti() {
             </div>
           </div>
           <div className="grid grid-cols-3 gap-3 mb-3">
+            {/* AZIENDA — obbligatoria alla creazione, e senza questo campo il
+                salvataggio non poteva riuscire: `Dipendente.azienda_id` è NOT
+                NULL, il form non lo mandava, e «crea dipendente» falliva sempre
+                (prima un 500 opaco, dal fix di oggi un 422 parlante). In
+                MODIFICA parte dall'azienda attuale e permette di cambiarla —
+                spostare una persona fra i rami del gruppo prima non si poteva
+                fare da nessuna parte. */}
+            <div>
+              <label className="text-xs text-gray-400">
+                Azienda {showNew && <span className="text-red-400">*</span>}
+              </label>
+              <select value={form.azienda_id || ''}
+                onChange={e => setForm({ ...form, azienda_id: e.target.value ? parseInt(e.target.value) : null })}
+                className="w-full bg-gray-900 border border-gray-700 rounded px-3 py-1.5 text-sm mt-1">
+                <option value="">— Seleziona —</option>
+                {aziende.map(a => <option key={a.id} value={a.id}>{a.nome}</option>)}
+              </select>
+            </div>
             <div>
               <label className="text-xs text-gray-400">Ore/settimana</label>
               <input type="number" value={form.ore_sett || ''} onChange={e => setForm({ ...form, ore_sett: e.target.value === '' ? null : parseInt(e.target.value) })}
