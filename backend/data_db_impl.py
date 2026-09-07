@@ -117,6 +117,37 @@ STATI_FINITI_SEMAFORO = (
 STATI_FERMI_SEMAFORO = ("Sospeso", "Sospesa")
 
 
+# ══════════════════════════════════════════════════════════════════════
+# IL RITARDO — una regola, un posto solo
+# ══════════════════════════════════════════════════════════════════════
+# Gli stati che NON sono un ritardo del dipendente. «Sospeso» sta con
+# «Completato» perché è una DECISIONE del PM, non uno scivolamento —
+# segnalarlo accuserebbe del contrario.
+#
+# PROMOSSA A MODULO il 07/09/2026. Viveva come costante locale dentro
+# `task_settimana_dipendente`, dove serviva a due usi (il ramo-4 del filtro e
+# l'etichetta `in_ritardo`). Con la vista-PM il lettore diventa un terzo, in un
+# altro file: o la regola sale qui, o la terza copia nasce subito. Il semaforo
+# ha già mostrato cosa costa una regola in due copie — due viste dello stesso
+# task che lo chiamano in ritardo in una e puntuale nell'altra, e nessun test
+# se ne accorge perché ciascuna è internamente coerente.
+STATI_NON_IN_RITARDO = ("Completato", "Sospeso")
+
+
+def task_in_ritardo(data_fine, stato, oggi=None):
+    """La finestra è chiusa e il lavoro no. Pura: nessuna query.
+
+    Il confronto è con OGGI e non con la settimana visualizzata: un task
+    scaduto resta in ritardo anche riaprendo la settimana scorsa.
+
+    `data_fine is None` → False: non si può dire che sia scaduto qualcosa che
+    non ha una scadenza. È un'assenza di informazione, non un'assoluzione.
+    """
+    if data_fine is None:
+        return False
+    return data_fine < (oggi or date.today()) and stato not in STATI_NON_IN_RITARDO
+
+
 def colore_unita(data_fine, stato, oggi,
                  percentuale=None, ore_consumate=None, ore_pianificate=None):
     """Colore del semaforo di UNA unità di lavoro. Pura: nessuna query.
@@ -505,6 +536,75 @@ def progetti_attivi_visibili(current_user, solo_attivi=True):
         # Unione senza duplicati (un progetto può matchare entrambi i rami).
         ids = {pid for (pid,) in pm_q.all()} | {pid for (pid,) in membro_q.all()}
         return list(ids)
+    finally:
+        session.close()
+
+
+def progetti_diretti_da(dipendente_id, solo_attivi=True):
+    """Id dei progetti che questo dipendente DIRIGE — `Progetto.pm_id == lui`.
+
+    IL RAMO (a) DI `progetti_attivi_visibili`, DA SOLO — e la differenza non è
+    una sfumatura. Quella funzione risponde a «quali progetti posso VEDERE» e
+    unisce due rami: quelli che dirigo (a) e quelli dove ho un task (b).
+    Misurato sul PM roberto (D002) il 07/09/2026:
+
+        progetti visibili        8   →  14 dipendenti su 18
+        di cui DIRETTI da lui    2   →   8 dipendenti
+
+    Il ramo (b) porta dentro progetti diretti da altri, dove lui è solo uno dei
+    collaboratori. Usare `progetti_attivi_visibili` per la vista-PM gli
+    mostrerebbe note e stime residue di 14 persone su 18 — colleghi su lavori
+    che non dirige. Non sarebbe «il mio gruppo», sarebbe quasi tutta l'azienda.
+
+    LEGGERE ≠ SORVEGLIARE, ed è la ragione per cui questa funzione esiste
+    invece di un parametro sull'altra. «Posso aprire questo progetto» e «rispondo
+    di questo progetto» sono due domande diverse: la prima abilita una lettura,
+    la seconda una responsabilità. Un parametro le avrebbe fatte sembrare due
+    modi della stessa cosa.
+
+    `solo_attivi=True` (default) — solo `STATI_PROGETTO_ATTIVI`, come la
+    sorella. Un progetto chiuso non chiede consuntivazione.
+    """
+    # Import locale come nella sorella `progetti_attivi_visibili`: la costante
+    # vive in `models` e l'import a livello di modulo qui sarebbe circolare.
+    from models import STATI_PROGETTO_ATTIVI
+
+    if not dipendente_id:
+        return []
+    session = get_session()
+    try:
+        q = session.query(Progetto.id).filter(Progetto.pm_id == dipendente_id)
+        if solo_attivi:
+            q = q.filter(Progetto.stato.in_(STATI_PROGETTO_ATTIVI))
+        return [pid for (pid,) in q.all()]
+    finally:
+        session.close()
+
+
+def dipendenti_con_task_su(progetti_ids):
+    """Id dei dipendenti con almeno un task su questi progetti.
+
+    Serve al blocco NON-COMPILANTI della vista-PM, e va derivato dai TASK e non
+    dai consuntivi: chi non ha compilato non ha righe, quindi partendo dai
+    consuntivi sarebbe invisibile proprio nel momento in cui lo si cerca.
+
+    Nessun filtro sullo stato del task: chi ha solo task chiusi resta nel
+    gruppo. La domanda qui è «chi lavora su questi progetti», e la risposta non
+    cambia perché questa settimana non aveva niente di aperto — sarebbe un modo
+    obliquo di rispondere a un'altra domanda.
+    """
+    if not progetti_ids:
+        return []
+    session = get_session()
+    try:
+        rows = (
+            session.query(Task.dipendente_id)
+            .filter(Task.progetto_id.in_(list(progetti_ids)),
+                    Task.dipendente_id.isnot(None))
+            .distinct()
+            .all()
+        )
+        return [d for (d,) in rows]
     finally:
         session.close()
 
@@ -1773,14 +1873,11 @@ def task_settimana_dipendente(dipendente_id, settimana=None):
     # cavallo della mezzanotte e far divergere filtro e etichetta.
     oggi = date.today()
 
-    # Gli stati che NON sono un ritardo del dipendente. Vocabolario definito una
-    # volta e usato in DUE forme — la condizione SQL del ramo-4 e `_in_ritardo`
-    # — perché un'espressione SQLAlchemy e un `in` su un oggetto Python non
-    # possono essere la stessa riga di codice. Il vocabolario però sì, ed è la
-    # sola parte che può davvero divergere: se un domani si decidesse che anche
-    # "Bloccato" non è un ritardo, cambiarlo qui cambierebbe insieme chi COMPARE
-    # e chi viene ETICHETTATO. Sono la stessa domanda e devono restare allineate.
-    STATI_NON_IN_RITARDO = ("Completato", "Sospeso")
+    # `STATI_NON_IN_RITARDO` arriva dal modulo (promossa il 07/09): la usano il
+    # ramo-4 del filtro qui sotto, l'etichetta `in_ritardo` nel payload, e ora
+    # anche la vista-PM in routes/consuntivi. Un'espressione SQLAlchemy e un
+    # `in` su un oggetto Python non possono essere la stessa riga di codice, ma
+    # il vocabolario sì — ed è la sola parte che può davvero divergere.
 
     session = get_session()
     try:
@@ -2086,21 +2183,13 @@ def task_settimana_dipendente(dipendente_id, settimana=None):
         return round((t.ore_pianificate or 0) / weeks, 1)
 
     def _in_ritardo(t):
-        """Finestra chiusa (data_fine passata) e task non chiuso.
-        Il confronto è con OGGI, non con la settimana visualizzata: un task
-        scaduto resta in ritardo anche riaprendo la settimana scorsa.
-        Date NULL → non si può dire che sia scaduto, quindi False.
-        'Sospeso' è escluso con 'Completato': è una decisione del PM, non un
-        ritardo del dipendente — segnalarlo accuserebbe del contrario.
+        """La regola sta in `task_in_ritardo` (modulo): qui si passa solo
+        l'oggetto Task e l'`oggi` già fissato in cima alla funzione.
 
-        STESSA REGOLA DEL RAMO-4 del filtro, in cima alla funzione: là decide
-        se la riga ESISTE, qui se va ETICHETTATA. Il vocabolario degli stati è
-        letteralmente lo stesso oggetto (`STATI_NON_IN_RITARDO`) proprio perché
-        le due risposte non possono divergere: una riga che compare per il
-        ramo-4 esce da qui con `in_ritardo=True`, sempre e per costruzione."""
-        if t.data_fine is None:
-            return False
-        return t.data_fine < oggi and t.stato not in STATI_NON_IN_RITARDO
+        STESSA REGOLA DEL RAMO-4 del filtro: là decide se la riga ESISTE, qui
+        se va ETICHETTATA. Sono la stessa domanda, e una riga che compare per
+        il ramo-4 esce da qui con `in_ritardo=True` per costruzione."""
+        return task_in_ritardo(t.data_fine, t.stato, oggi)
 
     out = []
     for t in tasks:

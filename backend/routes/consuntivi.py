@@ -15,7 +15,7 @@ ENDPOINT ESPOSTI
 ┌──────────────────────────────────┬──────────┬──────────────────────────────┐
 │ Path                             │ Metodo   │ Auth                         │
 ├──────────────────────────────────┼──────────┼──────────────────────────────┤
-│ /api/consuntivi/settimana        │ GET      │ require_manager              │
+│ /api/consuntivi/settimana        │ GET      │ manager (tutti) / pm (i suoi)│
 │ /api/consuntivi/me               │ GET      │ AUTH-ONLY (intrinseco self)  │
 │ /api/consuntivi/salva            │ POST     │ Pattern Y (self-or-manager)  │
 └──────────────────────────────────┴──────────┴──────────────────────────────┘
@@ -23,11 +23,23 @@ ENDPOINT ESPOSTI
 DETTAGLIO ENDPOINT
 ──────────────────
 1. GET /api/consuntivi/settimana
-   - Manager-only.
-   - Vista AZIENDALE: tutti i dipendenti, settimana corrente.
-   - Per ogni dipendente: ore_per_task, totale_ore, flag `compilato`.
+   - manager → perimetro AZIENDALE (tutti i dipendenti). Invariato.
+     pm      → i dipendenti con task sui progetti che DIRIGE
+               (`progetti_diretti_da`, non `progetti_attivi_visibili`).
+     user    → 403: la sua vista è /me.
+   - Settimana corrente. Per ogni dipendente: ore_per_task, totale_ore,
+     flag `compilato`, e i conteggi n_segnalazioni / n_fermi / n_in_ritardo.
+   - Ogni voce di `ore_per_task` porta il CONTENUTO della dichiarazione, non
+     le sole ore: nota, percentuale, ore_effettive, ore_stimate_residue,
+     stato_dichiarato, stato_task, data_fine, in_ritardo, presa_visione,
+     più task_id/progetto_id per agganciare un drill-down.
    - Include anche dipendenti che NON hanno compilato (totale_ore=0,
-     compilato=False), purché abbiano almeno 1 task attivo.
+     compilato=False), purché abbiano almeno 1 task attivo E siano nel
+     perimetro di chi chiede.
+   - `compilato` = HA RISPOSTO (esiste una riga), non «ha dichiarato ore»:
+     le righe a zero ore sono dichiarazioni-ferme, e sono il contenuto per cui
+     la vista-PM esiste. Vedi il rovesciamento della regola di scarto nel
+     corpo della funzione.
    - Output ordinato: prima i compilati, poi per nome.
 
 2. GET /api/consuntivi/me
@@ -77,7 +89,9 @@ DETTAGLIO ENDPOINT
 
 PATTERN AUTH USATI
 ──────────────────
-- `require_manager`: per la vista aziendale aggregata.
+- `get_current_user` + dispatch sul ruolo: la vista aggregata serve manager
+  (perimetro aziendale) e pm (perimetro dei progetti che dirige); il `user`
+  riceve 403 — la sua vista e' /me.
 - `get_current_user` + check `dipendente_id`: per il pattern self-or-manager
   in scrittura (Pattern Y) e per la vista personale intrinseca (`/me`).
 
@@ -99,7 +113,7 @@ DIPENDENZE
 - `data` (modulo): `get_dipendente`, `salva_consuntivo` (in PERSISTENT_MODE).
 - `models`: `Dipendente`, `Task`, `Consuntivo`, `get_session` (lettura
   diretta Postgres).
-- `deps`: `get_current_user`, `require_manager`.
+- `deps`: `get_current_user`.
 - `models`: classe `Utente` per type hint.
 
 NOTE TECNICHE
@@ -116,14 +130,14 @@ Letture migrate da DataFrame in cache a Postgres diretto il 21 maggio 2026
 ═══════════════════════════════════════════════════════════════════════════
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, model_validator
 from sqlalchemy import func
 from sqlalchemy.orm import joinedload
 
-from deps import get_current_user, require_manager
+from deps import get_current_user
 from models import (
     Utente, Dipendente, Task, Consuntivo, get_session, STATI_DICHIARABILI,
 )
@@ -135,6 +149,11 @@ from data import (
     note_consuntivi_settimana,
     note_sottotask_settimana,
     percentuali_successive,
+    # Vista-PM (07/09/2026): il perimetro di chi dirige, e la regola del
+    # ritardo — entrambi dallo strato dati, per non riscriverli qui.
+    progetti_diretti_da,
+    dipendenti_con_task_su,
+    task_in_ritardo,
 )
 
 
@@ -671,12 +690,57 @@ router = APIRouter(prefix="/api/consuntivi", tags=["consuntivi"])
 
 
 @router.get("/settimana")
-def consuntivi_settimana_corrente(_: Utente = Depends(require_manager)):
-    """Vista MANAGER-ONLY: riepilogo aziendale settimana corrente.
-    Per la vista personale del dipendente vedi /api/consuntivi/me."""
+def consuntivi_settimana_corrente(current_user: Utente = Depends(get_current_user)):
+    """Le dichiarazioni della settimana corrente, nel perimetro di chi chiede.
+
+    UNA VISTA, DUE PERIMETRI (07/09/2026)
+    --------------------------------------
+    Era manager-only e aziendale. Ora il PM legge le segnalazioni del proprio
+    gruppo dallo stesso endpoint: la domanda-dati è la stessa — «cosa hanno
+    dichiarato i miei questa settimana» — e cambia solo chi definisce «i miei».
+    Due endpoint avrebbero significato due regole di visibilità sulla stessa
+    tabella, cioè la regola-in-due-copie che questo codice combatte da mesi.
+
+      manager → tutti. Comportamento invariato: `perimetro is None`, e nessun
+                filtro si applica.
+      pm      → i dipendenti che lavorano sui progetti che DIRIGE
+                (`progetti_diretti_da`, NON `progetti_attivi_visibili`: quella
+                include anche i progetti dove il pm ha solo un task, diretti da
+                altri — misurato, farebbe passare il perimetro da 8 a 14
+                dipendenti su 18).
+      user    → 403. Un dipendente non legge le dichiarazioni dei colleghi; la
+                sua vista è /api/consuntivi/me.
+
+    IL FILTRO-RUOLO STA IN UN PUNTO SOLO — il blocco `perimetro` qui sotto.
+    Sotto quel punto il codice non sa più chi sta chiedendo: applica un filtro
+    se c'è, e basta. È la stessa disciplina di `progetti_attivi_visibili`, dove
+    l'identità si decide una volta e il resto è comune.
+
+    IL PAYLOAD È IDENTICO PER I DUE RUOLI. Cambia CHI ci finisce dentro, non
+    cosa contiene: un solo formato da consumare, e il giorno che il management
+    vuole leggere una nota non serve un endpoint nuovo. Costa poco — misurate
+    53-72 righe a settimana per tutta l'azienda.
+    """
+    # ── IL PERIMETRO — l'unico punto dove il ruolo conta ────────────────
+    if current_user.ruolo_app == "manager":
+        perimetro_dipendenti = None          # None = nessun filtro, tutti
+    elif current_user.ruolo_app == "pm":
+        progetti = progetti_diretti_da(current_user.dipendente_id)
+        perimetro_dipendenti = set(dipendenti_con_task_su(progetti))
+        # Un PM senza progetti diretti ha un perimetro VUOTO, che è diverso da
+        # «nessun filtro»: `set()` è falsy ma non è None, e il codice sotto
+        # distingue i due casi. Confonderli gli mostrerebbe tutta l'azienda.
+    else:
+        raise HTTPException(
+            403,
+            "Questa vista è riservata a manager e PM. Le tue dichiarazioni "
+            "sono in /api/consuntivi/me.",
+        )
+
     lun = datetime.now() - timedelta(days=datetime.now().weekday())
     lun_date = lun.date() if hasattr(lun, 'date') else lun
     ven_date = lun_date + timedelta(days=6)
+    oggi = date.today()
 
     session = get_session()
     # Iso-comportamento: l'originale fa early-return [] se la tabella
@@ -690,12 +754,21 @@ def consuntivi_settimana_corrente(_: Utente = Depends(require_manager)):
 
     # Una sola query con joinedload su Task → Progetto: evita N+1 nel
     # lookup di nome task/progetto durante il loop.
-    cons_sett = session.query(Consuntivo).options(
+    q_cons = session.query(Consuntivo).options(
         joinedload(Consuntivo.task).joinedload(Task.progetto)
     ).filter(
         Consuntivo.settimana >= lun_date,
         Consuntivo.settimana <= ven_date,
-    ).all()
+    )
+    # Il perimetro si applica sul DIPENDENTE e non sul progetto del task, ed è
+    # una scelta: un dipendente del gruppo che ha lavorato anche su un progetto
+    # altrui va mostrato per intero, con tutte le sue ore. Filtrando per
+    # progetto il PM vedrebbe una settimana mutilata — «Marco: 12h» quando ne
+    # ha fatte 38 — e il confronto con le ore contrattuali, che è metà del
+    # senso di questa vista, direbbe il falso.
+    if perimetro_dipendenti is not None:
+        q_cons = q_cons.filter(Consuntivo.dipendente_id.in_(perimetro_dipendenti or [""]))
+    cons_sett = q_cons.all()
 
     # Raggruppa per dipendente_id (mantiene l'ordine di arrivo, come
     # `unique()` su pandas Series).
@@ -711,19 +784,62 @@ def consuntivi_settimana_corrente(_: Utente = Depends(require_manager)):
             continue
         ore_per_task = []
         totale = 0
+        n_segnalazioni = n_fermi = n_ritardo = 0
         for c in lista_cons:
-            if c.ore_dichiarate > 0:
-                t = c.task
-                if t is not None:
-                    proj_nome = t.progetto.nome if t.progetto else "?"
-                    ore_per_task.append({
-                        "task_nome": t.nome,
-                        "progetto": proj_nome,
-                        "ore": float(c.ore_dichiarate),
-                    })
-                    totale += float(c.ore_dichiarate)
+            t = c.task
+            if t is None:
+                continue
+            # ── LA REGOLA DI SCARTO, ROVESCIATA (07/09/2026) ─────────────
+            # Prima: `if c.ore_dichiarate > 0`. Le righe a ZERO ore venivano
+            # buttate — cioè esattamente le dichiarazioni-ferme, «sono fermo,
+            # zero ore, ecco perché», che sono il contenuto per cui la
+            # vista-PM esiste. Storicamente sono 386 righe su 2.635 (15%).
+            #
+            # Lo scarto aveva anche un secondo effetto, più insidioso: chi
+            # aveva SOLO righe a zero ore restava con `ore_per_task` vuoto,
+            # non entrava in `risultato` e finiva fra i NON-COMPILANTI pur
+            # avendo risposto. «Compilato» significava «ha dichiarato ore»,
+            # non «ha risposto». Ora significa la seconda, che è la domanda
+            # che la vista pone.
+            proj = t.progetto
+            in_ritardo = task_in_ritardo(t.data_fine, t.stato, oggi)
+            ore_per_task.append({
+                # `task_id` e `progetto_id` non c'erano: senza, nessun
+                # drill-down è agganciabile e i nomi sono un vicolo cieco.
+                "task_id": t.id,
+                "task_nome": t.nome,
+                "progetto_id": t.progetto_id,
+                "progetto": proj.nome if proj else "?",
+                "ore": float(c.ore_dichiarate),
+                # ── Il CONTENUTO della dichiarazione ─────────────────────
+                # È ciò che la vista-management non ha mai portato: sole ore,
+                # e le ore non dicono cosa sta succedendo.
+                "nota": c.nota,
+                "percentuale": c.percentuale,
+                "ore_effettive": c.ore_effettive,
+                # Il campo della A (04/09): fin qui scritto e letto da
+                # nessuno. Questa vista è il suo primo lettore.
+                "ore_stimate_residue": c.ore_stimate_residue,
+                "stato_dichiarato": c.stato_dichiarato,
+                "stato_task": t.stato,
+                "data_fine": t.data_fine.isoformat() if t.data_fine else None,
+                "in_ritardo": in_ritardo,
+                "presa_visione": bool(c.presa_visione),
+            })
+            totale += float(c.ore_dichiarate)
+            # Conteggi calcolati QUI e non lato client: il management riceve
+            # lo stesso payload del PM ma lo rende come sintesi, e una sintesi
+            # non può ricavarsi contando righe che si è deciso di non mostrare.
+            if c.nota:
+                n_segnalazioni += 1
+            if c.stato_dichiarato == "Bloccato":
+                n_fermi += 1
+            if in_ritardo:
+                n_ritardo += 1
 
-        if ore_per_task:
+        # `lista_cons` e non `ore_per_task`: una persona entra se ha una riga,
+        # anche a zero ore. Vedi il rovesciamento qui sopra.
+        if lista_cons:
             risultato.append({
                 "dipendente_id": did,
                 "nome": dip["nome"],
@@ -732,12 +848,28 @@ def consuntivi_settimana_corrente(_: Utente = Depends(require_manager)):
                 "totale_ore": round(totale, 1),
                 "ore_per_task": ore_per_task,
                 "compilato": True,
+                # I conteggi della sintesi. Il management li legge in cima e
+                # apre il dettaglio solo dove c'è qualcosa; il PM legge il
+                # dettaglio e basta. Stesso payload, due letture.
+                "n_segnalazioni": n_segnalazioni,
+                "n_fermi": n_fermi,
+                "n_in_ritardo": n_ritardo,
             })
 
     # Aggiungi dipendenti che NON hanno compilato (con almeno 1 task attivo).
     # Conteggio task attivi per dipendente fatto in UNA query aggregata,
     # invece di un filtro DataFrame per ciascuno.
-    dipendenti_attivi = session.query(Dipendente).filter(Dipendente.attivo == True).all()
+    q_dip = session.query(Dipendente).filter(Dipendente.attivo == True)
+    # IL PERIMETRO VALE ANCHE QUI, ed è la metà che si dimentica. Senza, un PM
+    # vedrebbe correttamente solo le PROPRIE dichiarazioni ma continuerebbe a
+    # vedere l'intera anagrafica aziendale fra i non-compilanti: 4 compilanti
+    # suoi e 14 «mancanti» che non sono affar suo. Il gruppo si deriva dai TASK
+    # sui progetti diretti (`dipendenti_con_task_su`) e non dai consuntivi —
+    # chi non ha compilato non ha righe, e partendo da quelle sarebbe invisibile
+    # proprio nel momento in cui lo si cerca.
+    if perimetro_dipendenti is not None:
+        q_dip = q_dip.filter(Dipendente.id.in_(perimetro_dipendenti or [""]))
+    dipendenti_attivi = q_dip.all()
     task_count_rows = session.query(
         Task.dipendente_id, func.count(Task.id)
     ).filter(
@@ -759,6 +891,9 @@ def consuntivi_settimana_corrente(_: Utente = Depends(require_manager)):
                 "totale_ore": 0,
                 "ore_per_task": [],
                 "compilato": False,
+                "n_segnalazioni": 0,
+                "n_fermi": 0,
+                "n_in_ritardo": 0,
             })
 
     return sorted(risultato, key=lambda x: (-x["compilato"], x["nome"]))
