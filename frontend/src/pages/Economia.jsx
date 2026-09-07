@@ -373,10 +373,17 @@ export default function Economia() {
             let agentMsg = 'Il progetto procede in linea con le tempistiche.'
             let agentBg = 'bg-green-900/20 border-green-800'
             if (deltaTL > 15) {
-              agentMsg = `Il progetto è in ritardo: l'avanzamento temporale (${p.progressoTempo.toFixed(0)}%) supera quello lavorativo (${p.progressoOre.toFixed(0)}%) di ${deltaTL.toFixed(0)} punti.`
+              // NEUTRA, e non più un allarme. Diceva «il progetto è in
+              // ritardo: l'avanzamento temporale supera quello lavorativo» —
+              // ma `progressoOre` è budget SPESO, non lavoro svolto, quindi la
+              // frase accusava un ritardo da un dato che non lo sostiene.
+              // Spendere meno budget di quanto tempo è passato è spesso il
+              // caso MIGLIORE: si sta sotto-consumando. Il numero resta lo
+              // stesso, la lettura non è più cablata nella frase.
+              agentMsg = `Tempo trascorso ${p.progressoTempo.toFixed(0)}%, budget ore speso ${p.progressoOre.toFixed(0)}%: ${deltaTL.toFixed(0)} punti di scarto. Da guardare — può voler dire lavoro indietro oppure consumo sotto le attese.`
               agentBg = 'bg-red-900/20 border-red-800'
             } else if (deltaTL > 5) {
-              agentMsg = 'Lieve disallineamento tra tempo trascorso e lavoro svolto. Monitorare.'
+              agentMsg = 'Lieve scarto tra tempo trascorso e budget ore speso. Monitorare.'
               agentBg = 'bg-yellow-900/20 border-yellow-800'
             }
 
@@ -396,7 +403,12 @@ export default function Economia() {
                 <div className="grid grid-cols-3 gap-6 mb-4">
                   <Gauge value={p.progressoTempo} label="Avanzamento Temporale"
                     colorThresholds={{ yellow: 70, red: 90 }} />
-                  <Gauge value={p.progressoOre} label="Avanzamento Lavoro"
+                  {/* `progressoOre` è `ore_consuntivate / budget_ore`: budget
+                      SPESO, non lavoro fatto. Denominatore diverso da quello
+                      della card «Venduto consumato» del Cantiere (là è
+                      `ore_vendute`) — nomi diversi apposta, o si ricrea da
+                      un'altra parte la confusione che si sta togliendo. */}
+                  <Gauge value={p.progressoOre} label="Budget ore consumato"
                     colorThresholds={{ yellow: 70, red: 90 }} />
                   <Gauge value={p.budgetUsato} label="Budget Utilizzato"
                     colorThresholds={{ yellow: 60, red: 80 }} />

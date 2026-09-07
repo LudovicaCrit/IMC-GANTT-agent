@@ -5,7 +5,7 @@
  *
  * Estratto da CantiereDettaglio.jsx (Step 2.3-bis 4a, 18 mag 2026).
  *
- * Mostra: Budget ore | Ore consumate/vendute | Avanzamento % | Task completati.
+ * Mostra: Budget ore | Ore consumate/vendute | Venduto consumato % | Task completati.
  * Lo sforamento ore_consumate > ore_vendute_totali è evidenziato in rosso.
  *
  * Props:
@@ -46,7 +46,15 @@ export default function KpiSintetici({ progetto, readonly = false }) {
         valore={`${oreCons}h / ${oreVen}h`}
         rosso={sforamento}
       />
-      <KpiCard label="Avanzamento" valore={`${pct}%`} />
+      {/* «Venduto consumato» e non «Avanzamento»: il numero è
+          `ore_consumate / ore_vendute`, cioè quanta parte del budget
+          CONTRATTATO col cliente è stata bruciata. Non dice nulla su quanto
+          lavoro sia stato fatto — un progetto può aver speso il 60% del
+          venduto essendo al 20% o al 90% del lavoro, e l'etichetta vecchia
+          faceva leggere quel 60% come «siamo a metà».
+          È la stessa frazione della card accanto, in percentuale: due letture
+          legittime dello stesso dato, per chi legge meglio l'una o l'altra. */}
+      <KpiCard label="Venduto consumato" valore={`${pct}%`} />
       <KpiCard label="Task completati" valore={`${taskComp} / ${taskTot} (${pctTask}%)`} />
     </div>
   )

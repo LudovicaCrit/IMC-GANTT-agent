@@ -164,9 +164,14 @@ export default function VistaManagement() {
         )}
       </div>
 
-      {/* ═══ Avanzamento ore per progetto ═══ */}
+      {/* ═══ Budget ore consumato per progetto ═══
+          Il titolo diceva «Avanzamento ore»: il numero è
+          `ore_consuntivate / budget_ore`, cioè budget SPESO. Il sottotitolo e
+          l'etichetta sotto la barra («% del budget consumato») lo dicevano già
+          correttamente — mentiva solo l'intestazione, che è la riga che si
+          legge per prima e quella che resta in mente. */}
       <div className="bg-gray-900 rounded-xl border border-gray-800 p-5">
-        <h3 className="font-semibold mb-1">📊 Avanzamento ore per progetto</h3>
+        <h3 className="font-semibold mb-1">📊 Budget ore consumato per progetto</h3>
         <p className="text-xs text-gray-500 mb-4">Ore consuntivate rispetto al budget stimato.</p>
         <div className="space-y-3">
           {attivi.map(p => {
