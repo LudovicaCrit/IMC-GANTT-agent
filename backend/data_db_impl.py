@@ -649,27 +649,59 @@ def criticita_sforamento_progetti(progetti_ids):
             .filter(Progetto.id.in_(progetti_ids))
             .all()
         )
+
+        # ── DUE QUERY PER TUTTI, invece di due per progetto/fase ──────────
+        # Prima: una query sulle fasi DENTRO il ciclo sui progetti, e una sui
+        # consuntivi dentro il ciclo sulle fasi. Su 36 progetti attivi faceva
+        # 102 query — misurate — ed erano l'80% delle 129 di /home/dashboard,
+        # la pagina che ogni utente apre per prima.
+        #
+        # L'ordine è PRESERVATO: `(progetto_id, ordine)` dà dentro ogni
+        # progetto la stessa sequenza di `order_by(Fase.ordine)` per-progetto,
+        # e `dict.setdefault(...).append(...)` la conserva. Conta, perché la
+        # lista `criticita` si costruisce in ordine di fase. Verificato prima di
+        # batchare che dentro nessun progetto ci siano fasi con lo STESSO
+        # `ordine` (0 casi) né `ordine` NULL (0 casi): con un pareggio le due
+        # forme avrebbero potuto ordinare diversamente, e il confronto
+        # dell'oracolo sarebbe stato una coincidenza invece di una prova.
+        fasi_per_progetto = {}
+        fasi_tutte = (
+            session.query(Fase)
+            .filter(Fase.progetto_id.in_(progetti_ids))
+            .order_by(Fase.progetto_id, Fase.ordine)
+            .all()
+        )
+        for _f in fasi_tutte:
+            fasi_per_progetto.setdefault(_f.progetto_id, []).append(_f)
+
+        # Somma dei consuntivi per fase, in un colpo solo. Le fasi SENZA
+        # consuntivi non compaiono nel risultato del GROUP BY: il `.get(id, 0.0)`
+        # sotto le riporta a 0.0, che è esattamente ciò che faceva il
+        # `coalesce(..., 0.0)` della query per-fase.
+        consumate_per_fase = {}
+        if fasi_tutte:
+            consumate_per_fase = {
+                fid: float(tot or 0.0)
+                for fid, tot in (
+                    session.query(
+                        Task.fase_id,
+                        func.coalesce(func.sum(Consuntivo.ore_dichiarate), 0.0),
+                    )
+                    .join(Task, Consuntivo.task_id == Task.id)
+                    .filter(Task.fase_id.in_([_f.id for _f in fasi_tutte]))
+                    .group_by(Task.fase_id)
+                    .all()
+                )
+            }
+
         out = []
         for p in progetti:
-            fasi = (
-                session.query(Fase)
-                .filter(Fase.progetto_id == p.id)
-                .order_by(Fase.ordine)
-                .all()
-            )
+            fasi = fasi_per_progetto.get(p.id, [])
             criticita = []
             somma_consumate = 0.0
             somma_vendute = 0.0
             for f in fasi:
-                # Stessa aggregazione di routes/fasi.py: SUM(ore_dichiarate)
-                # sui consuntivi dei task agganciati a questa fase.
-                ore_consumate = float(
-                    session.query(
-                        func.coalesce(func.sum(Consuntivo.ore_dichiarate), 0.0)
-                    ).join(Task, Consuntivo.task_id == Task.id)
-                    .filter(Task.fase_id == f.id)
-                    .scalar() or 0.0
-                )
+                ore_consumate = consumate_per_fase.get(f.id, 0.0)
                 # Contributo al totale: SEMPRE, anche se la fase non ha budget.
                 somma_consumate += ore_consumate
                 ore_vendute = f.ore_vendute
