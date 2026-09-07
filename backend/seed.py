@@ -157,6 +157,7 @@ def seed():
     # 4. DIPENDENTI ↔ COMPETENZE (M2M)
     # ══════════════════════════════════════════════════════════════
     n_assoc = 0
+    scartate = []   # (dipendente, nome) — competenze fuori catalogo
     for _, row in DIPENDENTI.iterrows():
         if isinstance(row["competenze"], list):
             for comp_nome in row["competenze"]:
@@ -167,7 +168,22 @@ def seed():
                         competenza_id=comp.id,
                     ))
                     n_assoc += 1
+                else:
+                    # NON associata, ed è corretto: la M2M ha una FK verso
+                    # `competenze` e non può contenere un nome che non esiste.
+                    # Ma finisce comunque nella colonna JSON del dipendente
+                    # (testo libero), e prima questo ramo taceva: è così che il
+                    # seed ha prodotto 4 dipendenti su 18 con le due sorgenti
+                    # divergenti. Ora lo dice.
+                    scartate.append((row["id"], comp_nome))
     print(f"  ✓ {n_assoc} associazioni dipendente-competenza")
+    if scartate:
+        print(f"  ⚠ {len(scartate)} competenze NON associate (fuori catalogo): "
+              f"restano nella colonna JSON ma non in dipendenti_competenze")
+        for did, nome in scartate:
+            print(f"      {did}: '{nome}'")
+        print(f"    → censirle in `competenze_nomi` qui sopra, o toglierle dai "
+              f"profili in seed_data.json")
 
     # ══════════════════════════════════════════════════════════════
     # 5. FASI STANDARD (template)

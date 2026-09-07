@@ -117,6 +117,8 @@ fasi.py per chiudere il refactoring).
 ═══════════════════════════════════════════════════════════════════════════
 """
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import func
@@ -162,6 +164,8 @@ class FaseCatalogoRequest(BaseModel):
 
 
 # ── Router ───────────────────────────────────────────────────────────────
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/api/config", tags=["configurazione"])
 
 
@@ -303,6 +307,64 @@ def lista_dipendenti_config(_: Utente = Depends(require_manager)):
     return result
 
 
+def _associa_competenze(session, dipendente_id, nomi):
+    """Associa alla M2M le competenze IN CATALOGO. Restituisce i nomi SCARTATI.
+
+    Il comportamento non cambia: un nome fuori catalogo continua a non essere
+    associato, ed è giusto — `dipendenti_competenze` ha una FK verso
+    `competenze` e non può rappresentare un nome che non esiste.
+
+    CAMBIA CHE LO SCARTO SI VEDE. Prima i due punti di scrittura facevano
+    `if comp:` e tiravano dritto: il nome finiva nella colonna JSON
+    `Dipendente.competenze` (testo libero, accetta tutto) e NON nella M2M, senza
+    che nessuno lo sapesse. È così che oggi 4 dipendenti su 18 hanno le due
+    sorgenti divergenti — `IA`, `analisi`, `archivio`, `organizzazione` esistono
+    solo dalla parte sbagliata del doppione, e nessuno se n'è accorto per mesi.
+    Non è un errore da bloccare: è una domanda da porre («questa competenza va
+    censita, o è un refuso?»), e finché resta muta nessuno la pone.
+
+    NON decide nulla sulle 4 orfane già in DB, e non tocca dati esistenti:
+    rende solo rumoroso lo scarto da qui in avanti.
+
+    Un helper e non due copie del ciclo: erano già identici in POST e PATCH, e
+    una segnalazione scritta due volte è una segnalazione che prima o poi
+    esiste in un ramo solo.
+    """
+    scartati = []
+    for nome in nomi:
+        comp = session.query(Competenza).filter(Competenza.nome == nome).first()
+        if comp:
+            session.add(DipendentiCompetenze(
+                dipendente_id=dipendente_id, competenza_id=comp.id
+            ))
+        else:
+            scartati.append(nome)
+            logger.warning(
+                "Competenza '%s' non in catalogo: NON associata al dipendente %s. "
+                "Resta nella colonna JSON ma non in dipendenti_competenze — "
+                "censirla in Configurazione → Competenze, o toglierla dal profilo.",
+                nome, dipendente_id,
+            )
+    return scartati
+
+
+def _avvisi_competenze(scartati):
+    """Gli scarti in forma leggibile, per il payload di risposta.
+
+    Stessa convenzione di `salva_consuntivo`, che ritorna `{ok, avvisi}`: lista
+    VUOTA nel caso normale, così il client non deve distinguere «campo assente»
+    da «nessun avviso». Oggi il form non li mostra — `await create(form)` ignora
+    la risposta — ma il canale c'è, e mostrarli diventa una riga di frontend
+    invece di un giro completo dal backend.
+    """
+    return [
+        f"Competenza '{n}' non è in catalogo: salvata sul profilo ma non "
+        f"associata. Censiscila in Configurazione → Competenze perché venga "
+        f"usata dai suggerimenti."
+        for n in scartati
+    ]
+
+
 @router.post("/dipendenti")
 def crea_dipendente(req: DipendenteCfgRequest, _: Utente = Depends(require_manager)):
     """Crea un nuovo dipendente con ID generato automaticamente (D001, D002...).
@@ -327,15 +389,12 @@ def crea_dipendente(req: DipendenteCfgRequest, _: Utente = Depends(require_manag
     session.add(dip)
     session.flush()
 
-    # Associa competenze M2M
-    for comp_nome in req.competenze:
-        comp = session.query(Competenza).filter(Competenza.nome == comp_nome).first()
-        if comp:
-            session.add(DipendentiCompetenze(dipendente_id=new_id, competenza_id=comp.id))
+    # Associa competenze M2M (gli scarti tornano al chiamante, non spariscono)
+    scartati = _associa_competenze(session, new_id, req.competenze)
 
     session.commit()
     session.close()
-    return {"id": new_id, "nome": req.nome}
+    return {"id": new_id, "nome": req.nome, "avvisi": _avvisi_competenze(scartati)}
 
 
 @router.patch("/dipendenti/{dip_id}")
@@ -364,14 +423,11 @@ def modifica_dipendente(dip_id: str, req: DipendenteCfgRequest, _: Utente = Depe
     session.query(DipendentiCompetenze).filter(
         DipendentiCompetenze.dipendente_id == dip_id
     ).delete()
-    for comp_nome in req.competenze:
-        comp = session.query(Competenza).filter(Competenza.nome == comp_nome).first()
-        if comp:
-            session.add(DipendentiCompetenze(dipendente_id=dip_id, competenza_id=comp.id))
+    scartati = _associa_competenze(session, dip_id, req.competenze)
 
     session.commit()
     session.close()
-    return {"ok": True}
+    return {"ok": True, "avvisi": _avvisi_competenze(scartati)}
 
 
 @router.delete("/dipendenti/{dip_id}")
