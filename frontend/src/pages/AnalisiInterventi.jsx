@@ -349,7 +349,13 @@ function EditorGanttUnificato({ progetti, dipendenti, allTasks, segnalazioni, on
   const [confermaLoading, setConfermaLoading] = useState(false)
   const [storico, setStorico] = useState([])
 
-  const progettiAttivi = progetti.filter(p => p.stato === 'In esecuzione' && p.id !== 'P010')
+  // `&& p.id !== 'P010'` rimosso il 07/09/2026 — era l'ULTIMA copia di un hack
+  // che il resto del codice ha già smontato (Economia, Attività Interne, Home,
+  // VistaManagement). P010 era il contenitore delle attività interne, ma è stato
+  // riusato per un progetto CLIENTE — «AIoT Smart City Maida», Comune di Maida —
+  // quindi l'esclusione toglieva dal Tavolo di Lavoro un progetto vero e non
+  // toglieva più nulla di ciò per cui era stata scritta.
+  const progettiAttivi = progetti.filter(p => p.stato === 'In esecuzione')
   const progetto = progettiAttivi.find(p => p.id === progettoSelezionato)
 
   // ── Carica task ──
