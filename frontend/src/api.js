@@ -531,6 +531,19 @@ export async function fetchConsuntiviMe(settimana = null) {
   return apiFetch(`${API_BASE}/consuntivi/me${qs}`);
 }
 
+export async function fetchConsuntiviSettimana() {
+  // Le dichiarazioni della settimana nel perimetro di CHI CHIEDE: il manager
+  // riceve l'azienda, il PM i dipendenti dei progetti che dirige, lo user un
+  // 403. Un endpoint solo — il perimetro lo decide il backend, non il client.
+  //
+  // Via `apiFetch` e non `fetch` grezzo: quello si limitava a `r.json()`, e il
+  // corpo di un 403 è un JSON valido (`{detail: …}`). La promise si risolveva,
+  // il `.catch` non vedeva niente, e la pagina crollava dopo — in render, su
+  // `consuntivi.filter is not a function`. `apiFetch` alza sugli status non-ok,
+  // così l'errore arriva dove lo si può mostrare.
+  return apiFetch(`${API_BASE}/consuntivi/settimana`);
+}
+
 export async function fetchHomeDashboard() {
   // → { rami: [{azienda_id, azienda, polso, attenzione}], interne, team }
   //
