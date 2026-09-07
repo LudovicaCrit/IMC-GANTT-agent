@@ -488,21 +488,21 @@ export default function ConsuntivazioneUser() {
   // `dati`, quindi non deve attraversare le guardie di `/me`.
   if (vista === 'gruppo' && vistaGruppo) {
     return (
-      <div className="max-w-6xl pb-24">
+      <div className="max-w-6xl pb-6">
         {barra}
         {vistaGruppo === 'pm' ? <VistaPM /> : <VistaManagement />}
       </div>
     )
   }
 
-  if (loading) return <div className="max-w-6xl pb-24">{barra}<p className="text-gray-400">Caricamento…</p></div>
-  if (errore) return <div className="max-w-6xl pb-24">{barra}<p className="text-red-400">Errore: {errore}</p></div>
-  if (!dati) return <div className="max-w-6xl pb-24">{barra}</div>
+  if (loading) return <div className="max-w-6xl pb-6">{barra}<p className="text-gray-400">Caricamento…</p></div>
+  if (errore) return <div className="max-w-6xl pb-6">{barra}<p className="text-red-400">Errore: {errore}</p></div>
+  if (!dati) return <div className="max-w-6xl pb-6">{barra}</div>
 
   const nome = dati.nome?.split(' ')[0] ?? ''
 
   return (
-    <div className="max-w-6xl pb-24">
+    <div className="max-w-6xl pb-6">
       {barra}
 
       <div className="flex items-start justify-between mb-6">
@@ -648,9 +648,28 @@ export default function ConsuntivazioneUser() {
 
       {/* ═══ Barra di salvataggio fissa ═══ */}
       {!soloLettura && (
-        <div className="fixed bottom-0 left-0 right-0 border-t backdrop-blur"
+        /* STICKY, non FIXED — e la differenza è il logout di Helena.
+           `fixed bottom-0 left-0` ancora al VIEWPORT: `left-0` è il bordo
+           sinistro dello schermo, non l'inizio del contenuto, quindi la barra
+           passava sotto la sidebar per tutta la sua larghezza. E vinceva senza
+           bisogno di z-index: un elemento `fixed` è POSIZIONATO, la sidebar è
+           in flusso normale, e nell'ordine di disegno il posizionato sta sopra.
+           I ~60px della barra cadevano esattamente sul bottone Logout, ultimo
+           elemento del footer-sidebar: azione essenziale, coperta.
+
+           `sticky bottom-0` si ancora invece al fondo dell'area visibile del
+           suo contenitore di scroll — il `<main>` — che comincia DOPO la
+           sidebar. Non può uscirne per costruzione, e non ha bisogno di sapere
+           quanto è larga la sidebar: sopravvive da sola al toggle «Comprimi»,
+           che un `left-64` avrebbe invece mancato.
+
+           NON è un bug nato col consolidamento: la barra c'era già. Fino al
+           07/09 `/consuntivazione` serviva la pagina VECCHIA, che non ha una
+           sola occorrenza di `fixed` — il consolidamento non ha creato il
+           difetto, ha portato tutti sulla pagina che ce l'aveva. */
+        <div className="sticky bottom-0 z-20 -mx-2 mt-4 rounded-t-xl border-t backdrop-blur"
              style={{ backgroundColor: 'rgba(17,24,39,0.92)', borderColor: 'var(--color-border-subtle, #1f2937)' }}>
-          <div className="max-w-6xl mx-auto px-8 py-3 flex items-center justify-between">
+          <div className="px-6 py-3 flex items-center justify-between">
             <div className="text-sm">
               {salvataggio === 'ok' && <span className="text-green-400">✓ Salvato</span>}
               {salvataggio === 'invio' && <span className="text-gray-400">Salvataggio…</span>}
