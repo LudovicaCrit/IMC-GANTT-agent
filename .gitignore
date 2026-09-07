@@ -39,3 +39,4 @@ backup_*.sql
 backend/cookies.txt
 auth_gantt.zip
 console.md
+backend/AI.md
