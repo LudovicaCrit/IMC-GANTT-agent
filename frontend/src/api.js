@@ -228,11 +228,6 @@ export async function fetchTasks(progettoId = null, profilo = null) {
   return apiFetch(`${API_BASE}/tasks?${params}`);
 }
 
-export async function fetchGantt(progettoId = null) {
-  const params = progettoId ? `?progetto_id=${progettoId}` : '';
-  return apiFetch(`${API_BASE}/gantt${params}`);
-}
-
 export async function fetchGanttStrutturato({ stato = null, progettoId = null } = {}) {
   // Endpoint gerarchico Progetto → Fase → Task per drill-down (Step 2.2).
   // stato: "attivi" (default backend), "all", "bozza", "in esecuzione", "sospeso", ecc.
