@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo, useCallback } from 'react'
 import { apiFetch } from '../api'
 import { useAuth } from '../contexts/AuthContext'
 import VistaPM from '../components/consuntivazione/VistaPM'
+import VistaManagement from '../components/consuntivazione/VistaManagement'
 import { unitaDichiarata, unitaCompilabili } from '../components/_shared/unitaLavoro'
 
 /* ── Costanti ─────────────────────────────────────────────────────── */
@@ -489,11 +490,7 @@ export default function ConsuntivazioneUser() {
     return (
       <div className="max-w-6xl pb-24">
         {barra}
-        {vistaGruppo === 'pm' ? <VistaPM /> : (
-          <p className="text-sm text-gray-500 italic">
-            Vista management — in costruzione (passo 3).
-          </p>
-        )}
+        {vistaGruppo === 'pm' ? <VistaPM /> : <VistaManagement />}
       </div>
     )
   }
