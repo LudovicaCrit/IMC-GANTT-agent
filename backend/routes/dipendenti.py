@@ -73,7 +73,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import joinedload
 
 from deps import get_current_user, require_manager
-from models import Utente, Dipendente, Task, get_session
+from models import Utente, Dipendente, Task, Progetto, get_session
 from data import (
     get_dipendente, get_progetti_dipendente, carico_settimanale_dipendente,
 )
@@ -94,14 +94,53 @@ def lista_dipendenti(_: Utente = Depends(require_manager)):
     """
     session = get_session()
     dipendenti = session.query(Dipendente).filter(Dipendente.attivo == True).all()
+
+    # ── UNA query per progetti-attivi E conteggio-task di TUTTI ───────────
+    # Erano due query PER PERSONA — `get_progetti_dipendente` (che apriva anche
+    # una sessione propria) e un `.count()` — su un ciclo di 18 dipendenti.
+    #
+    # Si fondono in una sola perché hanno il MEDESIMO filtro: i task attivi
+    # della persona. Il conteggio è il numero di righe, l'elenco-progetti è la
+    # deduplica di quelle righe per progetto. Chiedere due volte lo stesso
+    # insieme per contarlo e poi per leggerlo era il vero spreco, più ancora
+    # del fatto che fosse dentro un ciclo.
+    #
+    # `order_by(Task.id)` e la deduplica «prima occorrenza vince» replicano
+    # esattamente `get_progetti_dipendente`: l'ordine dei nomi-progetto è quello
+    # del primo task incontrato, e cambiarlo cambierebbe il payload.
+    righe_attive = (
+        session.query(Task.dipendente_id, Task.progetto_id, Progetto.nome)
+        .join(Progetto, Task.progetto_id == Progetto.id)
+        .filter(
+            Task.dipendente_id.in_([d.id for d in dipendenti]),
+            Task.stato.in_(["In corso", "Da iniziare"]),
+        )
+        .order_by(Task.id)
+        .all()
+    ) if dipendenti else []
+
+    progetti_per_dip = {}
+    visti_per_dip = {}
+    n_task_per_dip = {}
+    for did, pid, pnome in righe_attive:
+        n_task_per_dip[did] = n_task_per_dip.get(did, 0) + 1
+        visti = visti_per_dip.setdefault(did, set())
+        if pid not in visti:
+            visti.add(pid)
+            progetti_per_dip.setdefault(did, []).append(pnome)
+
     result = []
     for d in dipendenti:
+        # `carico_settimanale_dipendente` resta UNA CHIAMATA PER PERSONA, ed è
+        # deliberato: dentro ha la finestra-settimana, una delle tre copie che
+        # la scansione ha segnalato come regola-duplicata. Batcharla vorrebbe
+        # dire riscrivere quella finestra qui — una QUARTA copia — oppure
+        # spostarla, e nessuna delle due è un'ottimizzazione: sono decisioni
+        # sulla regola, che vanno prese guardando tutte e tre le copie insieme.
+        # Restano 18 query su 55: il resto è sparito senza toccare niente.
         carico = carico_settimanale_dipendente(d.id, get_oggi())
-        progetti = get_progetti_dipendente(d.id)
-        n_task_attivi = session.query(Task).filter(
-            Task.dipendente_id == d.id,
-            Task.stato.in_(["In corso", "Da iniziare"]),
-        ).count()
+        progetti = progetti_per_dip.get(d.id, [])
+        n_task_attivi = n_task_per_dip.get(d.id, 0)
         result.append({
             "id": d.id,
             "nome": d.nome,
