@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react'
-import { fetchDipendenti, fetchProgetti, fetchTasks, fetchSegnalazioni, interpretaScenario, simulaScenario, confermaScenario, applicaModifiche, salvaBozza, caricaBozza } from '../api'
+import { fetchDipendenti, fetchProgetti, fetchTasks, fetchSegnalazioni, fetchBilanciamento, interpretaScenario, simulaScenario, confermaScenario, applicaModifiche, salvaBozza, caricaBozza } from '../api'
 import { GanttChart, StatusLegend } from './Gantt'
 
 // ── Costanti ────────────────────────────────────────────────────────
@@ -25,7 +25,7 @@ const STATI_TASK = ['Da iniziare', 'In corso', 'Completato', 'Sospeso']
 //  COMPONENTE: Sidebar contesto
 // ═════════════════════════════════════════════════════════════════════
 
-function SidebarContesto({ dipendenti, progetti, segnalazioni }) {
+function SidebarContesto({ dipendenti, progetti, segnalazioni, erroreSegnalazioni }) {
   const progettiAttivi = progetti.filter(p => p.stato === 'In esecuzione')
 
   return (
@@ -56,6 +56,20 @@ function SidebarContesto({ dipendenti, progetti, segnalazioni }) {
             ))}
         </div>
       </div>
+
+      {/* Il riquadro compare se ci sono segnalazioni OPPURE se non si è
+          riusciti a chiederle: «nessuna segnalazione» e «non ho potuto
+          chiedere» sono due fatti diversi, e prima erano lo stesso silenzio. */}
+      {erroreSegnalazioni && (
+        <div className="bg-gray-900 rounded-xl border border-amber-800/50 p-4">
+          <h4 className="text-xs font-semibold uppercase tracking-wider text-amber-400/80 mb-1">
+            📥 Segnalazioni
+          </h4>
+          <p className="text-xs text-amber-200/70">
+            Non caricate: {erroreSegnalazioni}
+          </p>
+        </div>
+      )}
 
       {segnalazioni.length > 0 && (
         <div className="bg-gray-900 rounded-xl border border-gray-800 p-4">
@@ -242,9 +256,15 @@ function BilanciamentoPanel() {
     if (dati) { setAperto(!aperto); return }
     setLoading(true)
     try {
-      const res = await fetch('/api/risorse/suggerisci-bilanciamento')
-      const data = await res.json()
-      setDati(data)
+      // `fetchBilanciamento` (apiFetch) e non `fetch` grezzo: quello si
+      // fermava a `res.json()` senza guardare lo status, e il corpo di una
+      // risposta non-ok è un JSON valido (`{detail: …}`). `setDati({detail})`
+      // riusciva, e il crollo arrivava DOPO in render, su `dati.proposte.map`
+      // — `proposte` non esiste su quell'oggetto. Stessa classe del crash
+      // `consuntivi.filter is not a function` della vista-management.
+      // Oggi non morde (rotta manager-only, endpoint che non nega), ma la
+      // protezione era accidentale: bastava un 500 per far sparire la pagina.
+      setDati(await fetchBilanciamento())
       setAperto(true)
     } catch (err) {
       alert('Errore nel caricamento: ' + err.message)
@@ -744,15 +764,40 @@ export default function AnalisiInterventi() {
   const [segnalazioni, setSegnalazioni] = useState([])
   const [loadingData, setLoadingData] = useState(true)
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [errore, setErrore] = useState(null)                       // dati principali: blocca
+  const [erroreSegnalazioni, setErroreSegnalazioni] = useState(null) // accessorio: avvisa
 
   useEffect(() => {
+    // DUE catch, e fanno cose diverse di proposito.
+    //
+    // I dati PRINCIPALI non avevano alcun catch: un rifiuto restava una
+    // unhandled rejection, `loadingData` andava comunque a false e la pagina
+    // si disegnava con tre liste vuote. «Nessun dipendente, nessun progetto,
+    // nessun task» è indistinguibile da un backend spento — ed è il modo più
+    // veloce per cercare un guasto nel posto sbagliato. Senza questi tre la
+    // pagina non può funzionare, quindi l'errore la SOSTITUISCE.
     Promise.all([fetchDipendenti(), fetchProgetti(), fetchTasks()])
       .then(([d, p, t]) => { setDipendenti(d); setProgetti(p); setAllTasks(t) })
+      .catch((e) => setErrore(e.message || 'Non riesco a caricare i dati del Tavolo di Lavoro'))
       .finally(() => setLoadingData(false))
-    fetchSegnalazioni().then(s => { if (s && s.length > 0) setSegnalazioni(s) }).catch(() => {})
+
+    // Le segnalazioni sono ACCESSORIE: alimentano un riquadro della sidebar,
+    // e senza di esse il resto della pagina lavora. Qui l'errore si mostra
+    // ACCANTO al contenuto invece di sostituirlo — bloccare tutto per un
+    // riquadro sarebbe sproporzionato. Ma non si inghiotte più: prima un
+    // `.catch(() => {})` faceva sparire il riquadro come se non ci fosse
+    // niente da segnalare, che è l'opposto di «non sono riuscito a chiedere».
+    fetchSegnalazioni()
+      .then(s => { if (s && s.length > 0) setSegnalazioni(s) })
+      .catch((e) => setErroreSegnalazioni(e.message || 'segnalazioni non caricate'))
   }, [])
 
   if (loadingData) return <p className="text-gray-400 p-8">Caricamento...</p>
+  if (errore) return (
+    <div className="m-8 text-sm bg-red-900/30 border border-red-800 text-red-200 rounded-lg px-4 py-3">
+      {errore}
+    </div>
+  )
 
   function reloadData() {
     Promise.all([fetchTasks(), fetchDipendenti(), fetchSegnalazioni()])
@@ -782,7 +827,8 @@ export default function AnalisiInterventi() {
         </div>
         {sidebarOpen && (
           <div className="w-72 flex-shrink-0 animate-in slide-in-from-right">
-            <SidebarContesto dipendenti={dipendenti} progetti={progetti} segnalazioni={segnalazioni} />
+            <SidebarContesto dipendenti={dipendenti} progetti={progetti} segnalazioni={segnalazioni}
+                             erroreSegnalazioni={erroreSegnalazioni} />
           </div>
         )}
       </div>
