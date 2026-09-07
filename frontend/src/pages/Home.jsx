@@ -495,7 +495,7 @@ export default function Home() {
         <p className="text-xs text-gray-500">{me?.nome ?? ''}</p>
       </div>
 
-      <LeMieCose me={me} onVaiACompilare={() => navigate('/consuntivazione-new')} />
+      <LeMieCose me={me} onVaiACompilare={() => navigate('/consuntivazione')} />
 
       {rami.length === 0 ? (
         <p className="text-xs text-gray-600 italic px-1">

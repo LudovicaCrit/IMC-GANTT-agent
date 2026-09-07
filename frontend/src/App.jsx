@@ -1,9 +1,8 @@
 import React, { useState } from 'react'
-import { BrowserRouter, Routes, Route, NavLink, useLocation } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, Navigate, NavLink, useLocation } from 'react-router-dom'
 import Home from './pages/Home'
 import Gantt from './pages/Gantt'
 import Risorse from './pages/Risorse'
-import Consuntivazione from './pages/Consuntivazione'
 import ConsuntivazioneUser from './pages/ConsuntivazioneUser'
 import AnalisiInterventi from './pages/AnalisiInterventi'
 import Pipeline from './pages/Pipeline'
@@ -31,8 +30,12 @@ const navItems = [
   { to: '/cantiere', label: 'Cantiere', icon: '🔨', requiresManager: true },
   { to: '/analisi', label: 'Tavolo di Lavoro', icon: '🔬', requiresManager: true },
   { to: '/risorse', label: 'Risorse', icon: '👥', requiresManager: true },
+  // UNA voce sola dal 07/09/2026. Erano due — la pagina storica e la «(A′)»
+  // che la stava rimpiazzando — e restavano entrambe in menu, visibili a tutti,
+  // con la vecchia che per un dipendente si apriva e non funzionava (la tendina
+  // «Accedi come» si popola da un endpoint manager-only). La pagina superstite
+  // è role-aware da sé: dipendente, PM e manager entrano dalla stessa porta.
   { to: '/consuntivazione', label: 'Consuntivazione', icon: '⏱️', requiresManager: false },
-  { to: '/consuntivazione-new', label: 'Consuntivazione (A′)', icon: '🆕', requiresManager: false },
   { to: '/pipeline', label: 'Pipeline', icon: '📋', requiresManager: true },
   { to: '/economia', label: 'Economia', icon: '💰', requiresManager: true },
   { to: '/attivita-interne', label: 'Attività Interne', icon: '🏢', requiresManager: true },
@@ -178,8 +181,13 @@ function MainLayout() {
         <Routes>
           {/* Pagine accessibili a TUTTI gli utenti loggati (user + manager) */}
           <Route path="/" element={<Home />} />
-          <Route path="/consuntivazione" element={<Consuntivazione />} />
-          <Route path="/consuntivazione-new" element={<ConsuntivazioneUser />} />
+          <Route path="/consuntivazione" element={<ConsuntivazioneUser />} />
+          {/* `-new` era un nome di cantiere, e l'URL è visibile quanto
+              l'etichetta: diventava una bugia nel momento in cui la pagina
+              restava una sola. Il redirect copre i preferiti di chi ha usato
+              la A′ in questi mesi — `replace` per non lasciare la vecchia
+              rotta nella cronologia, dove il tasto Indietro la ripescherebbe. */}
+          <Route path="/consuntivazione-new" element={<Navigate to="/consuntivazione" replace />} />
 
           {/* Pagine manager-only — wrapped in <RequireManager> */}
           <Route path="/gantt" element={

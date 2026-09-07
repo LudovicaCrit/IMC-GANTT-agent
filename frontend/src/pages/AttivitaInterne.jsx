@@ -119,7 +119,7 @@ export default function AttivitaInterne() {
       <p className="text-xs text-gray-500 mb-4">
         Lavoro senza cliente: formazione, mansioni continuative, sviluppo interno.
         Le ore si dichiarano dalla{' '}
-        <button onClick={() => navigate('/consuntivazione-new')}
+        <button onClick={() => navigate('/consuntivazione')}
           className="text-accent-300 hover:text-accent-400">Consuntivazione</button>
         ; per aggiungere un'attività, aprila dal{' '}
         <button onClick={() => navigate('/cantiere')}
