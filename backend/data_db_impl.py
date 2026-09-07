@@ -2495,6 +2495,59 @@ def _next_task_id():
     return "T001"
 
 
+def contatore_ordine_task(session):
+    """Restituisce `prossimo(fase_id)` → la posizione del prossimo task in quella fase.
+
+    Chiude il FIX 3 (migration c1d2e3f4a5b6). Quella ha materializzato
+    `Task.ordine` sui 114 task esistenti, ma nessun punto di creazione lo
+    scriveva: ogni task nuovo nasceva NULL e finiva in coda alla sua fase — un
+    comportamento ragionevole, ma deciso da nessuno, e che avrebbe fatto tornare
+    la colonna piena di buchi una riga alla volta.
+
+    PERCHÉ UNA CHIUSURA CON MEMORIA, e non una funzione che interroga ogni volta
+    ────────────────────────────────────────────────────────────────────────────
+    Tre dei quattro punti di creazione sono CICLI (i wizard in
+    routes/progetti.py) che inseriscono più task prima di un flush. Un
+    `SELECT max(ordine)` chiamato dentro il ciclo leggerebbe il database, dove i
+    task appena aggiunti alla sessione non sono ancora arrivati: restituirebbe
+    lo stesso numero a ogni giro e tutti i task della stessa fase nascerebbero
+    con lo STESSO `ordine`. L'ordinamento cadrebbe di nuovo sul solo `id` — cioè
+    esattamente il buco che il FIX 3 ha chiuso, riaperto dal codice che doveva
+    tenerlo chiuso.
+
+    La memoria è per FASE e non un contatore unico: nei tre wizard i task
+    arrivano in un ciclo piatto e le fasi si ALTERNANO (`t.fase_idx` cambia a
+    ogni giro). Un contatore solo darebbe a ogni fase una numerazione bucata.
+
+    Il primo task di una fase vuota prende 1: `max()` su insieme vuoto è NULL,
+    `or 0` lo porta a 0, e il primo `+1` fa 1 — coerente con la numerazione
+    1..n che la migration ha scritto sull'esistente.
+
+    Stesso pattern di `routes/sottotask.py:417` (`max(ordine)+1` per task-padre),
+    generalizzato al caso-ciclo che lì non si presenta: i sottotask si creano
+    uno alla volta.
+
+    La sessione è quella del chiamante: il contatore vive dentro la sua
+    transazione e non ne apre una seconda.
+    """
+    from sqlalchemy import func   # import locale, come altrove in questo modulo
+
+    visti = {}
+
+    def prossimo(fase_id):
+        # `fase_id` None (task senza fase) ha una sua chiave nel dizionario: non
+        # è un errore da sollevare qui — il modello lo ammette (nullable) e
+        # inventare un'eccezione bloccherebbe una creazione che il DB accetta.
+        if fase_id not in visti:
+            visti[fase_id] = session.query(func.max(Task.ordine)).filter(
+                Task.fase_id == fase_id
+            ).scalar() or 0
+        visti[fase_id] += 1
+        return visti[fase_id]
+
+    return prossimo
+
+
 def genera_id_task_multipli(n, session=None):
     """Genera `n` id task consecutivi (formato T###) in un colpo solo.
 
@@ -2677,6 +2730,10 @@ def aggiungi_task(progetto_id, nome, fase, ore_stimate, data_inizio, data_fine,
             )
 
     task = Task(
+        # `ordine`: posizione in coda alla fase (FIX 3). Un contatore anche qui,
+        # dove il task è uno solo, per non avere due modi di calcolare la stessa
+        # cosa — è il motivo per cui l'helper è condiviso.
+        ordine=contatore_ordine_task(session)(fase_row.id),
         id=new_id, progetto_id=progetto_id, nome=nome, fase_id=fase_row.id,
         ore_stimate=ore_stimate,
         data_inizio=data_inizio.date() if isinstance(data_inizio, datetime) else data_inizio,

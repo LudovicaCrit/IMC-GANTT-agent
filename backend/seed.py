@@ -15,6 +15,7 @@ from models import (
     Segnalazione, Ruolo, Competenza, DipendentiCompetenze, FaseStandard,
     Fase, Utente,
 )
+from data_db_impl import contatore_ordine_task
 from auth import hash_password
 
 
@@ -268,6 +269,9 @@ def seed():
     # ══════════════════════════════════════════════════════════════
     # 8. TASK (con fase_id)
     # ══════════════════════════════════════════════════════════════
+    # Un contatore per tutta la sezione: le fasi si alternano riga per riga
+    # (i task arrivano nell'ordine del CSV, non raggruppati per fase).
+    prossimo_ordine = contatore_ordine_task(session)
     for _, row in TASKS.iterrows():
         pid = row["progetto_id"]
         fase_nome = row["fase"] if row["fase"] else "Generale"
@@ -278,6 +282,10 @@ def seed():
             id=row["id"],
             progetto_id=pid,
             fase_id=fase_obj.id if fase_obj else None,
+            # `ordine` anche qui (FIX 3): il seed ricostruisce da zero, e senza
+            # questa riga un re-seed riporterebbe la colonna a NULL su tutto —
+            # la migration c1d2e3f4a5b6 è già applicata e non rigira.
+            ordine=prossimo_ordine(fase_obj.id if fase_obj else None),
             nome=row["nome"],
             ore_stimate=int(row["ore_stimate"]),
             # piano corrente: di norma = stima iniziale, ma su alcuni progetti il

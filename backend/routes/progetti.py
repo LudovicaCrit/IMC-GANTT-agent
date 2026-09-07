@@ -101,7 +101,8 @@ from models import (
     STATI_PROGETTO, STATI_PROGETTO_ATTIVI, URGENZA_DEFAULT, LIVELLI_URGENZA,
 )
 from data import ore_consuntivate_progetto, tasso_compilazione_progetto
-from data_db_impl import _next_progetto_id, genera_id_task_multipli, _to_dt
+from data_db_impl import (_next_progetto_id, genera_id_task_multipli, _to_dt,
+                          contatore_ordine_task)
 
 
 # ── DTO ──────────────────────────────────────────────────────────────────
@@ -476,6 +477,13 @@ def crea_progetto_completo(req: ProgettoCompletoCreate, _: Utente = Depends(requ
         # (vedi genera_id_task_multipli, debito #22).
         ids_task = genera_id_task_multipli(len(req.task_iniziali), session=session)
 
+        # Il contatore si crea UNA VOLTA fuori dal ciclo: dentro, ricomincerebbe
+        # da capo a ogni giro e ogni task della stessa fase nascerebbe con lo
+        # stesso `ordine`. Le fasi qui si ALTERNANO (`t.fase_idx` cambia a ogni
+        # task), ed è per questo che il contatore tiene una posizione per
+        # ciascuna invece di un numero solo.
+        prossimo_ordine = contatore_ordine_task(session)
+
         for idx_t, t in enumerate(req.task_iniziali):
             fase_orm = fasi_orm[t.fase_idx]
 
@@ -510,6 +518,7 @@ def crea_progetto_completo(req: ProgettoCompletoCreate, _: Utente = Depends(requ
             task_id = ids_task[idx_t]
 
             task = Task(
+                ordine=prossimo_ordine(fase_orm.id),
                 id=task_id, progetto_id=progetto_id, fase_id=fase_orm.id,
                 nome=t.nome, ore_stimate=t.ore_stimate,
                 data_inizio=di, data_fine=df,
@@ -653,6 +662,13 @@ def completa_progetto(progetto_id: str, req: ProgettoCompletoCreate,
         # ── 4. Ricrea i task iniziali ────────────────────────────────────
         ids_task = genera_id_task_multipli(len(req.task_iniziali), session=session)
 
+        # Il contatore si crea UNA VOLTA fuori dal ciclo: dentro, ricomincerebbe
+        # da capo a ogni giro e ogni task della stessa fase nascerebbe con lo
+        # stesso `ordine`. Le fasi qui si ALTERNANO (`t.fase_idx` cambia a ogni
+        # task), ed è per questo che il contatore tiene una posizione per
+        # ciascuna invece di un numero solo.
+        prossimo_ordine = contatore_ordine_task(session)
+
         for idx_t, t in enumerate(req.task_iniziali):
             fase_orm = fasi_orm[t.fase_idx]
             di = t.data_inizio
@@ -685,6 +701,7 @@ def completa_progetto(progetto_id: str, req: ProgettoCompletoCreate,
             task_id = ids_task[idx_t]
 
             task = Task(
+                ordine=prossimo_ordine(fase_orm.id),
                 id=task_id, progetto_id=progetto_id, fase_id=fase_orm.id,
                 nome=t.nome, ore_stimate=t.ore_stimate,
                 data_inizio=di, data_fine=df,
@@ -808,9 +825,11 @@ def aggiungi_task_multipli(progetto_id: str, req: StaffingRequest,
         # coppie qui e le inserisco DOPO un flush, così anche un predecessore che
         # è un task dello stesso batch esiste già e la FK è soddisfatta.
         dipendenze_da_creare = []  # (predecessore_id, successore_id)
+        prossimo_ordine = contatore_ordine_task(session)
         for idx_t, t in enumerate(req.task):
             task_id = ids_task[idx_t]
             task = Task(
+                ordine=prossimo_ordine(t.fase_id),
                 id=task_id, progetto_id=progetto_id, fase_id=t.fase_id,
                 nome=t.nome, ore_stimate=t.ore_stimate,
                 data_inizio=t.data_inizio, data_fine=t.data_fine,
