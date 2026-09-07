@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react'
 import { apiFetch } from '../api'
+import { useAuth } from '../contexts/AuthContext'
 import { unitaDichiarata, unitaCompilabili } from '../components/_shared/unitaLavoro'
 
 /* ── Costanti ─────────────────────────────────────────────────────── */
@@ -99,6 +100,26 @@ export default function ConsuntivazioneUser() {
   // ogni lettura se una chiave è un task o un pezzo.
   const [modificheSottotask, setModificheSottotask] = useState({})
   const [noteSottotaskAperte, setNoteSottotaskAperte] = useState({})
+
+  /* ── Chi sta guardando ─────────────────────────────────────────────
+   * `vistaGruppo` è 'manager' | 'pm' | null, e governa INSIEME il bottone e
+   * la resa. Una variabile sola per le due decisioni: tenendole separate,
+   * prima o poi il bottone porta a una vista che non c'è, o la vista resta
+   * raggiungibile senza bottone — e `vista` è stato locale, quindi la
+   * seconda strada è aperta per davvero.
+   *
+   * `null` per il ruolo 'user': non è un permesso negato da spiegare, è una
+   * domanda che per lui non esiste. Il backend risponde comunque 403 — quella
+   * è la rete; qui si toglie l'invito.
+   */
+  const { user } = useAuth()
+  const vistaGruppo = (user?.ruolo_app === 'manager' || user?.ruolo_app === 'pm')
+    ? user.ruolo_app
+    : null
+  // 'dipendente' | 'gruppo'. Default 'dipendente' per TUTTI, manager compresi:
+  // anche chi supervisiona ha una propria settimana da compilare, e aprire
+  // sulla vista di gruppo gliela farebbe dimenticare.
+  const [vista, setVista] = useState('dipendente')
 
   /* ── Caricamento ── */
   const carica = useCallback((settimana) => {
@@ -428,16 +449,63 @@ export default function ConsuntivazioneUser() {
     }
   }
 
-  /* ── Render ── */
-  if (loading) return <p className="text-gray-400">Caricamento…</p>
-  if (errore) return <p className="text-red-400">Errore: {errore}</p>
-  if (!dati) return null
+  /* ── Render ────────────────────────────────────────────────────────
+   * L'INTESTAZIONE SI CALCOLA PRIMA delle uscite anticipate, e sopravvive
+   * a tutte. Prima un errore su `/me` sostituiva l'INTERA pagina con una
+   * riga rossa: sparivano titolo e navigazione, e chi ci arrivava non aveva
+   * più modo di capire dove fosse né di andare altrove.
+   *
+   * Da quando la pagina è a tre viste la cosa peggiora: le tre uscite qui
+   * sotto dipendono tutte da `/me`, cioè dalla vista del DIPENDENTE. Un
+   * manager che apre la vista di gruppo non deve restare fuori perché è
+   * fallita una chiamata che non gli serviva.
+   */
+  const barra = (
+    <>
+      <h1 className="text-3xl font-bold mb-1">⏱️ Consuntivazione</h1>
+      {vistaGruppo && (
+        <div className="flex gap-2 mb-6 mt-3">
+          <button onClick={() => setVista('dipendente')}
+            className={`px-3 py-1.5 rounded-lg text-sm transition-colors ${
+              vista === 'dipendente' ? 'bg-blue-600 text-white' : 'bg-gray-800 text-gray-400 hover:text-gray-200'
+            }`}>
+            👤 La mia settimana
+          </button>
+          <button onClick={() => setVista('gruppo')}
+            className={`px-3 py-1.5 rounded-lg text-sm transition-colors ${
+              vista === 'gruppo' ? 'bg-blue-600 text-white' : 'bg-gray-800 text-gray-400 hover:text-gray-200'
+            }`}>
+            {vistaGruppo === 'pm' ? '📥 I miei progetti' : '📊 Tutta l\'azienda'}
+          </button>
+        </div>
+      )}
+    </>
+  )
+
+  // LA VISTA DI GRUPPO ESCE PRIMA, per la ragione scritta sopra: non tocca
+  // `dati`, quindi non deve attraversare le guardie di `/me`.
+  if (vista === 'gruppo' && vistaGruppo) {
+    return (
+      <div className="max-w-6xl pb-24">
+        {barra}
+        <p className="text-sm text-gray-500 italic">
+          {vistaGruppo === 'pm'
+            ? 'Vista PM — in costruzione (passo 2).'
+            : 'Vista management — in costruzione (passo 3).'}
+        </p>
+      </div>
+    )
+  }
+
+  if (loading) return <div className="max-w-6xl pb-24">{barra}<p className="text-gray-400">Caricamento…</p></div>
+  if (errore) return <div className="max-w-6xl pb-24">{barra}<p className="text-red-400">Errore: {errore}</p></div>
+  if (!dati) return <div className="max-w-6xl pb-24">{barra}</div>
 
   const nome = dati.nome?.split(' ')[0] ?? ''
 
   return (
     <div className="max-w-6xl pb-24">
-      <h1 className="text-3xl font-bold mb-1">⏱️ Consuntivazione</h1>
+      {barra}
 
       <div className="flex items-start justify-between mb-6">
         <p className="text-gray-400">
