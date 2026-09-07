@@ -387,16 +387,40 @@ def lista_fasi_progetto(progetto_id: str, _: Utente = Depends(require_manager)):
     """
     session = get_session()
     fasi = session.query(Fase).filter(Fase.progetto_id == progetto_id).order_by(Fase.ordine).all()
+
+    # ── DUE QUERY PER TUTTE LE FASI, invece di due per fase ──────────────
+    # Erano dentro il ciclo: su un progetto a 6 fasi facevano 12 query delle 14
+    # totali. Il conteggio dei task e la somma dei consuntivi si ricavano
+    # entrambi da un GROUP BY su `fase_id`.
+    #
+    # Le fasi SENZA task (o senza consuntivi) non compaiono nel GROUP BY: i
+    # `.get(f.id, 0)` sotto le riportano a zero, che è ciò che facevano il
+    # ramo `if task_ids:` e il `coalesce(..., 0)` di prima.
+    fase_ids = [f.id for f in fasi]
+    n_task_per_fase = {}
+    consumate_per_fase = {}
+    if fase_ids:
+        n_task_per_fase = dict(
+            session.query(Task.fase_id, func.count(Task.id))
+            .filter(Task.fase_id.in_(fase_ids))
+            .group_by(Task.fase_id)
+            .all()
+        )
+        consumate_per_fase = dict(
+            session.query(
+                Task.fase_id,
+                func.coalesce(func.sum(Consuntivo.ore_dichiarate), 0),
+            )
+            .join(Task, Consuntivo.task_id == Task.id)
+            .filter(Task.fase_id.in_(fase_ids))
+            .group_by(Task.fase_id)
+            .all()
+        )
+
     result = []
     for f in fasi:
-        # Calcola ore consumate dai consuntivi dei task in questa fase
-        tasks_fase = session.query(Task).filter(Task.fase_id == f.id).all()
-        task_ids = [t.id for t in tasks_fase]
-        ore_consumate = 0
-        if task_ids:
-            ore_consumate = session.query(
-                func.coalesce(func.sum(Consuntivo.ore_dichiarate), 0)
-            ).filter(Consuntivo.task_id.in_(task_ids)).scalar()
+        ore_consumate = consumate_per_fase.get(f.id, 0)
+        n_task_fase = n_task_per_fase.get(f.id, 0)
 
         result.append({
             "id": f.id,
@@ -414,7 +438,7 @@ def lista_fasi_progetto(progetto_id: str, _: Utente = Depends(require_manager)):
             # La regola sta in `urgenza_fase_risolta`, non si riscrive qui.
             "urgenza": f.urgenza,
             "urgenza_risolta": urgenza_fase_risolta(f, f.progetto),
-            "n_task": len(tasks_fase),
+            "n_task": n_task_fase,
             "note": f.note or "",
         })
     session.close()
