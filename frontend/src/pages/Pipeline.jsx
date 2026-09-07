@@ -14,6 +14,7 @@ function formatDateShort(d) { return new Date(d).toLocaleDateString('it-IT') }
 function PianificazioneProgetto({ progetto, dipendenti, isBando = false }) {
   // Fasi del progetto
   const [fasiDisponibili, setFasiDisponibili] = useState([])
+  const [erroreFasi, setErroreFasi] = useState(null)
   const [planFasi, setPlanFasi] = useState([])
   const [nextFaseId, setNextFaseId] = useState(1)
 
@@ -35,10 +36,19 @@ function PianificazioneProgetto({ progetto, dipendenti, isBando = false }) {
 
   // Carica fasi disponibili da Configurazione
   useEffect(() => {
+    // Il `.catch(() => {})` di prima faceva sparire il catalogo fasi in
+    // silenzio: la tendina restava vuota e sembrava che non ci fossero fasi
+    // configurate, mentre il caso vero è «non sono riuscito a chiederle».
+    // `Array.isArray` restava a proteggere dal `{detail}` di un non-ok, ma
+    // proteggeva dal crash trasformandolo in un'assenza muta — che per chi
+    // deve scegliere una fase è lo stesso vicolo cieco.
     fetch('/api/config/fasi-catalogo')
-      .then(r => r.json())
+      .then(r => {
+        if (!r.ok) throw new Error(`catalogo fasi non disponibile (HTTP ${r.status})`)
+        return r.json()
+      })
       .then(data => setFasiDisponibili(Array.isArray(data) ? data : []))
-      .catch(() => {})
+      .catch((e) => setErroreFasi(e.message))
   }, [])
 
   // Carica bozza al mount
@@ -395,6 +405,9 @@ function PianificazioneProgetto({ progetto, dipendenti, isBando = false }) {
           {/* Selezione fasi dal catalogo */}
           <div className="mb-4">
             <p className="text-xs text-gray-400 mb-2">Seleziona le fasi per questo progetto:</p>
+            {erroreFasi && (
+              <p className="text-xs text-amber-300 mb-2">⚠ {erroreFasi}</p>
+            )}
             <div className="flex flex-wrap gap-2 mb-3">
               {fasiDisponibili.map(f => {
                 const giàAggiunta = planFasi.find(pf => pf.nome === (f.nome || f.fase_nome))
