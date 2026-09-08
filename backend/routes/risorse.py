@@ -34,8 +34,10 @@ DETTAGLIO ENDPOINT
    - Logica:
      • Identifica sovraccarichi (saturazione > 100%) e sottoutilizzati
        (saturazione < 90%)
-     • Per ogni task del sovraccarico, cerca candidati con profilo o
-       competenza compatibile e spazio disponibile (almeno 50% delle ore_sett)
+     • Per ogni task del sovraccarico, cerca candidati il cui RUOLO coincide
+       col `profilo_richiesto` del task, e con spazio disponibile (almeno
+       50% delle ore_sett). Il match è per ruolo e basta: le competenze non
+       entrano nella scelta — vedi NOTE DI DOMINIO.
      • Ordina i candidati preferendo chi resterebbe vicino al 100% post-spostamento
    - Output: lista proposte ordinate per priorità (alta se saturazione > 125%).
 
@@ -47,8 +49,21 @@ NOTE DI DOMINIO
 ───────────────
 La logica di suggerimento bilanciamento è il punto di partenza per la
 "logica di redistribuzione compiti" che Ludovica ha sottolineato come
-funzionalità prodotto importante. La versione attuale è basica
-(profilo + competenza esatta + spazio disponibile); evoluzioni possibili:
+funzionalità prodotto importante. La versione attuale è basica: RUOLO
+(`profilo_richiesto` del task == profilo del candidato) + spazio disponibile.
+
+IL MATCH PER COMPETENZE NON C'È, e non è una svista. C'era un secondo ramo
+che confrontava `profilo_richiesto` con le competenze del dipendente, ma sono
+due vocabolari diversi — un RUOLO ("Senior Consultant") contro un CATALOGO di
+abilità ("ARIS", "python") — e l'unico valore che riusciva a far scattare era
+'PM', presente in entrambi per omonimia. È stato tolto (08/09/2026): meglio
+l'assenza dichiarata di una capacità che una che funziona una volta su sette
+per caso. Il match vero richiede che siano i TASK a dire quali competenze
+servono (una `task_competenze`, che oggi non esiste); solo allora ci sarà
+qualcosa da confrontare col catalogo `Competenza`, e sarà un confronto fra
+insiemi dello stesso vocabolario.
+
+Evoluzioni possibili:
 - Considerare la durata residua del task vs disponibilità futura
 - Considerare le preferenze/storico dei dipendenti
 - Considerare i progetti su cui sono già impegnati (ridurre context-switch)
@@ -341,7 +356,6 @@ def suggerisci_bilanciamento(_: Utente = Depends(require_manager)):
             "id": d.id,
             "nome": d.nome,
             "profilo": d.profilo,
-            "competenze": d.competenze if isinstance(d.competenze, list) else [],
             "ore_sett": int(d.ore_sett),
             "carico": float(carico),
             "saturazione": sat,
@@ -363,8 +377,24 @@ def suggerisci_bilanciamento(_: Utente = Depends(require_manager)):
             for sotto in sottoutilizzati:
                 if sotto["id"] == sov["id"]:
                     continue
-                # Match profilo o competenza
-                if sotto["profilo"] == profilo or profilo in sotto["competenze"]:
+                # MATCH PER RUOLO, e solo per ruolo.
+                #
+                # Qui c'era un secondo ramo — `profilo in sotto["competenze"]` —
+                # che confrontava due vocabolari diversi: `profilo_richiesto` è
+                # un RUOLO ("Senior Consultant", "Addetto amministrazione"), le
+                # competenze sono un CATALOGO di abilità ("ARIS", "python").
+                # Un ruolo non compare quasi mai fra le abilità, e infatti
+                # l'unico valore che quel ramo riusciva a far scattare era 'PM'
+                # — presente in entrambi i vocabolari per omonimia, non per
+                # progetto. Non era un match per competenze: era un match per
+                # ruolo che funzionava una volta su sette, per caso.
+                #
+                # Toglierlo NON toglie una capacità: la sostituisce con
+                # l'assenza dichiarata di quella capacità. Il match vero per
+                # competenze richiede che i TASK dicano quali competenze
+                # servono (`task_competenze`), che oggi non esiste: finché non
+                # c'è, non c'è niente da confrontare col catalogo.
+                if sotto["profilo"] == profilo:
                     spazio_disponibile = sotto["ore_sett"] - sotto["carico"]
                     if spazio_disponibile >= task["ore_sett"] * 0.5:  # almeno metà ore
                         nuova_sat_sotto = round(

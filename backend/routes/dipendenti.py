@@ -73,7 +73,10 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import joinedload
 
 from deps import get_current_user, require_manager
-from models import Utente, Dipendente, Task, Progetto, get_session
+from models import (
+    Utente, Dipendente, Task, Progetto, get_session,
+    Competenza, DipendentiCompetenze,
+)
 from data import (
     get_dipendente, get_progetti_dipendente, carico_settimanale_dipendente,
 )
@@ -119,6 +122,26 @@ def lista_dipendenti(_: Utente = Depends(require_manager)):
         .all()
     ) if dipendenti else []
 
+    # ── UNA query per le competenze di TUTTI ──────────────────────────────
+    # Fonte: la M2M `dipendenti_competenze`, non più il JSON `d.competenze`.
+    # Il catalogo `Competenza` è la lista chiusa dei nomi validi e solo la M2M
+    # lo referenzia per chiave; il JSON accettava stringhe libere, ed è da lì
+    # che venivano 'IA' (doppione di 'AI/ML') e tre frammenti mai censiti.
+    # Batch e non una query per persona, per la stessa ragione detta sopra per
+    # progetti-e-task: il filtro è unico, l'insieme è unico, e questo ciclo di
+    # 18 è esattamente il posto dove un N+1 si infila senza farsi notare.
+    # Il payload non cambia forma: `competenze` resta una lista di nomi.
+    comp_per_dip = {}
+    righe_comp = (
+        session.query(DipendentiCompetenze.dipendente_id, Competenza.nome)
+        .join(Competenza, Competenza.id == DipendentiCompetenze.competenza_id)
+        .filter(DipendentiCompetenze.dipendente_id.in_([d.id for d in dipendenti]))
+        .order_by(Competenza.nome)
+        .all()
+    ) if dipendenti else []
+    for did, nome in righe_comp:
+        comp_per_dip.setdefault(did, []).append(nome)
+
     progetti_per_dip = {}
     visti_per_dip = {}
     n_task_per_dip = {}
@@ -146,7 +169,7 @@ def lista_dipendenti(_: Utente = Depends(require_manager)):
             "nome": d.nome,
             "profilo": d.profilo,
             "ore_sett": int(d.ore_sett),
-            "competenze": d.competenze or [],
+            "competenze": comp_per_dip.get(d.id, []),
             "carico_corrente": float(carico),
             "saturazione_pct": round(carico / d.ore_sett * 100),
             "progetti_attivi": progetti,

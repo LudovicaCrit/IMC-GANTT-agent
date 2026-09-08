@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, date
 from models import (
     get_session, Dipendente, Progetto, Task,
     Consuntivo, Segnalazione,
+    Competenza, DipendentiCompetenze,
 )
 
 # ══════════════════════════════════════════════════════════════════════
@@ -398,14 +399,31 @@ def get_dipendente(did):
         Dipendente.id == did,
         Dipendente.attivo == True,
     ).first()
-    session.close()
     if r is None:
+        session.close()
         return {"id": did, "nome": f"Sconosciuto ({did})", "profilo": "-", "ore_sett": 40, "costo_ora": 0, "competenze": []}
-    return {
+    # COMPETENZE DALLA M2M, NON DAL JSON `Dipendente.competenze`.
+    # `dipendenti_competenze` è la verità: le competenze sono un CATALOGO
+    # (`Competenza`), e solo la M2M lo referenzia per chiave. Il JSON accettava
+    # stringhe libere, ed è così che è nato il doppione — 'IA' scritto a mano
+    # accanto a 'AI/ML' in catalogo, più tre frammenti ('analisi',
+    # 'organizzazione', 'archivio') che in catalogo non sono mai esistiti.
+    # Il payload NON cambia forma: resta una lista di nomi, come prima, così
+    # chi legge (route, frontend) non deve sapere che la fonte è cambiata.
+    # Ordinata per nome perché la M2M non ha un ordine proprio da conservare.
+    competenze = [
+        n for (n,) in session.query(Competenza.nome)
+        .join(DipendentiCompetenze, DipendentiCompetenze.competenza_id == Competenza.id)
+        .filter(DipendentiCompetenze.dipendente_id == r.id)
+        .order_by(Competenza.nome).all()
+    ]
+    out = {
         "id": r.id, "nome": r.nome, "profilo": r.profilo,
         "ore_sett": r.ore_sett, "costo_ora": r.costo_ora or 0,
-        "competenze": r.competenze or [],
+        "competenze": competenze,
     }
+    session.close()
+    return out
 
 def get_progetto(pid):
     if not pid or pid == "":
