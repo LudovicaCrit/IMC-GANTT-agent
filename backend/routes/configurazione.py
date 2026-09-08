@@ -144,7 +144,16 @@ class CompetenzaRequest(BaseModel):
 
 class DipendenteCfgRequest(BaseModel):
     nome: str
-    profilo: str
+    # DEPRECATO E IGNORATO (08/09/2026). `profilo` era la copia-stringa di
+    # `Ruolo.nome`, scritta dal form insieme a `ruolo_id`: due sorgenti per lo
+    # stesso dato, tenute allineate solo dal fatto che UN form le scriveva
+    # sempre in coppia. Ora l'inquadramento si dichiara con `ruolo_id` e basta.
+    #
+    # Il campo resta nel DTO, opzionale, per NON rompere un client che lo mandi
+    # ancora: arriva e viene ignorato. Toglierlo del tutto farebbe fallire con
+    # 422 chiunque non si sia ancora aggiornato — un errore che parla di un
+    # campo che non serve più.
+    profilo: str | None = None
     # OPZIONALE nel DTO, OBBLIGATORIO alla creazione — e la differenza non è una
     # scappatoia. Questo DTO è condiviso da POST e PATCH: `Dipendente.azienda_id`
     # è NOT NULL e alla creazione va per forza deciso, ma in modifica il campo
@@ -503,7 +512,10 @@ def crea_dipendente(req: DipendenteCfgRequest, _: Utente = Depends(require_manag
     new_id = f"D{next_num:03d}"
 
     dip = Dipendente(
-        id=new_id, nome=req.nome, profilo=req.profilo,
+        id=new_id, nome=req.nome,
+        # `profilo` NON si scrive: l'inquadramento è `ruolo_id`, e il payload
+        # lo riespone leggendolo da `ruolo_rel.nome`. La colonna resta in
+        # tabella, non più scritta né letta, fino al drop.
         azienda_id=req.azienda_id,
         ruolo_id=req.ruolo_id, ore_sett=req.ore_sett,
         costo_ora=req.costo_ora, email=req.email, sede=req.sede,
@@ -549,7 +561,8 @@ def modifica_dipendente(dip_id: str, req: DipendenteCfgRequest, _: Utente = Depe
         dip.azienda_id = req.azienda_id
 
     dip.nome = req.nome
-    dip.profilo = req.profilo
+    # `dip.profilo` NON si aggiorna più: vedi la nota in creazione. Il valore
+    # già in colonna resta com'è — fossile, non più letto da nessuno.
     dip.ruolo_id = req.ruolo_id
     dip.ore_sett = req.ore_sett
     dip.costo_ora = req.costo_ora

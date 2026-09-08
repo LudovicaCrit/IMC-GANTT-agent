@@ -463,7 +463,12 @@ class Dipendente(Base):
 
     id = Column(String(10), primary_key=True)
     nome = Column(String(100), nullable=False)
-    profilo = Column(String(60), nullable=False)  # legacy, resta per compatibilità
+    # DEPRECATA (08/09/2026, migration c7d8e9f0a1b2) — in attesa del drop.
+    # Era la copia-stringa di `Ruolo.nome`: l'inquadramento è `ruolo_id`, e chi
+    # espone un campo `profilo` lo legge da `ruolo_rel.nome`. Resa NULLABLE
+    # perché nessuno la scrive più: un dipendente creato oggi ha `profilo` NULL
+    # e un inquadramento perfettamente valido in `ruolo_id`.
+    profilo = Column(String(60), nullable=True)
     # azienda_id: ogni persona appartiene a un'azienda del gruppo (obbligatorio).
     # Vedi migration a7b8c9d0e1f2 + DESIGN_SEED_Innovation_Plaza §1-§2.
     azienda_id = Column(Integer, ForeignKey("azienda.id"), nullable=False)

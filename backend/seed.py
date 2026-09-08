@@ -99,11 +99,22 @@ def seed():
                "si ricopre IN AGGIUNTA all'inquadramento. Chi lo ricopre su uno "
                "specifico progetto resta Progetto.pm_id."),
     ]
+    # DUE MAPPE, NON UNA, e la separazione è il punto.
+    # `ruoli_base_obj` è l'unica sorgente ammessa per l'INQUADRAMENTO
+    # (`Dipendente.ruolo_id`): con una mappa sola, un `"profilo": "PM"` comparso
+    # un domani in seed_data.json assegnerebbe PM come inquadramento — il dato
+    # malformato che i passi A1/A2 impediscono dal form, che rientrerebbe dalla
+    # porta del seed. Qui non può: la mappa dell'inquadramento non contiene i
+    # funzionali, quindi quel nome non si risolve e viene segnalato.
+    # `ruoli_obj` (tutti) serve invece ai ruoli AGGIUNTIVI, che i funzionali
+    # devono poterli trovare.
+    ruoli_base_obj = {}
     ruoli_obj = {}
     for nome in ruoli_base:
         r = Ruolo(nome=nome, tipo="base")
         session.add(r)
         session.flush()
+        ruoli_base_obj[nome] = r
         ruoli_obj[nome] = r
     for nome, descr in ruoli_funzionali:
         r = Ruolo(nome=nome, descrizione=descr, tipo="funzionale")
@@ -167,13 +178,27 @@ def seed():
     # ══════════════════════════════════════════════════════════════
     # 3. DIPENDENTI
     # ══════════════════════════════════════════════════════════════
-    # Mappa profilo → ruolo per il FK
+    # IL CAMPO `profilo` DEL SORGENTE È UN IDENTIFICATORE, NON UN VALORE DA
+    # COPIARE. Contiene il NOME del ruolo-base (`ruoli.nome` è unique, quindi
+    # identifica), e serve solo a risolvere `ruolo_id`. La colonna-stringa
+    # `Dipendente.profilo` NON si scrive più: era la seconda sorgente dello
+    # stesso dato, e il seed che riempiva entrambe è il modo in cui una
+    # divergenza sarebbe entrata senza che nessuno la vedesse.
+    #
+    # La mappa è `ruoli_base_obj`, non `ruoli_obj`: solo un inquadramento può
+    # finire in `ruolo_id`. Un nome di ruolo FUNZIONALE messo qui per errore non
+    # si risolve e viene segnalato, invece di entrare come inquadramento.
+    inquadramenti_scartati = []   # (dipendente, nome, motivo)
     for _, row in DIPENDENTI.iterrows():
-        ruolo = ruoli_obj.get(row["profilo"])
+        nome_ruolo = row["profilo"]
+        ruolo = ruoli_base_obj.get(nome_ruolo)
+        if ruolo is None:
+            motivo = ("è un ruolo funzionale, non un inquadramento"
+                      if nome_ruolo in ruoli_obj else "non in catalogo ruoli base")
+            inquadramenti_scartati.append((row["id"], nome_ruolo, motivo))
         session.add(Dipendente(
             id=row["id"],
             nome=row["nome"],
-            profilo=row["profilo"],
             azienda_id=azienda_obj[row["azienda"]].id,
             ruolo_id=ruolo.id if ruolo else None,
             ore_sett=int(row["ore_sett"]),
@@ -185,6 +210,14 @@ def seed():
             # sorgenti sono divergute la prima volta.
         ))
     print(f"  ✓ {len(DIPENDENTI)} dipendenti")
+    if inquadramenti_scartati:
+        print(f"  ⚠ {len(inquadramenti_scartati)} inquadramenti NON assegnati "
+              f"(ruolo_id resta NULL):")
+        for did, nome, motivo in inquadramenti_scartati:
+            print(f"      {did}: '{nome}' — {motivo}")
+        print(f"    → censirlo fra i `ruoli_base` qui sopra, o correggere il "
+              f"campo `profilo` in seed_data.json. Un ruolo funzionale va in "
+              f"`ruoli_aggiuntivi`, non qui.")
 
     # ══════════════════════════════════════════════════════════════
     # 4. DIPENDENTI ↔ COMPETENZE (M2M)

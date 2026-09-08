@@ -227,24 +227,24 @@ function TabDipendenti() {
   const { items: aziende } = useCrud('aziende')
 
   const [editId, setEditId] = useState(null)
-  const [form, setForm] = useState({ nome: '', profilo: '', azienda_id: null, ruolo_id: null, ore_sett: 40, costo_ora: null, email: '', competenze: [] })
+  const [form, setForm] = useState({ nome: '', azienda_id: null, ruolo_id: null, ore_sett: 40, costo_ora: null, email: '', competenze: [] })
   const [showNew, setShowNew] = useState(false)
 
   function startEdit(d) {
     setEditId(d.id)
-    setForm({ nome: d.nome, profilo: d.profilo, azienda_id: d.azienda_id, ruolo_id: d.ruolo_id, ore_sett: d.ore_sett, costo_ora: d.costo_ora, email: d.email, competenze: d.competenze || [] })
+    setForm({ nome: d.nome, azienda_id: d.azienda_id, ruolo_id: d.ruolo_id, ore_sett: d.ore_sett, costo_ora: d.costo_ora, email: d.email, competenze: d.competenze || [] })
   }
 
   function cancelEdit() {
     setEditId(null); setShowNew(false)
-    setForm({ nome: '', profilo: '', azienda_id: null, ruolo_id: null, ore_sett: 40, costo_ora: null, email: '', competenze: [] })
+    setForm({ nome: '', azienda_id: null, ruolo_id: null, ore_sett: 40, costo_ora: null, email: '', competenze: [] })
   }
 
   async function salva() {
     try {
       if (showNew) { await create(form); setShowNew(false) }
       else { await update(editId, form); setEditId(null) }
-      setForm({ nome: '', profilo: '', azienda_id: null, ruolo_id: null, ore_sett: 40, costo_ora: null, email: '', competenze: [] })
+      setForm({ nome: '', azienda_id: null, ruolo_id: null, ore_sett: 40, costo_ora: null, email: '', competenze: [] })
     } catch (e) { alert(e.message) }
   }
 
@@ -282,9 +282,11 @@ function TabDipendenti() {
             <div>
               <label className="text-xs text-gray-400">Ruolo</label>
               <select value={form.ruolo_id || ''} onChange={e => {
+                // Si manda SOLO `ruolo_id`. La copia-stringa `profilo` non
+                // si scrive più: il backend la ignora e il payload la riespone
+                // leggendola dal ruolo, quindi mandarla poteva solo divergere.
                 const rid = e.target.value ? parseInt(e.target.value) : null
-                const ruolo = ruoli.find(r => r.id === rid)
-                setForm({ ...form, ruolo_id: rid, profilo: ruolo ? ruolo.nome : form.profilo })
+                setForm({ ...form, ruolo_id: rid })
               }} className="w-full bg-gray-900 border border-gray-700 rounded px-3 py-1.5 text-sm mt-1">
                 <option value="">— Seleziona —</option>
                 {ruoli.map(r => <option key={r.id} value={r.id}>{r.nome}</option>)}
