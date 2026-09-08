@@ -76,18 +76,41 @@ def seed():
     # ══════════════════════════════════════════════════════════════
     # 1. RUOLI
     # ══════════════════════════════════════════════════════════════
-    ruoli_nomi = [
+    # DUE TIPI DI RUOLO, e la distinzione è portante (vedi `TIPI_RUOLO` in
+    # models.py). I `base` sono INQUADRAMENTI: uno per persona, in
+    # `Dipendente.ruolo_id`, ed è ciò che il select del form dipendente offre.
+    # I `funzionale` si ricoprono IN AGGIUNTA e vivono nella M2M dei ruoli
+    # aggiuntivi — un Senior Consultant che è anche PM ha inquadramento
+    # 'Senior Consultant' e ruolo aggiuntivo 'PM'.
+    #
+    # PM DEVE STARE QUI. Se il seed ricostruisse il catalogo senza di lui, le
+    # associazioni dei ruoli aggiuntivi non avrebbero più il ruolo a cui
+    # puntare, e i 7 task che chiedono `profilo_richiesto='PM'` tornerebbero
+    # senza nessun candidato possibile. È lo stesso errore, al contrario, che
+    # teneva 'PM' nel catalogo delle COMPETENZE: il nome va censito una volta
+    # sola, e nel posto che ne descrive la natura.
+    ruoli_base = [
         "AD", "Manager IT", "Senior IT Consultant", "IT Consultant",
         "Senior Consultant", "Consultant", "Manager HR",
         "Responsabile amministrazione", "Addetto amministrazione",
     ]
+    ruoli_funzionali = [
+        ("PM", "Project Manager: dirige uno o più progetti. Ruolo funzionale, "
+               "si ricopre IN AGGIUNTA all'inquadramento. Chi lo ricopre su uno "
+               "specifico progetto resta Progetto.pm_id."),
+    ]
     ruoli_obj = {}
-    for nome in ruoli_nomi:
-        r = Ruolo(nome=nome)
+    for nome in ruoli_base:
+        r = Ruolo(nome=nome, tipo="base")
         session.add(r)
         session.flush()
         ruoli_obj[nome] = r
-    print(f"  ✓ {len(ruoli_nomi)} ruoli")
+    for nome, descr in ruoli_funzionali:
+        r = Ruolo(nome=nome, descrizione=descr, tipo="funzionale")
+        session.add(r)
+        session.flush()
+        ruoli_obj[nome] = r
+    print(f"  ✓ {len(ruoli_base)} ruoli base + {len(ruoli_funzionali)} funzionali")
 
     # ══════════════════════════════════════════════════════════════
     # 2. COMPETENZE
