@@ -90,6 +90,7 @@ i router possono importarlo correttamente.
 
 from datetime import datetime
 from data import carico_settimanale_dipendente
+from sqlalchemy.orm import joinedload
 from models import Dipendente, Progetto, Task, get_session
 from utils import get_oggi
 
@@ -129,7 +130,7 @@ def get_contesto_ia():
         )
         tasks_rows = session.query(Task).all()
         dipendenti_rows = (
-            session.query(Dipendente)
+            session.query(Dipendente).options(joinedload(Dipendente.ruolo_rel))
             .filter(Dipendente.attivo == True)
             .all()
         )
@@ -177,7 +178,7 @@ def get_contesto_ia():
         carico = carico_settimanale_dipendente(d.id, get_oggi())
         dipendenti_ctx.append({
             "id": d.id, "nome": d.nome,
-            "profilo": d.profilo,
+            "profilo": d.ruolo_rel.nome if d.ruolo_rel else "",
             "ore_sett": int(d.ore_sett),
             "saturazione_pct": round(carico / d.ore_sett * 100),
         })

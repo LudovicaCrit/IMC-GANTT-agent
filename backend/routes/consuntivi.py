@@ -859,7 +859,7 @@ def consuntivi_settimana_corrente(current_user: Utente = Depends(get_current_use
     # Aggiungi dipendenti che NON hanno compilato (con almeno 1 task attivo).
     # Conteggio task attivi per dipendente fatto in UNA query aggregata,
     # invece di un filtro DataFrame per ciascuno.
-    q_dip = session.query(Dipendente).filter(Dipendente.attivo == True)
+    q_dip = session.query(Dipendente).options(joinedload(Dipendente.ruolo_rel)).filter(Dipendente.attivo == True)
     # IL PERIMETRO VALE ANCHE QUI, ed è la metà che si dimentica. Senza, un PM
     # vedrebbe correttamente solo le PROPRIE dichiarazioni ma continuerebbe a
     # vedere l'intera anagrafica aziendale fra i non-compilanti: 4 compilanti
@@ -886,7 +886,7 @@ def consuntivi_settimana_corrente(current_user: Utente = Depends(get_current_use
             risultato.append({
                 "dipendente_id": d.id,
                 "nome": d.nome,
-                "profilo": d.profilo,
+                "profilo": d.ruolo_rel.nome if d.ruolo_rel else "",
                 "ore_contrattuali": int(d.ore_sett),
                 "totale_ore": 0,
                 "ore_per_task": [],

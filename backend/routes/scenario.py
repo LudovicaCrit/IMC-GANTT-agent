@@ -110,7 +110,7 @@ Il prefisso URL esplicita la separazione architetturale:
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import selectinload, joinedload
 
 from deps import require_manager
 from models import Utente, Dipendente, Progetto, Task, get_session
@@ -195,9 +195,9 @@ def _carica_dati_per_engine():
     session = get_session()
     try:
         dipendenti = [
-            {"id": d.id, "nome": d.nome, "profilo": d.profilo,
+            {"id": d.id, "nome": d.nome, "profilo": d.ruolo_rel.nome if d.ruolo_rel else "",
              "ore_sett": d.ore_sett}
-            for d in session.query(Dipendente).filter(Dipendente.attivo == True).all()
+            for d in session.query(Dipendente).options(joinedload(Dipendente.ruolo_rel)).filter(Dipendente.attivo == True).all()
         ]
         progetti = [
             {"id": p.id, "nome": p.nome, "cliente": p.cliente or "",

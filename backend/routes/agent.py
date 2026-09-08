@@ -446,7 +446,7 @@ def analisi_gantt(
 
     # Caricamento aggregato: 3 query invece di N+M filter su DataFrame
     session = get_session()
-    dipendenti = session.query(Dipendente).filter(Dipendente.attivo == True).all()
+    dipendenti = session.query(Dipendente).options(joinedload(Dipendente.ruolo_rel)).filter(Dipendente.attivo == True).all()
     tasks_rows = session.query(Task).options(
         joinedload(Task.progetto),
         # Step 3.1 (Gruppo A): predecessore ora dalla tabella-grafo; caricato
@@ -474,7 +474,7 @@ def analisi_gantt(
         dip_contesto.append({
             "id": d.id,
             "nome": d.nome,
-            "profilo": d.profilo,
+            "profilo": d.ruolo_rel.nome if d.ruolo_rel else "",
             "ore_sett": int(d.ore_sett),
             "carico_corrente": float(carico),
             "saturazione_pct": round(carico / d.ore_sett * 100),
@@ -652,7 +652,7 @@ def verifica_pianificazione(
     if nomi_coinvolti:
         # 1 query con IN(...) invece di N filter su DataFrame
         session = get_session()
-        dipendenti_match = session.query(Dipendente).filter(
+        dipendenti_match = session.query(Dipendente).options(joinedload(Dipendente.ruolo_rel)).filter(
             Dipendente.nome.in_(nomi_coinvolti),
             Dipendente.attivo == True,
         ).all()
@@ -661,7 +661,7 @@ def verifica_pianificazione(
             carico = carico_settimanale_dipendente(d.id, get_oggi())
             contesto["dipendenti_coinvolti"].append({
                 "nome": d.nome,
-                "profilo": d.profilo,
+                "profilo": d.ruolo_rel.nome if d.ruolo_rel else "",
                 "saturazione_attuale": round(carico / d.ore_sett * 100),
             })
 

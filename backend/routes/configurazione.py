@@ -123,6 +123,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import func
 
+from sqlalchemy.orm import joinedload
 from deps import require_manager
 from models import (
     get_session,
@@ -341,7 +342,7 @@ def lista_dipendenti_config(_: Utente = Depends(require_manager)):
     restituisce l'anagrafica completa da editare.
     """
     session = get_session()
-    dips = session.query(Dipendente).filter(Dipendente.attivo == True).order_by(Dipendente.nome).all()
+    dips = session.query(Dipendente).options(joinedload(Dipendente.ruolo_rel)).filter(Dipendente.attivo == True).order_by(Dipendente.nome).all()
     result = []
     for d in dips:
         comps = session.query(Competenza.nome).join(DipendentiCompetenze).filter(
@@ -350,7 +351,7 @@ def lista_dipendenti_config(_: Utente = Depends(require_manager)):
         result.append({
             "id": d.id,
             "nome": d.nome,
-            "profilo": d.profilo,
+            "profilo": d.ruolo_rel.nome if d.ruolo_rel else "",
             "ruolo_id": d.ruolo_id,
             "ore_sett": d.ore_sett,
             "costo_ora": d.costo_ora,

@@ -394,8 +394,12 @@ def _nodo_semaforo(colore_proprio, colori_figli):
 def get_dipendente(did):
     if not did or did == "":
         return {"id": "", "nome": "Non assegnato", "profilo": "-", "ore_sett": 40, "costo_ora": 0, "competenze": []}
+    from sqlalchemy.orm import joinedload
     session = get_session()
-    r = session.query(Dipendente).filter(
+    # `joinedload(ruolo_rel)`: il profilo si legge dal RUOLO (vedi sotto), e
+    # senza questo sarebbe una seconda query per ogni chiamata — su una funzione
+    # invocata una volta per dipendente da mezza applicazione.
+    r = session.query(Dipendente).options(joinedload(Dipendente.ruolo_rel)).filter(
         Dipendente.id == did,
         Dipendente.attivo == True,
     ).first()
@@ -417,8 +421,21 @@ def get_dipendente(did):
         .filter(DipendentiCompetenze.dipendente_id == r.id)
         .order_by(Competenza.nome).all()
     ]
+    # PROFILO DAL RUOLO, NON DALLA STRINGA `Dipendente.profilo`.
+    # `ruolo_id` (FK verso `ruoli`) e `profilo` (String) dicevano la stessa
+    # cosa in due posti, scritti entrambi dal form: lo stesso doppione delle
+    # competenze un livello più in là. La FK è la verità — un nome di ruolo che
+    # non esiste non è rappresentabile — mentre la stringa accetta qualunque
+    # cosa e non ha mai avuto un vincolo che la tenesse allineata.
+    # Il payload NON cambia forma: resta un campo `profilo` con lo stesso testo.
+    #
+    # Il `-` del fallback non è difensivismo: `ruolo_id` è nullable, quindi un
+    # dipendente senza ruolo è un caso rappresentabile, e senza questo ramo
+    # esploderebbe su `None.nome`. È lo stesso `-` che i due rami di uscita qui
+    # sopra restituiscono per «non assegnato» e «sconosciuto».
     out = {
-        "id": r.id, "nome": r.nome, "profilo": r.profilo,
+        "id": r.id, "nome": r.nome,
+        "profilo": r.ruolo_rel.nome if r.ruolo_rel else "-",
         "ore_sett": r.ore_sett, "costo_ora": r.costo_ora or 0,
         "competenze": competenze,
     }
@@ -4155,13 +4172,14 @@ def margini_economia():
     progetti del ramo → Σ per-progetto == totale per costruzione.
     """
     from models import Fase, Azienda
+    from sqlalchemy.orm import joinedload
 
     session = get_session()
     try:
         # mappe di supporto (una query ciascuna)
         dip = {
-            d.id: {"nome": d.nome, "profilo": d.profilo, "costo_ora": float(d.costo_ora or 0)}
-            for d in session.query(Dipendente).all()
+            d.id: {"nome": d.nome, "profilo": d.ruolo_rel.nome if d.ruolo_rel else "", "costo_ora": float(d.costo_ora or 0)}
+            for d in session.query(Dipendente).options(joinedload(Dipendente.ruolo_rel)).all()
         }
         azienda_nome = {a.id: a.nome for a in session.query(Azienda).all()}
 

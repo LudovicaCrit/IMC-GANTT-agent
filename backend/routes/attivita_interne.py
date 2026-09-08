@@ -168,7 +168,7 @@ def lista_attivita_interne(_: Utente = Depends(get_current_user)):
 
         dip_ids = {t.dipendente_id for t in task if t.dipendente_id}
         persone = {
-            d.id: d for d in session.query(Dipendente)
+            d.id: d for d in session.query(Dipendente).options(joinedload(Dipendente.ruolo_rel))
             .filter(Dipendente.id.in_(dip_ids)).all()
         } if dip_ids else {}
 
@@ -217,7 +217,7 @@ def lista_attivita_interne(_: Utente = Depends(get_current_user)):
             gruppi.append({
                 "dipendente_id": did,
                 "nome": d.nome if d else did,
-                "profilo": d.profilo if d else "",
+                "profilo": (d.ruolo_rel.nome if d.ruolo_rel else "") if d else "",
                 "ore_sett": int(d.ore_sett) if d and d.ore_sett else None,
                 "ore_settimana_interne": round(
                     sum(v["ore_settimana"] or 0 for v in voci), 1),

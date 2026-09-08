@@ -96,7 +96,15 @@ def lista_dipendenti(_: Utente = Depends(require_manager)):
     manageriale, non visibile agli user.
     """
     session = get_session()
-    dipendenti = session.query(Dipendente).filter(Dipendente.attivo == True).all()
+    # `joinedload(ruolo_rel)`: il profilo si legge dal RUOLO, non più dalla
+    # stringa `d.profilo`. Senza, sarebbe una query per persona nel ciclo qui
+    # sotto — l'N+1 che il resto di questa funzione ha già lavorato per togliere.
+    dipendenti = (
+        session.query(Dipendente)
+        .options(joinedload(Dipendente.ruolo_rel))
+        .filter(Dipendente.attivo == True)
+        .all()
+    )
 
     # ── UNA query per progetti-attivi E conteggio-task di TUTTI ───────────
     # Erano due query PER PERSONA — `get_progetti_dipendente` (che apriva anche
@@ -167,7 +175,7 @@ def lista_dipendenti(_: Utente = Depends(require_manager)):
         result.append({
             "id": d.id,
             "nome": d.nome,
-            "profilo": d.profilo,
+            "profilo": d.ruolo_rel.nome if d.ruolo_rel else "",
             "ore_sett": int(d.ore_sett),
             "competenze": comp_per_dip.get(d.id, []),
             "carico_corrente": float(carico),
