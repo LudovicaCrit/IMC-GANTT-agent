@@ -13,7 +13,7 @@ from models import (
     create_tables, get_session,
     Azienda, Dipendente, Progetto, Task, DipendenzaTask, Consuntivo,
     Segnalazione, Ruolo, Competenza, DipendentiCompetenze, FaseStandard,
-    Fase, Utente,
+    Fase, Utente, DipendentiRuoliAggiuntivi,
 )
 from data_db_impl import contatore_ordine_task
 from auth import hash_password
@@ -218,6 +218,53 @@ def seed():
             print(f"      {did}: '{nome}'")
         print(f"    → censirle in `competenze_nomi` qui sopra, o toglierle dai "
               f"profili in seed_data.json")
+
+    # ══════════════════════════════════════════════════════════════
+    # 4-bis. DIPENDENTI ↔ RUOLI AGGIUNTIVI (M2M)
+    # ══════════════════════════════════════════════════════════════
+    # I ruoli FUNZIONALI che una persona ricopre in aggiunta al proprio
+    # inquadramento. Oggi solo 'PM', per le 7 persone che dirigono progetti.
+    #
+    # PERCHÉ UN CAMPO ESPLICITO IN seed_data.json E NON UNA DERIVAZIONE DA
+    # `pm_id`. Il sorgente contiene già i pm_id dei progetti, e da lì si
+    # ricaverebbero le stesse 7 persone senza scrivere niente — ma sarebbe una
+    # coincidenza, non un'identità. «Ricopre il ruolo PM» e «dirige QUESTO
+    # progetto» sono due fatti diversi: un PM fra un progetto e l'altro non
+    # smette di essere un PM, e derivarlo dai progetti lo farebbe sparire e
+    # riapparire col portafoglio commesse. Il campo dice il primo fatto,
+    # `Progetto.pm_id` continua a dire il secondo.
+    #
+    # IL VINCOLO «DEV'ESSERE FUNZIONALE» VIVE QUI, non nello schema: la FK
+    # garantisce che il ruolo esista, non che sia della specie giusta (vedi la
+    # nota in `DipendentiRuoliAggiuntivi`). Un inquadramento messo per errore
+    # fra gli aggiuntivi viene scartato e DETTO, come per le competenze fuori
+    # catalogo — perché uno scarto silenzioso è il modo in cui è nato il
+    # doppione da cui veniamo.
+    n_ruoli_agg = 0
+    ruoli_scartati = []   # (dipendente, nome, motivo)
+    for _, row in DIPENDENTI.iterrows():
+        aggiuntivi = row.get("ruoli_aggiuntivi")
+        if not isinstance(aggiuntivi, list):
+            continue
+        for nome_ruolo in aggiuntivi:
+            r = ruoli_obj.get(nome_ruolo)
+            if r is None:
+                ruoli_scartati.append((row["id"], nome_ruolo, "non in catalogo ruoli"))
+            elif r.tipo != "funzionale":
+                ruoli_scartati.append((row["id"], nome_ruolo, f"è un ruolo '{r.tipo}', non funzionale"))
+            else:
+                session.add(DipendentiRuoliAggiuntivi(
+                    dipendente_id=row["id"],
+                    ruolo_id=r.id,
+                ))
+                n_ruoli_agg += 1
+    print(f"  ✓ {n_ruoli_agg} associazioni dipendente-ruolo aggiuntivo")
+    if ruoli_scartati:
+        print(f"  ⚠ {len(ruoli_scartati)} ruoli aggiuntivi NON associati:")
+        for did, nome, motivo in ruoli_scartati:
+            print(f"      {did}: '{nome}' — {motivo}")
+        print(f"    → censirli in `ruoli_funzionali` qui sopra, o toglierli da "
+              f"`ruoli_aggiuntivi` in seed_data.json")
 
     # ══════════════════════════════════════════════════════════════
     # 5. FASI STANDARD (template)

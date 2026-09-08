@@ -45,7 +45,10 @@
     "cloud",
     "gestione progetti"
    ],
-   "azienda": "IMC-Improve"
+   "azienda": "IMC-Improve",
+   "ruoli_aggiuntivi": [
+    "PM"
+   ]
   },
   {
    "id": "D003",
@@ -88,7 +91,10 @@
     "bandi",
     "gestione progetti"
    ],
-   "azienda": "IMC-Improve"
+   "azienda": "IMC-Improve",
+   "ruoli_aggiuntivi": [
+    "PM"
+   ]
   },
   {
    "id": "D006",
@@ -101,7 +107,10 @@
     "processi",
     "gestione progetti"
    ],
-   "azienda": "IMC-Improve"
+   "azienda": "IMC-Improve",
+   "ruoli_aggiuntivi": [
+    "PM"
+   ]
   },
   {
    "id": "D007",
@@ -114,7 +123,10 @@
     "coordinamento",
     "gestione progetti"
    ],
-   "azienda": "IMC-Improve"
+   "azienda": "IMC-Improve",
+   "ruoli_aggiuntivi": [
+    "PM"
+   ]
   },
   {
    "id": "D008",
@@ -195,7 +207,10 @@
     "gestione progetti",
     "controllo gestione"
    ],
-   "azienda": "Innovation Plaza"
+   "azienda": "Innovation Plaza",
+   "ruoli_aggiuntivi": [
+    "PM"
+   ]
   },
   {
    "id": "D014",
@@ -236,7 +251,10 @@
     "gestione progetti",
     "relazioni clienti"
    ],
-   "azienda": "Innovation Plaza"
+   "azienda": "Innovation Plaza",
+   "ruoli_aggiuntivi": [
+    "PM"
+   ]
   },
   {
    "id": "D017",
@@ -251,7 +269,10 @@
     "gestione progetti",
     "relazioni clienti"
    ],
-   "azienda": "Innovation Plaza"
+   "azienda": "Innovation Plaza",
+   "ruoli_aggiuntivi": [
+    "PM"
+   ]
   },
   {
    "id": "D018",
