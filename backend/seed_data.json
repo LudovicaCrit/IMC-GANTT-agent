@@ -156,7 +156,6 @@
    "costo_ora": 35.0,
    "competenze": [
     "GRC",
-    "analisi",
     "relazioni clienti"
    ],
    "azienda": "IMC-Improve"
@@ -168,7 +167,7 @@
    "ore_sett": 40,
    "costo_ora": 25.0,
    "competenze": [
-    "IA",
+    "AI/ML",
     "python",
     "backend",
     "sviluppo"
@@ -184,7 +183,6 @@
    "competenze": [
     "risorse umane",
     "formazione",
-    "organizzazione",
     "contratti"
    ],
    "azienda": "IMC-Improve"
@@ -212,8 +210,7 @@
    "costo_ora": 28.0,
    "competenze": [
     "amministrazione",
-    "documentazione",
-    "archivio"
+    "documentazione"
    ],
    "azienda": "IMC-Improve"
   },

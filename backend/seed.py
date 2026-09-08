@@ -149,7 +149,11 @@ def seed():
             ruolo_id=ruolo.id if ruolo else None,
             ore_sett=int(row["ore_sett"]),
             costo_ora=float(row["costo_ora"]),
-            competenze=row["competenze"],
+            # `competenze` (JSON) NON si scrive più: la M2M costruita al punto 4
+            # è l'unica sorgente. La colonna resta in tabella, inerte, finché il
+            # 'PM' delle 5 persone non è ricollocato nel modello ruoli-funzionali.
+            # Un seed che riempie entrambe è esattamente il modo in cui le due
+            # sorgenti sono divergute la prima volta.
         ))
     print(f"  ✓ {len(DIPENDENTI)} dipendenti")
 
@@ -171,15 +175,16 @@ def seed():
                 else:
                     # NON associata, ed è corretto: la M2M ha una FK verso
                     # `competenze` e non può contenere un nome che non esiste.
-                    # Ma finisce comunque nella colonna JSON del dipendente
-                    # (testo libero), e prima questo ramo taceva: è così che il
-                    # seed ha prodotto 4 dipendenti su 18 con le due sorgenti
-                    # divergenti. Ora lo dice.
+                    # Da quando il JSON non si scrive più, però, un nome scartato
+                    # qui è PERSO: non c'è più la colonna testo-libero a
+                    # raccoglierlo di nascosto. Il seed è riproducibile, quindi
+                    # la perdita si ripara in `seed_data.json` — ma va vista, e
+                    # per questo il ramo parla invece di tacere.
                     scartate.append((row["id"], comp_nome))
     print(f"  ✓ {n_assoc} associazioni dipendente-competenza")
     if scartate:
-        print(f"  ⚠ {len(scartate)} competenze NON associate (fuori catalogo): "
-              f"restano nella colonna JSON ma non in dipendenti_competenze")
+        print(f"  ⚠ {len(scartate)} competenze NON associate (fuori catalogo) "
+              f"e NON salvate altrove: questi nomi sono PERSI")
         for did, nome in scartate:
             print(f"      {did}: '{nome}'")
         print(f"    → censirle in `competenze_nomi` qui sopra, o toglierle dai "

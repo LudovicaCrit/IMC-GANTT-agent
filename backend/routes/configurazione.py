@@ -360,6 +360,13 @@ def _associa_competenze(session, dipendente_id, nomi):
     NON decide nulla sulle 4 orfane già in DB, e non tocca dati esistenti:
     rende solo rumoroso lo scarto da qui in avanti.
 
+    AGGIORNAMENTO (08/09/2026, recisione del doppione): la colonna JSON non si
+    scrive più — né qui né in creazione né nel seed. Quindi la frase sopra vale
+    per la storia, non per il presente: un nome fuori catalogo oggi non «finisce
+    nel JSON», non finisce da nessuna parte. Lo scarto è passato da invisibile-
+    ma-recuperabile a visibile-e-definitivo, ed è il motivo per cui la
+    segnalazione ora è l'unica rete rimasta.
+
     Un helper e non due copie del ciclo: erano già identici in POST e PATCH, e
     una segnalazione scritta due volte è una segnalazione che prima o poi
     esiste in un ramo solo.
@@ -374,9 +381,10 @@ def _associa_competenze(session, dipendente_id, nomi):
         else:
             scartati.append(nome)
             logger.warning(
-                "Competenza '%s' non in catalogo: NON associata al dipendente %s. "
-                "Resta nella colonna JSON ma non in dipendenti_competenze — "
-                "censirla in Configurazione → Competenze, o toglierla dal profilo.",
+                "Competenza '%s' non in catalogo: NON associata al dipendente %s "
+                "e NON salvata da nessuna parte — il nome è perso. "
+                "Censirla in Configurazione → Competenze e rifare il salvataggio, "
+                "oppure toglierla dal profilo.",
                 nome, dipendente_id,
             )
     return scartati
@@ -387,14 +395,20 @@ def _avvisi_competenze(scartati):
 
     Stessa convenzione di `salva_consuntivo`, che ritorna `{ok, avvisi}`: lista
     VUOTA nel caso normale, così il client non deve distinguere «campo assente»
-    da «nessun avviso». Oggi il form non li mostra — `await create(form)` ignora
-    la risposta — ma il canale c'è, e mostrarli diventa una riga di frontend
-    invece di un giro completo dal backend.
+    da «nessun avviso».
+
+    DA QUANDO IL JSON NON SI SCRIVE PIÙ, QUESTI AVVISI PESANO DI PIÙ. Prima uno
+    scarto era invisibile ma recuperabile: il nome restava nella colonna JSON e
+    si poteva ripescarlo. Ora la M2M è l'unica destinazione, e un nome fuori
+    catalogo non viene salvato da nessuna parte — chi lo ha digitato lo vede
+    sparire al salvataggio successivo. L'avviso è l'unica cosa che glielo dice,
+    e il form ANCORA NON LO MOSTRA (`await create(form)` ignora la risposta):
+    mostrarlo è una riga di frontend, ed è diventata la più utile del giro.
     """
     return [
-        f"Competenza '{n}' non è in catalogo: salvata sul profilo ma non "
-        f"associata. Censiscila in Configurazione → Competenze perché venga "
-        f"usata dai suggerimenti."
+        f"Competenza '{n}' non è in catalogo e NON è stata salvata. "
+        f"Censiscila in Configurazione → Competenze e risalva il profilo, "
+        f"altrimenti il nome va perso."
         for n in scartati
     ]
 
@@ -463,7 +477,10 @@ def crea_dipendente(req: DipendenteCfgRequest, _: Utente = Depends(require_manag
         azienda_id=req.azienda_id,
         ruolo_id=req.ruolo_id, ore_sett=req.ore_sett,
         costo_ora=req.costo_ora, email=req.email, sede=req.sede,
-        competenze=req.competenze,
+        # `competenze` (JSON) NON si scrive più: la M2M è l'unica sorgente.
+        # La colonna resta in tabella, inerte, finché il 'PM' delle 5 persone
+        # non è ricollocato nel modello ruoli-funzionali; da qui in avanti non
+        # riceve più valori, così non può tornare a divergere dalla M2M.
     )
     session.add(dip)
     session.flush()
@@ -508,7 +525,8 @@ def modifica_dipendente(dip_id: str, req: DipendenteCfgRequest, _: Utente = Depe
     dip.costo_ora = req.costo_ora
     dip.email = req.email
     dip.sede = req.sede
-    dip.competenze = req.competenze
+    # `dip.competenze` (JSON) NON si aggiorna più: vedi la nota in creazione.
+    # Il valore già in colonna resta com'è — fossile, non più letto da nessuno.
 
     # Aggiorna competenze M2M: cancella tutte e ri-aggiungi
     session.query(DipendentiCompetenze).filter(
