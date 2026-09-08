@@ -312,7 +312,12 @@ class Ruolo(Base):
         CheckConstraint(_check_in("tipo", TIPI_RUOLO), name="ck_ruoli_tipo"),
     )
 
+    # `dipendenti` = chi ha questo ruolo come INQUADRAMENTO (via ruolo_id).
+    # `dipendenti_aggiuntivi` = chi lo ricopre IN AGGIUNTA (via la M2M).
+    # Due relazioni distinte perché sono due fatti distinti: per un ruolo
+    # `base` la seconda resta vuota, per un `funzionale` la prima.
     dipendenti = relationship("Dipendente", back_populates="ruolo_rel")
+    dipendenti_aggiuntivi = relationship("DipendentiRuoliAggiuntivi", back_populates="ruolo")
 
 
 class Competenza(Base):
@@ -342,6 +347,49 @@ class DipendentiCompetenze(Base):
 
     dipendente = relationship("Dipendente", back_populates="competenze_rel")
     competenza = relationship("Competenza", back_populates="dipendenti")
+
+
+class DipendentiRuoliAggiuntivi(Base):
+    """M2M fra Dipendente e i ruoli che ricopre IN AGGIUNTA all'inquadramento.
+
+    L'INQUADRAMENTO NON STA QUI. `Dipendente.ruolo_id` continua a essere il
+    profilo-base, uno solo, un ruolo di `tipo='base'`. Questa tabella tiene i
+    ruoli `funzionale` — oggi 'PM', domani altri — che una persona ricopre in
+    più: un Senior Consultant che è anche PM ha `ruolo_id` → Senior Consultant
+    e una riga qui verso PM. È la casella che mancava, e la cui assenza aveva
+    spinto 'PM' nel catalogo delle COMPETENZE, dove non c'entrava niente.
+
+    ASSOCIATION OBJECT, NON UNA `secondary` NUDA. Con una secondary table
+    SQLAlchemy gestirebbe la relazione ma non l'entità: aggiungere domani un
+    attributo all'associazione — `data_nomina`, `livello`, il progetto per cui
+    la nomina vale — vorrebbe dire convertirla in classe e migrare la
+    relationship di chi la usa. Qui è già una classe con `id` e `created_at`
+    propri: quegli attributi diventano colonne e nient'altro cambia. Non ce ne
+    sono ORA, ed è deliberato — la struttura li accoglie, non li anticipa.
+
+    IL VINCOLO «DEV'ESSERE UN RUOLO FUNZIONALE» NON È QUI, ED È UNA SCELTA.
+    La FK garantisce che `ruolo_id` esista in `ruoli`, non che sia di
+    `tipo='funzionale'`: esprimerlo in SQL richiederebbe una FK composita verso
+    una chiave `(id, tipo)` o un trigger, cioè complicare lo schema per un
+    vincolo che il codice di scrittura può applicare meglio — segnalando lo
+    scarto invece di sollevare un errore di integrità opaco. È lo stesso
+    equilibrio di `_associa_competenze`, dove un nome fuori catalogo non viene
+    associato ma viene DETTO. Finché quel codice di scrittura non esiste
+    (passi C ed E), la tabella accetta qualunque `ruolo_id` valido.
+    """
+    __tablename__ = "dipendenti_ruoli_aggiuntivi"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    dipendente_id = Column(String(10), ForeignKey("dipendenti.id", ondelete="CASCADE"), nullable=False)
+    ruolo_id = Column(Integer, ForeignKey("ruoli.id", ondelete="CASCADE"), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("dipendente_id", "ruolo_id", name="uq_dip_ruolo_agg"),
+    )
+
+    dipendente = relationship("Dipendente", back_populates="ruoli_aggiuntivi")
+    ruolo = relationship("Ruolo", back_populates="dipendenti_aggiuntivi")
 
 
 class FaseStandard(Base):
@@ -435,7 +483,13 @@ class Dipendente(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     azienda_rel = relationship("Azienda", back_populates="dipendenti")
+    # `ruolo_rel` = l'INQUADRAMENTO (uno, via ruolo_id, un ruolo `base`).
+    # `ruoli_aggiuntivi` = i ruoli FUNZIONALI ricoperti in più (zero o molti).
+    # Senza suffisso `_rel` perché, a differenza di `competenze_rel`, non c'è
+    # nessuna colonna omonima da cui distinguerlo: quel suffisso era lì per
+    # convivere con la colonna JSON `competenze`, che non esiste più.
     ruolo_rel = relationship("Ruolo", back_populates="dipendenti")
+    ruoli_aggiuntivi = relationship("DipendentiRuoliAggiuntivi", back_populates="dipendente")
     competenze_rel = relationship("DipendentiCompetenze", back_populates="dipendente")
     assegnazioni = relationship("Assegnazione", back_populates="dipendente")
     consuntivi = relationship("Consuntivo", back_populates="dipendente")
