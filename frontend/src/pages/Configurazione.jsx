@@ -84,7 +84,18 @@ function TabRuoli() {
       <div className="space-y-1">
         {items.map(r => (
           <div key={r.id} className="flex items-center justify-between bg-gray-800/50 rounded-lg px-4 py-2.5">
-            <span className="text-sm">{r.nome}</span>
+            <span className="text-sm">
+              {r.nome}
+              {/* Il tipo è VISIBILE qui e in nessun altro elenco: questo è il
+                  catalogo, ed è l'unico posto da cui si capisce perché un ruolo
+                  compaia fra i «profili richiesti» di un task ma non fra gli
+                  inquadramenti selezionabili nel form dipendente. */}
+              {r.tipo === 'funzionale' && (
+                <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-purple-900/60 text-purple-300 align-middle">
+                  funzionale
+                </span>
+              )}
+            </span>
             <button onClick={() => remove(r.id)}
               className="text-gray-500 hover:text-red-400 text-xs transition-colors">Rimuovi</button>
           </div>
@@ -200,7 +211,14 @@ function TabFasi() {
 
 function TabDipendenti() {
   const { items: dipendenti, loading, create, update, remove } = useCrud('dipendenti')
-  const { items: ruoli } = useCrud('ruoli')
+  const { items: tuttiIRuoli } = useCrud('ruoli')
+  // INQUADRAMENTI SOLTANTO. Il select qui sotto sceglie `ruolo_id`, cioè il
+  // profilo-BASE della persona: uno solo, ed è un inquadramento contrattuale.
+  // I ruoli funzionali (PM e futuri) si ricoprono IN AGGIUNTA e non vanno qui —
+  // sceglierne uno come inquadramento è il dato malformato che il multiruolo
+  // esiste per evitare. Il filtro sta qui e non nell'endpoint perché gli altri
+  // due consumatori di `/config/ruoli` li vogliono tutti.
+  const ruoli = tuttiIRuoli.filter(r => r.tipo === 'base')
   const { items: competenze } = useCrud('competenze')
   // Le aziende del gruppo arrivano da `/config/aziende` e non sono cablate qui:
   // `Azienda` è una tabella che il seed costruisce dai dati, quindi un terzo

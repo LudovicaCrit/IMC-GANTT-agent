@@ -275,15 +275,42 @@ RUOLI_APP = ("manager", "pm", "user")
 # CONFIGURAZIONE — Entità gestite dalla pagina admin
 # ══════════════════════════════════════════════════════════════════════
 
+# I DUE TIPI DI RUOLO (multiruolo, 08/09/2026). La tabella `ruoli` ha sempre
+# avuto DUE mestieri, e finora nessun modo di distinguerli:
+#
+#   base       — l'INQUADRAMENTO della persona ("Senior Consultant", "AD").
+#                Uno solo per dipendente: `Dipendente.ruolo_id`.
+#   funzionale — un ruolo che si RICOPRE IN AGGIUNTA all'inquadramento ("PM").
+#                Zero o più per dipendente, via la M2M dei ruoli aggiuntivi.
+#
+# PERCHÉ IL DISCRIMINANTE VIENE PRIMA DI 'PM', E NON INSIEME. `GET
+# /api/config/ruoli` ha tre consumatori: il select-inquadramento del form
+# dipendente, la tendina «profilo richiesto» dei task in Cantiere, e il CRUD del
+# catalogo. Solo il primo deve NON vedere i funzionali: un ruolo funzionale
+# assegnato come inquadramento è il dato malformato che tutto questo lavoro
+# esiste per prevenire. Aggiungere 'PM' senza prima poterlo distinguere aprirebbe
+# una finestra in cui il form lo offre come inquadramento — e basta un
+# salvataggio per creare il dato sbagliato.
+#
+# CHECK a livello DB: `ck_ruoli_tipo`, dichiarato QUI e non solo nella migration
+# d3e4f5a6b7c8 — vedi `_check_in` per il perché quella distinzione conta.
+TIPI_RUOLO = ("base", "funzionale")
+
+
 class Ruolo(Base):
-    """Ruoli aziendali censiti in Configurazione."""
+    """Ruoli aziendali censiti in Configurazione (inquadramenti + funzionali)."""
     __tablename__ = "ruoli"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     nome = Column(String(80), nullable=False, unique=True)
     descrizione = Column(Text, nullable=True)
+    tipo = Column(String(20), nullable=False, default="base", server_default="base")
     attivo = Column(Boolean, nullable=False, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        CheckConstraint(_check_in("tipo", TIPI_RUOLO), name="ck_ruoli_tipo"),
+    )
 
     dipendenti = relationship("Dipendente", back_populates="ruolo_rel")
 

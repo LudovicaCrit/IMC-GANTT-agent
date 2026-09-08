@@ -127,7 +127,7 @@ from deps import require_manager
 from models import (
     get_session,
     Utente, Ruolo, Competenza, Dipendente, Azienda,
-    DipendentiCompetenze, FaseStandard,
+    DipendentiCompetenze, FaseStandard, TIPI_RUOLO,
 )
 
 
@@ -182,11 +182,40 @@ router = APIRouter(prefix="/api/config", tags=["configurazione"])
 # ═════════════════════════════════════════════════════════════════════════
 
 @router.get("/ruoli")
-def lista_ruoli(_: Utente = Depends(require_manager)):
-    """Lista ruoli attivi ordinati per nome."""
+def lista_ruoli(
+    tipo: str | None = None,
+    _: Utente = Depends(require_manager),
+):
+    """Lista ruoli attivi ordinati per nome. `?tipo=base|funzionale` per filtrare.
+
+    OGNI RUOLO PORTA IL SUO `tipo` NEL PAYLOAD, e il filtro è opzionale. La
+    scelta non è indifferente, perché i tre consumatori vogliono cose diverse:
+
+      form dipendente, select «Inquadramento» → solo i 'base'
+      Cantiere, tendina «Profilo richiesto»   → TUTTI (un task può chiedere 'PM')
+      Configurazione → TabRuoli               → TUTTI, col tipo da mostrare
+
+    Il filtro non ha default restrittivo: senza parametro l'endpoint risponde
+    come ha sempre risposto. Restringere il default avrebbe silenziosamente
+    tolto voci a Cantiere e a TabRuoli, che non hanno chiesto niente.
+
+    Un valore di `tipo` fuori dai due ammessi è un 422, non una lista vuota: una
+    lista vuota si legge come «non ci sono ruoli», che è la risposta giusta a
+    una domanda diversa da quella posta.
+    """
+    if tipo is not None and tipo not in TIPI_RUOLO:
+        raise HTTPException(
+            422, f"tipo '{tipo}' non valido: ammessi {', '.join(TIPI_RUOLO)}"
+        )
     session = get_session()
-    ruoli = session.query(Ruolo).filter(Ruolo.attivo == True).order_by(Ruolo.nome).all()
-    result = [{"id": r.id, "nome": r.nome, "descrizione": r.descrizione or ""} for r in ruoli]
+    q = session.query(Ruolo).filter(Ruolo.attivo == True)
+    if tipo is not None:
+        q = q.filter(Ruolo.tipo == tipo)
+    ruoli = q.order_by(Ruolo.nome).all()
+    result = [
+        {"id": r.id, "nome": r.nome, "descrizione": r.descrizione or "", "tipo": r.tipo}
+        for r in ruoli
+    ]
     session.close()
     return result
 
