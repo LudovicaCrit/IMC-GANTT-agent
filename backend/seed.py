@@ -96,7 +96,13 @@ def seed():
         "GRC", "ARIS", "risk management", "compliance", "processi",
         "sviluppo", "backend", "frontend", "API", "database",
         "python", "AI/ML", "cloud", "architettura",
-        "PM", "gestione progetti", "coordinamento",
+        # 'PM' NON è qui, e non è una dimenticanza: non è una competenza.
+        # Chi dirige un progetto è `Progetto.pm_id`, che è più completo della
+        # vecchia label (7 persone contro 5) e non può divergere dai fatti.
+        # La label è stata rimossa dal catalogo l'08/09/2026 insieme alle sue
+        # 5 associazioni: era l'unico nome che il match-per-ruolo rotto
+        # riusciva a far scattare, per omonimia col `profilo_richiesto`.
+        "gestione progetti", "coordinamento",
         "relazioni clienti", "bandi", "strategia",
         "risorse umane", "formazione", "contratti",
         "amministrazione", "rendicontazione", "fatturazione",

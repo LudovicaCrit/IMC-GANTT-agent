@@ -395,7 +395,10 @@ class Dipendente(Base):
     ruolo_id = Column(Integer, ForeignKey("ruoli.id"), nullable=True)
     ore_sett = Column(SmallInteger, nullable=False, default=40)
     costo_ora = Column(Float, nullable=True)
-    competenze = Column(JSON, default=[])  # legacy JSON, le competenze M2M sono in dipendenti_competenze
+    # `competenze` (JSON) rimossa l'08/09/2026 — migration d2e3f4a5b6c7. Era la
+    # seconda sorgente delle competenze, testo libero accanto alla M2M
+    # `dipendenti_competenze`: due verità che nessuno teneva allineate. Le
+    # competenze si leggono e si scrivono SOLO via `competenze_rel`.
     sede = Column(String(40), nullable=True)
     email = Column(String(120), nullable=True)
     data_assunzione = Column(Date, nullable=True)

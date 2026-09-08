@@ -40,7 +40,6 @@
    "ore_sett": 40,
    "costo_ora": 55.0,
    "competenze": [
-    "PM",
     "sviluppo",
     "architettura",
     "cloud",
@@ -84,7 +83,6 @@
    "ore_sett": 40,
    "costo_ora": 50.0,
    "competenze": [
-    "PM",
     "GRC",
     "compliance",
     "bandi",
@@ -99,7 +97,6 @@
    "ore_sett": 40,
    "costo_ora": 50.0,
    "competenze": [
-    "PM",
     "risk management",
     "processi",
     "gestione progetti"
@@ -113,7 +110,6 @@
    "ore_sett": 40,
    "costo_ora": 48.0,
    "competenze": [
-    "PM",
     "compliance",
     "coordinamento",
     "gestione progetti"
@@ -196,7 +192,6 @@
    "competenze": [
     "bandi",
     "relazioni clienti",
-    "PM",
     "gestione progetti",
     "controllo gestione"
    ],
