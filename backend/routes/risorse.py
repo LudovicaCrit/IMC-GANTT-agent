@@ -35,9 +35,10 @@ DETTAGLIO ENDPOINT
      • Identifica sovraccarichi (saturazione > 100%) e sottoutilizzati
        (saturazione < 90%)
      • Per ogni task del sovraccarico, cerca candidati il cui RUOLO coincide
-       col `profilo_richiesto` del task, e con spazio disponibile (almeno
-       50% delle ore_sett). Il match è per ruolo e basta: le competenze non
-       entrano nella scelta — vedi NOTE DI DOMINIO.
+       col `profilo_richiesto` del task — l'INQUADRAMENTO oppure uno dei
+       RUOLI FUNZIONALI ricoperti in aggiunta (es. 'PM') — e con spazio
+       disponibile (almeno 50% delle ore_sett). Il match è per ruolo: le
+       competenze non entrano nella scelta — vedi NOTE DI DOMINIO.
      • Ordina i candidati preferendo chi resterebbe vicino al 100% post-spostamento
    - Output: lista proposte ordinate per priorità (alta se saturazione > 125%).
 
@@ -50,7 +51,16 @@ NOTE DI DOMINIO
 La logica di suggerimento bilanciamento è il punto di partenza per la
 "logica di redistribuzione compiti" che Ludovica ha sottolineato come
 funzionalità prodotto importante. La versione attuale è basica: RUOLO
-(`profilo_richiesto` del task == profilo del candidato) + spazio disponibile.
+(`profilo_richiesto` del task == inquadramento del candidato OPPURE uno dei suoi
+ruoli funzionali) + spazio disponibile.
+
+I RUOLI FUNZIONALI (08/09/2026, passo G del multiruolo). Una persona ricopre un
+inquadramento — uno solo, `Dipendente.ruolo_id` — e zero o più ruoli in aggiunta,
+nella M2M `dipendenti_ruoli_aggiuntivi`. Oggi l'unico funzionale è 'PM', che
+7 persone ricoprono: i task che chiedono `profilo_richiesto='PM'` trovano loro,
+mentre col solo inquadramento non trovavano NESSUNO (nessuno è inquadrato come
+PM: sono Senior Consultant e un Manager IT). Il confronto resta fra ruoli e
+ruoli, entrambi i lati ancorati alla tabella `ruoli`.
 
 IL MATCH PER COMPETENZE NON C'È, e non è una svista. C'era un secondo ramo
 che confrontava `profilo_richiesto` con le competenze del dipendente, ma sono
@@ -97,10 +107,13 @@ Letture migrate da DataFrame in cache a Postgres diretto il 21 maggio 2026
 
 from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import joinedload
+from sqlalchemy.orm import joinedload, selectinload
 
 from deps import require_manager
-from models import Utente, Dipendente, Task, get_session
+from models import (
+    Utente, Dipendente, Task, get_session,
+    DipendentiRuoliAggiuntivi,
+)
 from data import carico_settimanale_dipendente
 from data_db_impl import _to_dt
 from utils import get_oggi
@@ -140,7 +153,7 @@ def carico_risorse(
         datetime.min.time()
     )
     session = get_session()
-    dipendenti = session.query(Dipendente).filter(Dipendente.attivo == True).all()
+    dipendenti = session.query(Dipendente).options(joinedload(Dipendente.ruolo_rel)).filter(Dipendente.attivo == True).all()
     session.close()
     for d in dipendenti:
         settimane_data = []
@@ -157,7 +170,7 @@ def carico_risorse(
         result.append({
             "dipendente_id": d.id,
             "nome": d.nome,
-            "profilo": d.profilo,
+            "profilo": d.ruolo_rel.nome if d.ruolo_rel else "",
             "ore_sett": int(d.ore_sett),
             "settimane": settimane_data,
         })
@@ -301,7 +314,20 @@ def suggerisci_bilanciamento(_: Utente = Depends(require_manager)):
     oggi = datetime.now()
 
     session = get_session()
-    dipendenti = session.query(Dipendente).filter(Dipendente.attivo == True).all()
+    # Inquadramento E ruoli aggiuntivi caricati in anticipo: il match qui sotto
+    # guarda entrambi, e `session.close()` arriva PRIMA del ciclo — un accesso
+    # lazy lì non sarebbe un N+1, sarebbe un DetachedInstanceError a ogni
+    # richiesta. `selectinload` per la collezione (una seconda query per tutti)
+    # invece di `joinedload`, che moltiplicherebbe le righe del dipendente.
+    dipendenti = (
+        session.query(Dipendente)
+        .options(
+            joinedload(Dipendente.ruolo_rel),
+            selectinload(Dipendente.ruoli_aggiuntivi).joinedload(DipendentiRuoliAggiuntivi.ruolo),
+        )
+        .filter(Dipendente.attivo == True)
+        .all()
+    )
     # Pre-fetch dei task attivi (escluso P010) con joinedload sul progetto per
     # evitare N+1 query nel lookup del nome progetto. Una sola query SQL.
     tasks_rows = session.query(Task).options(joinedload(Task.progetto)).filter(
@@ -355,7 +381,11 @@ def suggerisci_bilanciamento(_: Utente = Depends(require_manager)):
         persone.append({
             "id": d.id,
             "nome": d.nome,
-            "profilo": d.profilo,
+            "profilo": d.ruolo_rel.nome if d.ruolo_rel else "",
+            # I RUOLI CHE LA PERSONA RICOPRE IN AGGIUNTA all'inquadramento
+            # (oggi solo 'PM'). Campo interno al calcolo, non esce nel payload —
+            # come `profilo`, serve al match qui sotto.
+            "ruoli_aggiuntivi": [a.ruolo.nome for a in d.ruoli_aggiuntivi],
             "ore_sett": int(d.ore_sett),
             "carico": float(carico),
             "saturazione": sat,
@@ -377,24 +407,29 @@ def suggerisci_bilanciamento(_: Utente = Depends(require_manager)):
             for sotto in sottoutilizzati:
                 if sotto["id"] == sov["id"]:
                     continue
-                # MATCH PER RUOLO, e solo per ruolo.
+                # MATCH PER RUOLO — inquadramento OPPURE ruolo funzionale.
                 #
-                # Qui c'era un secondo ramo — `profilo in sotto["competenze"]` —
-                # che confrontava due vocabolari diversi: `profilo_richiesto` è
-                # un RUOLO ("Senior Consultant", "Addetto amministrazione"), le
-                # competenze sono un CATALOGO di abilità ("ARIS", "python").
-                # Un ruolo non compare quasi mai fra le abilità, e infatti
-                # l'unico valore che quel ramo riusciva a far scattare era 'PM'
-                # — presente in entrambi i vocabolari per omonimia, non per
-                # progetto. Non era un match per competenze: era un match per
-                # ruolo che funzionava una volta su sette, per caso.
+                # `profilo_richiesto` è un RUOLO, e una persona ne ricopre più
+                # d'uno: l'INQUADRAMENTO ("Senior Consultant") più i ruoli
+                # FUNZIONALI che ha in aggiunta ("PM"). Un task che chiede 'PM'
+                # non cerca chi è inquadrato come PM — nessuno lo è — ma chi il
+                # PM lo fa. Entrambi i lati del confronto pescano ora dalla
+                # stessa tabella `ruoli`, per chiave.
                 #
-                # Toglierlo NON toglie una capacità: la sostituisce con
-                # l'assenza dichiarata di quella capacità. Il match vero per
-                # competenze richiede che i TASK dicano quali competenze
-                # servono (`task_competenze`), che oggi non esiste: finché non
-                # c'è, non c'è niente da confrontare col catalogo.
-                if sotto["profilo"] == profilo:
+                # NON È IL RITORNO DEL VECCHIO RAMO-B. Quello confrontava il
+                # `profilo_richiesto` con le COMPETENZE della persona — un
+                # RUOLO contro un catalogo di abilità ("ARIS", "python") — e
+                # l'unico valore che riuscisse a far scattare era 'PM', per
+                # omonimia fra due vocabolari che non si parlavano. Sembrava un
+                # match per competenze e funzionava una volta su sette, per
+                # caso. Qui il confronto è fra ruoli e ruoli, e 'PM' matcha
+                # perché quelle persone HANNO il ruolo PM: una FK dichiarata in
+                # `dipendenti_ruoli_aggiuntivi`, non una stringa che coincide.
+                #
+                # Il match per COMPETENZE continua a non esistere, ed è giusto:
+                # richiede che siano i task a dire quali competenze servono
+                # (`task_competenze`), che oggi non c'è.
+                if profilo == sotto["profilo"] or profilo in sotto["ruoli_aggiuntivi"]:
                     spazio_disponibile = sotto["ore_sett"] - sotto["carico"]
                     if spazio_disponibile >= task["ore_sett"] * 0.5:  # almeno metà ore
                         nuova_sat_sotto = round(
