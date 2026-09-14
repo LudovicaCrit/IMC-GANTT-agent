@@ -979,7 +979,7 @@
    "data_inizio": "2025-09-19",
    "data_fine": "2026-07-18",
    "stato": "Completato",
-   "profilo_richiesto": "PM",
+   "profilo_richiesto": "Senior Consultant",
    "dipendente_id": "D005",
    "predecessore": "",
    "ore_pianificate": 180.0
@@ -1035,7 +1035,7 @@
    "data_inizio": "2025-11-19",
    "data_fine": "2026-02-18",
    "stato": "Completato",
-   "profilo_richiesto": "PM",
+   "profilo_richiesto": "Senior Consultant",
    "dipendente_id": "D006",
    "predecessore": "",
    "ore_pianificate": 184.0
@@ -1133,7 +1133,7 @@
    "data_inizio": "2025-11-19",
    "data_fine": "2026-11-18",
    "stato": "In corso",
-   "profilo_richiesto": "PM",
+   "profilo_richiesto": "Senior Consultant",
    "dipendente_id": "D006",
    "predecessore": "",
    "ore_pianificate": 253.0
@@ -1287,7 +1287,7 @@
    "data_inizio": "2026-02-02",
    "data_fine": "2026-10-18",
    "stato": "In corso",
-   "profilo_richiesto": "PM",
+   "profilo_richiesto": "Senior Consultant",
    "dipendente_id": "D007",
    "predecessore": "",
    "ore_pianificate": 150.0
@@ -1399,7 +1399,7 @@
    "data_inizio": "2025-10-19",
    "data_fine": "2026-06-18",
    "stato": "Completato",
-   "profilo_richiesto": "PM",
+   "profilo_richiesto": "Senior Consultant",
    "dipendente_id": "D005",
    "predecessore": "",
    "ore_pianificate": 136.0
@@ -1525,7 +1525,7 @@
    "data_inizio": "2025-12-19",
    "data_fine": "2026-08-18",
    "stato": "In corso",
-   "profilo_richiesto": "PM",
+   "profilo_richiesto": "Senior Consultant",
    "dipendente_id": "D007",
    "predecessore": "",
    "ore_pianificate": 140.0
@@ -1581,7 +1581,7 @@
    "data_inizio": "2025-07-19",
    "data_fine": "2026-04-18",
    "stato": "Completato",
-   "profilo_richiesto": "PM",
+   "profilo_richiesto": "Senior Consultant",
    "dipendente_id": "D005",
    "predecessore": "",
    "ore_pianificate": 60.0

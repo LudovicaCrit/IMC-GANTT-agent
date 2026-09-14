@@ -83,10 +83,13 @@ def seed():
     # aggiuntivi — un Senior Consultant che è anche PM ha inquadramento
     # 'Senior Consultant' e ruolo aggiuntivo 'PM'.
     #
-    # PM DEVE STARE QUI. Se il seed ricostruisse il catalogo senza di lui, le
-    # associazioni dei ruoli aggiuntivi non avrebbero più il ruolo a cui
-    # puntare, e i 7 task che chiedono `profilo_richiesto='PM'` tornerebbero
-    # senza nessun candidato possibile. È lo stesso errore, al contrario, che
+    # PM DEVE STARE QUI, perché è un ruolo FUNZIONALE che si assegna alle
+    # PERSONE: senza di lui le associazioni dei ruoli aggiuntivi non avrebbero
+    # più il ruolo a cui puntare. NON ci sta per i task: un task non chiede mai
+    # un PM — chi dirige il progetto è `Progetto.pm_id`, e i task chiedono ruoli
+    # operativi. I 7 task che nel seed chiedevano `profilo_richiesto='PM'` (i
+    # «Gestione progetto X» e T010) erano un dato sbagliato, corretto in
+    # 'Senior Consultant' il 14/09/2026. È lo stesso errore, al contrario, che
     # teneva 'PM' nel catalogo delle COMPETENZE: il nome va censito una volta
     # sola, e nel posto che ne descrive la natura.
     ruoli_base = [
