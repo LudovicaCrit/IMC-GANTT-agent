@@ -131,9 +131,10 @@ Letture migrate da DataFrame in cache a Postgres diretto il 21 maggio 2026
 """
 
 from datetime import datetime, timedelta, date
-from typing import Optional
+from decimal import Decimal
+from typing import Literal, Optional, Union
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, ConfigDict, model_validator
 from sqlalchemy import func, and_
 from sqlalchemy.orm import joinedload, contains_eager
 
@@ -155,6 +156,9 @@ from data import (
     progetti_diretti_da,
     dipendenti_con_task_su,
     task_in_ritardo,
+    # Consuntivazione a ore, passo 3: il salvataggio a blocchi.
+    salva_blocchi_settimana,
+    ConsuntivoNonValido,
 )
 
 
@@ -686,6 +690,132 @@ def _valida_avanzamento_task(req: "SalvaConsuntivoRequest", settimana):
         )
 
 
+# ── DTO del salvataggio A BLOCCHI (consuntivazione a ore, passo 3) ─────────
+# Il payload di POST /salva-blocchi: una lista di UNITÀ, una per riga della
+# griglia. Nessun dizionario parallelo per campo, nessuna percentuale.
+#
+# ASSENTE ≠ NULL, ed è la semantica del salvataggio (decisione D3):
+#   blocchi       assente = non toccare le ore · [] = azzera · null = errore
+#   stato, nota,
+#   residuo,
+#   presa_visione assente = non toccare · null = cancella
+# L'assenza si legge da `model_fields_set`, non dal valore: un campo con
+# default None non distingue da solo «non mandato» da «mandato null».
+#
+# NIENTE `dipendente_id`: si consuntiva solo per sé, l'intestatario è l'utente
+# loggato. `extra="forbid"` fa rifiutare un `dipendente_id` mandato per
+# abitudine dal vecchio contratto, invece di ignorarlo in silenzio.
+
+class BloccoOreIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    giorno: date
+    # Decimal e non float: pydantic lo legge dal JSON senza perdite, così
+    # «più di 2 decimali» si decide sul valore scritto dal client e non sulla
+    # sua approssimazione binaria.
+    ore: Decimal
+
+
+class UnitaConsuntivoIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    tipo: Literal["task", "sottotask"]
+    # str per i task ("T017"), int per i sottotask: si valida contro `tipo`.
+    id: Union[str, int]
+    stato_dichiarato: Optional[str] = None
+    nota: Optional[str] = None
+    ore_stimate_residue: Optional[float] = None
+    presa_visione: Optional[bool] = None
+    blocchi: Optional[list[BloccoOreIn]] = None
+
+
+class SalvaBlocchiRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    # Obbligatoria: una scrittura non deve finire su una settimana implicita
+    # (a mezzanotte di domenica «la corrente» cambia sotto le mani).
+    settimana: str
+    unita: list[UnitaConsuntivoIn]
+
+    @model_validator(mode="after")
+    def _valida_payload(self):
+        """Le regole che si decidono dal SOLO body (nota di metodo sopra
+        `SalvaConsuntivoRequest`). Raccoglie TUTTE le violazioni e le rende in
+        un solo 400: una settimana si corregge in un giro.
+        Restano fuori, e stanno nella route o nello strato dati, le regole che
+        chiedono la settimana normalizzata (giorni) o il DB (appartenenza,
+        tetto giornaliero, settimana compilabile)."""
+        errori = []
+        viste = set()
+        for u in self.unita:
+            et = f"{u.tipo} {u.id}"
+            campi = u.model_fields_set
+
+            # D2 — il tipo dell'id segue il tipo dell'unità. `bool` è un int in
+            # Python: va escluso esplicitamente.
+            if u.tipo == "task" and not isinstance(u.id, str):
+                errori.append(f"{et}: l'id di un task è una stringa (es. \"T017\")")
+            if u.tipo == "sottotask" and (not isinstance(u.id, int) or isinstance(u.id, bool)):
+                errori.append(f"{et}: l'id di un sottotask è un numero intero")
+
+            # N12 — la stessa unità due volte: quale delle due vale?
+            if (u.tipo, u.id) in viste:
+                errori.append(f"{et}: compare due volte nel salvataggio")
+            viste.add((u.tipo, u.id))
+
+            if "stato_dichiarato" in campi and u.stato_dichiarato is not None \
+                    and u.stato_dichiarato not in STATI_DICHIARABILI:
+                errori.append(
+                    f"{et}: stato '{u.stato_dichiarato}' non dichiarabile "
+                    f"(ammessi: {', '.join(STATI_DICHIARABILI)})"
+                )
+
+            if "blocchi" in campi and u.blocchi is None:
+                errori.append(
+                    f"{et}: `blocchi` non può essere null — manda [] per azzerare "
+                    f"le ore, oppure ometti il campo per non toccarle"
+                )
+
+            giorni = set()
+            for b in u.blocchi or []:
+                # N4 — lo zero non si manda: «nessuna ora» è l'assenza del blocco.
+                if not b.ore.is_finite() or b.ore <= 0:
+                    errori.append(
+                        f"{et}, {b.giorno}: ore {b.ore} non valide — devono essere "
+                        f"maggiori di zero (per zero ore non mandare il blocco)"
+                    )
+                # N3 — nessun arrotondamento silenzioso.
+                elif b.ore.as_tuple().exponent < -2:
+                    errori.append(
+                        f"{et}, {b.giorno}: ore {b.ore} con più di 2 decimali"
+                    )
+                # N11 — due blocchi sullo stesso giorno della stessa unità.
+                if b.giorno in giorni:
+                    errori.append(f"{et}: il giorno {b.giorno} compare due volte")
+                giorni.add(b.giorno)
+
+            # N5 (O4) — ore senza stato: niente task-fantasma. Lo stato deve
+            # arrivare NEL payload, non basta quello già in DB (stessa ragione di
+            # D4). N6, stato senza blocchi, invece passa.
+            if u.blocchi and ("stato_dichiarato" not in campi or u.stato_dichiarato is None):
+                errori.append(
+                    f"{et}: ci sono ore ma manca `stato_dichiarato` — dichiara "
+                    f"a che punto è (In corso, Completato o Bloccato)"
+                )
+
+            # D4 — Bloccato vuole la nota NEL payload: con la sostituzione
+            # completa, una nota assente non vuol dire «c'è già in DB».
+            if u.stato_dichiarato == "Bloccato" and not (u.nota or "").strip():
+                errori.append(f"{et}: Bloccato richiede una nota che spieghi il motivo")
+
+            if u.ore_stimate_residue is not None and u.ore_stimate_residue < 0:
+                errori.append(
+                    f"{et}: ore residue {u.ore_stimate_residue} negative "
+                    f"(0 è ammesso: «non manca più niente»)"
+                )
+
+        if errori:
+            raise HTTPException(400, "Consuntivo non salvato: " + "; ".join(errori))
+        return self
+
+
 # ── Router ───────────────────────────────────────────────────────────────
 router = APIRouter(prefix="/api/consuntivi", tags=["consuntivi"])
 
@@ -1129,3 +1259,123 @@ def salva_consuntivo_endpoint(
         "avvisi": [],
         "nota": "Dati non persistenti (db non attivo)",
     }
+
+
+# ═════════════════════════════════════════════════════════════════════════
+# POST /api/consuntivi/salva-blocchi — consuntivazione a ore (passo 3)
+# ═════════════════════════════════════════════════════════════════════════
+# Affianca /salva, non lo sostituisce (D7): la pagina a cursore resta in
+# piedi finché la griglia (passo 4) non punta qui. Al passo 5 esce /salva.
+
+def _settimana_scrivibile(dipendente_id, settimana_raw):
+    """Lunedì della settimana richiesta, se il dipendente può scriverci; 400
+    altrimenti. Le regole sono quelle dello strato dati (`lunedi_settimana`,
+    `settimane_selezionabili`): qui c'è solo la loro traduzione in errori.
+
+    ⚠ DUPLICA la traduzione che sta dentro `salva_consuntivo_endpoint`, e di
+    proposito: /salva non si tocca finché esce al passo 5 (D7), e con lui esce
+    la copia. Stessi messaggi, stesso ordine dei controlli.
+    """
+    try:
+        lun = lunedi_settimana(settimana_raw)
+    except ValueError:
+        raise HTTPException(
+            400,
+            f"Settimana '{settimana_raw}' non è una data ISO valida "
+            f"(atteso YYYY-MM-DD)",
+        )
+    disponibili = {s["lunedi"]: s for s in settimane_selezionabili(dipendente_id)}
+    scelta = disponibili.get(lun.isoformat())
+    if scelta is None:
+        raise HTTPException(
+            400,
+            f"Settimana '{lun.isoformat()}' non compilabile: sono ammesse solo "
+            f"la corrente e la precedente ({', '.join(disponibili)})",
+        )
+    if not scelta["compilabile"]:
+        raise HTTPException(
+            400,
+            f"La {scelta['etichetta'].lower()} risulta già compilata: il "
+            f"recupero è previsto per chi non ha compilato, non per rivedere "
+            f"una settimana chiusa",
+        )
+    return lun
+
+
+@router.post("/salva-blocchi")
+def salva_blocchi_endpoint(
+    req: SalvaBlocchiRequest,
+    current_user: Utente = Depends(get_current_user),
+):
+    """Salva le ore a blocchi dell'utente loggato per una settimana.
+
+    SOLO PER SÉ. Non c'è `dipendente_id` nel body e non c'è deroga per il
+    manager: consuntivare è un atto in prima persona, nessuno intesta ore a un
+    altro. (Il vecchio /salva ha ancora il Pattern Y: esce con lui al passo 5.)
+
+    Le validazioni in tre tempi, ognuno un 400 che elenca TUTTE le violazioni
+    del suo livello, e nulla viene scritto se uno qualsiasi fallisce (N15):
+      1. il body (DTO `SalvaBlocchiRequest`);
+      2. la settimana (N17) e i giorni rispetto alla settimana e a oggi (N1, N2);
+      3. il database: appartenenza delle unità (N13), task scomposti (M8/M9),
+         tetto delle 24h (N14) — nello strato dati, dentro la stessa sessione
+         che poi scrive.
+    """
+    dipendente_id = current_user.dipendente_id
+    if not dipendente_id:
+        raise HTTPException(400, "Utente non collegato a un dipendente")
+    try:
+        get_dipendente(dipendente_id)
+    except (IndexError, KeyError):
+        raise HTTPException(404, "Dipendente non trovato")
+
+    lun = _settimana_scrivibile(dipendente_id, req.settimana)
+
+    # N2 / N1 — i giorni: dentro lunedì-venerdì della settimana, e non nel
+    # futuro. Qui e non nel DTO perché servono la settimana normalizzata e il
+    # confronto con oggi.
+    oggi = date.today()
+    ven = lun + timedelta(days=4)
+    errori = []
+    for u in req.unita:
+        for b in u.blocchi or []:
+            if not (lun <= b.giorno <= ven):
+                errori.append(
+                    f"{u.tipo} {u.id}: il giorno {b.giorno} non è fra lunedì e "
+                    f"venerdì della settimana {lun.isoformat()}"
+                )
+            elif b.giorno > oggi:
+                errori.append(
+                    f"{u.tipo} {u.id}: il giorno {b.giorno} è nel futuro, si "
+                    f"dichiarano solo ore già lavorate"
+                )
+    if errori:
+        raise HTTPException(400, "Consuntivo non salvato: " + "; ".join(errori))
+
+    unita = [
+        {
+            "tipo": u.tipo,
+            "id": u.id,
+            "blocchi": (None if "blocchi" not in u.model_fields_set
+                        else [(b.giorno, b.ore) for b in u.blocchi]),
+            "tocca_stato": "stato_dichiarato" in u.model_fields_set,
+            "stato": u.stato_dichiarato,
+            "tocca_nota": "nota" in u.model_fields_set,
+            "nota": u.nota,
+        }
+        for u in req.unita
+    ]
+    try:
+        esito = salva_blocchi_settimana(dipendente_id, lun, unita)
+    except ConsuntivoNonValido as e:
+        raise HTTPException(400, "Consuntivo non salvato: " + "; ".join(e.errori))
+
+    # Passo 3, sotto-passo 1: la scrittura non c'è ancora. 501 e non 200: un
+    # «ok» su un salvataggio che non ha scritto nulla sarebbe una bugia.
+    if not esito.get("scritto"):
+        raise HTTPException(
+            501,
+            "Validazione superata, ma la scrittura dei blocchi non è ancora "
+            "implementata (consuntivazione a ore, passo 3.2).",
+        )
+    return esito

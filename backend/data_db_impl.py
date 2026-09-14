@@ -5,6 +5,7 @@ Ri-esportata da `data.py`, che è la porta d'ingresso delle route.
 """
 
 from datetime import datetime, timedelta, date
+from decimal import Decimal
 from models import (
     get_session, Dipendente, Progetto, Task,
     Consuntivo, Segnalazione,
@@ -3915,6 +3916,207 @@ def salva_consuntivo(dipendente_id, settimana, ore_per_task, stati_per_task,
     # `ok` conserva esattamente la semantica del vecchio booleano, così la
     # route continua a esporre `salvato` con lo stesso significato.
     return {"ok": True, "avvisi": avvisi}
+
+
+# ══════════════════════════════════════════════════════════════════════
+# CONSUNTIVAZIONE A ORE — salvataggio a blocchi (passo 3, 14/09/2026)
+# ══════════════════════════════════════════════════════════════════════
+# Affianca `salva_consuntivo`, non lo sostituisce: il vecchio motore a cursore
+# resta in piedi finché la griglia non è pronta (passo 4) ed esce al passo 5.
+# Qui le ore non si derivano da nulla: sono blocchi dichiarati per giorno.
+
+class ConsuntivoNonValido(Exception):
+    """Il salvataggio a blocchi viola regole che dipendono dal database.
+
+    Porta TUTTE le violazioni trovate, non la prima: chi compila una settimana
+    deve poter correggere tutto in un giro, non scoprire gli errori uno per
+    salvataggio. La route la traduce in un 400.
+    """
+    def __init__(self, errori):
+        super().__init__("; ".join(errori))
+        self.errori = errori
+
+
+# Le fonti che una sostituzione di unità cancella e riscrive (D1-a). Lo
+# storico MAI: sono le settimane migrate, e nessun salvataggio deve poterle
+# azzerare. `ia` sì: è una proposta pre-caricata in griglia, e quando l'utente
+# salva la sua riga quella proposta diventa il suo dato.
+FONTI_SOSTITUIBILI = ("manuale", "ia")
+
+TETTO_ORE_GIORNO = 24
+
+
+def _etichetta_unita(u):
+    return f"{u['tipo']} {u['id']}"
+
+
+def _valida_unita_blocchi(session, dipendente_id, lun, unita):
+    """Le regole del salvataggio a blocchi che il solo payload non può decidere.
+
+    Le regole sul body (decimali, ore positive, giorni della settimana,
+    duplicati, stato obbligatorio con le ore, nota sul Bloccato) stanno nel
+    DTO e nella route. Qui arrivano solo payload già sani, e si guarda il DB.
+
+    `unita`: lista di dict {tipo, id, blocchi, tocca_stato, tocca_nota, nota}.
+      `blocchi` è None se la chiave era ASSENTE (non si toccano le ore),
+      altrimenti una lista di (giorno, ore) — anche vuota.
+
+    Ritorna {(tipo, id): (task_id, sottotask_id)}: la chiave-blocco di ogni
+    unità, che la scrittura riusa senza rifare le query.
+
+    LE REGOLE
+    ─────────
+    N13 — L'UNITÀ È DEL DIPENDENTE. Non esisteva un controllo del genere.
+      task      → esiste, non Annullato/Eliminato, `Task.dipendente_id` è lui.
+      sottotask → esiste, non Annullato, task padre non Annullato/Eliminato,
+                  assegnatario RISOLTO (`sottotask.dipendente_id or
+                  task.dipendente_id`) è lui.
+      Sospesi e Completati si ACCETTANO: se il lavoro c'è stato va dichiarabile
+      (stessa scelta della validazione sottotask del vecchio /salva), e un
+      Completato va potuto riaprire se dichiarato per errore.
+    M8/M9 — `tipo: task` su un task SCOMPOSTO si rifiuta: le ore di un task con
+      pezzi vanno sui pezzi. La domanda la fa `tipo_unita_per_task`, che ignora
+      i pezzi Annullati — un task coi pezzi tutti annullati torna unità.
+    D4 — Svuotare la nota di un'unità che QUESTA settimana risulta Bloccata, senza
+      cambiarle lo stato, lascerebbe un fermo senza spiegazione. Il caso «stato
+      Bloccato nel payload» è già coperto dal DTO; qui quello in cui lo stato
+      non viene toccato e il Bloccato sta in DB.
+    N14 — UN GIORNO NON SUPERA 24 ORE, contando TUTTE le fonti: i blocchi del
+      payload più quelli già in DB del dipendente in quel giorno, esclusi i
+      manuali/ia delle unità che il payload sta sostituendo (verranno
+      cancellati). Lo storico di quelle unità resta nel conto: non si cancella.
+      Si valuta solo sulle unità valide, per non sommare ore di unità rifiutate.
+    """
+    from models import Sottotask, ConsuntivoSottotask, BloccoOre
+
+    errori = []
+    task_ids = [u["id"] for u in unita if u["tipo"] == "task"]
+    sott_ids = [u["id"] for u in unita if u["tipo"] == "sottotask"]
+
+    pezzi = {}
+    if sott_ids:
+        pezzi = {
+            r.id: r for r in session.query(
+                Sottotask.id, Sottotask.task_id, Sottotask.stato, Sottotask.dipendente_id
+            ).filter(Sottotask.id.in_(sott_ids)).all()
+        }
+    ids_task_da_leggere = set(task_ids) | {p.task_id for p in pezzi.values()}
+    tasks = {}
+    if ids_task_da_leggere:
+        tasks = {
+            r.id: r for r in session.query(Task.id, Task.stato, Task.dipendente_id)
+            .filter(Task.id.in_(list(ids_task_da_leggere))).all()
+        }
+    tipi = tipo_unita_per_task(session, [t for t in task_ids if t in tasks])
+
+    chiavi = {}
+    for u in unita:
+        et = _etichetta_unita(u)
+        if u["tipo"] == "task":
+            t = tasks.get(u["id"])
+            if t is None:
+                errori.append(f"{et}: il task non esiste")
+            elif t.stato in ("Annullato", "Eliminato"):
+                errori.append(f"{et}: il task è {t.stato}, non si consuntiva")
+            elif t.dipendente_id != dipendente_id:
+                errori.append(f"{et}: il task non è assegnato a te")
+            elif tipi.get(u["id"]) == "sottotask":
+                errori.append(
+                    f"{et}: il task è scomposto in sottotask, le ore vanno "
+                    f"dichiarate sui singoli pezzi"
+                )
+            else:
+                chiavi[(u["tipo"], u["id"])] = (u["id"], None)
+        else:
+            p = pezzi.get(u["id"])
+            t = tasks.get(p.task_id) if p else None
+            if p is None:
+                errori.append(f"{et}: il sottotask non esiste")
+            elif p.stato == "Annullato":
+                errori.append(f"{et}: il sottotask è Annullato, non si consuntiva")
+            elif t is None or t.stato in ("Annullato", "Eliminato"):
+                errori.append(f"{et}: il task padre {p.task_id} è chiuso dal piano")
+            elif (p.dipendente_id or t.dipendente_id) != dipendente_id:
+                errori.append(f"{et}: il sottotask non è assegnato a te")
+            else:
+                chiavi[(u["tipo"], u["id"])] = (p.task_id, u["id"])
+
+    # D4 — nota svuotata su un Bloccato già in DB, stato non toccato.
+    da_controllare = [
+        u for u in unita
+        if (u["tipo"], u["id"]) in chiavi and u["tocca_nota"]
+        and not (u["nota"] or "").strip() and not u["tocca_stato"]
+    ]
+    if da_controllare:
+        t_ids = [u["id"] for u in da_controllare if u["tipo"] == "task"]
+        s_ids = [u["id"] for u in da_controllare if u["tipo"] == "sottotask"]
+        bloccati = set()
+        if t_ids:
+            bloccati |= {("task", r[0]) for r in session.query(Consuntivo.task_id).filter(
+                Consuntivo.task_id.in_(t_ids), Consuntivo.dipendente_id == dipendente_id,
+                Consuntivo.settimana == lun, Consuntivo.stato_dichiarato == "Bloccato")}
+        if s_ids:
+            bloccati |= {("sottotask", r[0]) for r in session.query(ConsuntivoSottotask.sottotask_id).filter(
+                ConsuntivoSottotask.sottotask_id.in_(s_ids),
+                ConsuntivoSottotask.dipendente_id == dipendente_id,
+                ConsuntivoSottotask.settimana == lun,
+                ConsuntivoSottotask.stato_dichiarato == "Bloccato")}
+        for u in da_controllare:
+            if (u["tipo"], u["id"]) in bloccati:
+                errori.append(
+                    f"{_etichetta_unita(u)}: risulta Bloccato questa settimana, "
+                    f"non si può svuotarne la nota senza cambiarne lo stato"
+                )
+
+    # N14 — tetto giornaliero, su tutte le fonti.
+    sostituite = {chiavi[(u["tipo"], u["id"])] for u in unita
+                  if (u["tipo"], u["id"]) in chiavi and u["blocchi"] is not None}
+    ore_giorno = {}
+    for giorno, t_id, s_id, fonte, ore in session.query(
+        BloccoOre.giorno, BloccoOre.task_id, BloccoOre.sottotask_id,
+        BloccoOre.fonte, BloccoOre.ore,
+    ).filter(
+        BloccoOre.dipendente_id == dipendente_id,
+        BloccoOre.giorno >= lun, BloccoOre.giorno <= lun + timedelta(days=6),
+    ):
+        if (t_id, s_id) in sostituite and fonte in FONTI_SOSTITUIBILI:
+            continue
+        ore_giorno[giorno] = ore_giorno.get(giorno, 0) + Decimal(str(ore))
+    for u in unita:
+        if (u["tipo"], u["id"]) not in chiavi or not u["blocchi"]:
+            continue
+        for giorno, ore in u["blocchi"]:
+            ore_giorno[giorno] = ore_giorno.get(giorno, 0) + ore
+    for giorno in sorted(ore_giorno):
+        if ore_giorno[giorno] > TETTO_ORE_GIORNO:
+            errori.append(
+                f"{giorno.isoformat()}: {ore_giorno[giorno]}h in un giorno, oltre "
+                f"il massimo di {TETTO_ORE_GIORNO}h (contando anche le ore già "
+                f"registrate sulle unità non incluse in questo salvataggio)"
+            )
+
+    if errori:
+        raise ConsuntivoNonValido(errori)
+    return chiavi
+
+
+def salva_blocchi_settimana(dipendente_id, lun, unita):
+    """Salva le ore a blocchi di un dipendente per una settimana.
+
+    UNA sessione per tutto: prima `_valida_unita_blocchi`, poi la scrittura,
+    poi un solo commit. Se una regola salta non si è scritto niente (N15).
+
+    Passo 3, sotto-passo 1: SOLO validazione. La scrittura arriva al
+    sotto-passo 2; fino ad allora la funzione valida, non scrive, e lo dice.
+    """
+    session = get_session()
+    try:
+        _valida_unita_blocchi(session, dipendente_id, lun, unita)
+        return {"validato": True, "scritto": False}
+    finally:
+        session.rollback()
+        session.close()
+
 
 # ══════════════════════════════════════════════════════════════════════
 # SAL — snapshot storico del GANTT (DESIGN_SAL.md)
