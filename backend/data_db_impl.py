@@ -9,6 +9,7 @@ from models import (
     get_session, Dipendente, Progetto, Task,
     Consuntivo, Segnalazione,
     Competenza, DipendentiCompetenze,
+    OreSettimanali,
 )
 
 # ══════════════════════════════════════════════════════════════════════
@@ -459,9 +460,11 @@ def get_progetto(pid):
 def ore_consuntivate_progetto(pid):
     from sqlalchemy import func
     session = get_session()
+    # Ore dalla vista `ore_settimanali` (somma dei blocchi), non più da
+    # `Consuntivo.ore_dichiarate`: consuntivazione a ore, passo 2.
     total = session.query(
-        func.coalesce(func.sum(Consuntivo.ore_dichiarate), 0.0)
-    ).join(Task, Consuntivo.task_id == Task.id).filter(
+        func.coalesce(func.sum(OreSettimanali.c.ore), 0.0)
+    ).select_from(OreSettimanali).join(Task, OreSettimanali.c.task_id == Task.id).filter(
         Task.progetto_id == pid
     ).scalar()
     session.close()
@@ -659,7 +662,7 @@ def criticita_sforamento_progetti(progetti_ids):
     payload (tipo è una stringa-enum, non un booleano). NON implementarlo ora.
 
     Calcolo unico (vincolante): un solo metodo di aggregazione applicato sia
-    alle fasi sia al totale. ore_consumate di fase = SUM(Consuntivo.ore_dichiarate)
+    alle fasi sia al totale. ore_consumate di fase = SUM(ore_settimanali.ore)
     sui task della fase (stesso pattern di routes/fasi.py:lista_fasi_progetto,
     concentrato qui). Il totale di progetto è la SOMMA delle ore_consumate di
     fase appena calcolate — NON una query separata, NON ore_consuntivate_progetto.
@@ -720,9 +723,10 @@ def criticita_sforamento_progetti(progetti_ids):
                 for fid, tot in (
                     session.query(
                         Task.fase_id,
-                        func.coalesce(func.sum(Consuntivo.ore_dichiarate), 0.0),
+                        func.coalesce(func.sum(OreSettimanali.c.ore), 0.0),
                     )
-                    .join(Task, Consuntivo.task_id == Task.id)
+                    .select_from(OreSettimanali)
+                    .join(Task, OreSettimanali.c.task_id == Task.id)
                     .filter(Task.fase_id.in_([_f.id for _f in fasi_tutte]))
                     .group_by(Task.fase_id)
                     .all()
@@ -2019,8 +2023,10 @@ def task_settimana_dipendente(dipendente_id, settimana=None):
         # Ore dichiarate e nota scritta da QUESTO dip in QUESTA settimana, per
         # task_id. (UNIQUE task+dip+settimana → di norma una riga per task;
         # sommiamo comunque per robustezza.)
+        # Le ORE non stanno più in questa query: vengono dalla vista, nella
+        # query `tot_rows` qui sotto (passo 2 della consuntivazione a ore).
         cons_rows = (
-            session.query(Consuntivo.task_id, Consuntivo.ore_dichiarate,
+            session.query(Consuntivo.task_id,
                           Consuntivo.nota, Consuntivo.compilato,
                           Consuntivo.stato_dichiarato,
                           # Step 4 (07/08/2026): la dichiarazione del task come
@@ -2048,12 +2054,27 @@ def task_settimana_dipendente(dipendente_id, settimana=None):
         # serve per ore_rimanenti. La colonna Task.ore_rimanenti è denormalizzata
         # e stale (il seed non la aggiorna dopo i consuntivi) → la ricalcolo al
         # volo, stesso principio del serializzatore SAL su ore_consumate.
+        #
+        # UNA query per le DUE somme, dalla vista `ore_settimanali`: il totale
+        # di sempre (tutti, tutte le settimane) e le ore di QUESTO dipendente in
+        # QUESTA settimana (`FILTER`). Prima la seconda viaggiava dentro
+        # `cons_rows`; separarla avrebbe aggiunto una query a ogni /me.
+        # Restringere a `task_ids` non perde nulla: entrambe le somme si leggono
+        # solo con `.get(t.id)` sui task visibili.
         tot_rows = []
         if task_ids:
             tot_rows = (
-                session.query(Consuntivo.task_id, func.sum(Consuntivo.ore_dichiarate))
-                .filter(Consuntivo.task_id.in_(task_ids))
-                .group_by(Consuntivo.task_id)
+                session.query(
+                    OreSettimanali.c.task_id,
+                    func.sum(OreSettimanali.c.ore),
+                    func.sum(OreSettimanali.c.ore).filter(and_(
+                        OreSettimanali.c.dipendente_id == dipendente_id,
+                        OreSettimanali.c.settimana >= lun,
+                        OreSettimanali.c.settimana <= fine_sett,
+                    )),
+                )
+                .filter(OreSettimanali.c.task_id.in_(task_ids))
+                .group_by(OreSettimanali.c.task_id)
                 .all()
             )
 
@@ -2195,7 +2216,9 @@ def task_settimana_dipendente(dipendente_id, settimana=None):
             **_nota_ereditata_payload(note_ered_sottotask.get(s.id)),
         })
 
-    consumate_per_task = {}
+    # Ore di questo dipendente in questa settimana, per task: la terza colonna
+    # di `tot_rows` (NULL dove la settimana non ha blocchi → 0.0).
+    consumate_per_task = {tid: float(sett or 0) for tid, _tot, sett in tot_rows}
     note_per_task = {}
     dichiarati = set()
     stato_dichiarato_per_task = {}
@@ -2203,9 +2226,8 @@ def task_settimana_dipendente(dipendente_id, settimana=None):
     ore_effettive_per_task = {}
     residuo_per_task = {}
     presa_visione_per_task = set()
-    for (tid, ore, nota, compilato, stato_dich,
+    for (tid, nota, compilato, stato_dich,
          pct, ore_eff, presa_vis, residuo) in cons_rows:
-        consumate_per_task[tid] = consumate_per_task.get(tid, 0.0) + float(ore or 0)
         # Come lo stato e la nota: non si sommano, vince la prima valorizzata.
         if pct is not None and tid not in percentuale_per_task:
             percentuale_per_task[tid] = pct
@@ -2234,7 +2256,7 @@ def task_settimana_dipendente(dipendente_id, settimana=None):
         if nota and not note_per_task.get(tid):
             note_per_task[tid] = nota
 
-    consumato_totale_task = {tid: float(s or 0) for tid, s in tot_rows}
+    consumato_totale_task = {tid: float(s or 0) for tid, s, _sett in tot_rows}
 
     def _quota_settimana(t):
         """Quota di ore per la settimana corrente: ore_pianificate spalmate
@@ -2487,11 +2509,11 @@ def ore_dichiarate_settimana(dipendente_id, settimana=None):
     session = get_session()
     try:
         ore_task = (
-            session.query(func.sum(Consuntivo.ore_dichiarate))
+            session.query(func.sum(OreSettimanali.c.ore))
             .filter(
-                Consuntivo.dipendente_id == dipendente_id,
-                Consuntivo.settimana >= lun,
-                Consuntivo.settimana <= dom,
+                OreSettimanali.c.dipendente_id == dipendente_id,
+                OreSettimanali.c.settimana >= lun,
+                OreSettimanali.c.settimana <= dom,
             )
             .scalar()
         )
@@ -3919,7 +3941,7 @@ def _serializza_stato_progetto(pid):
     - nomi denormalizzati (pm, dipendente, azienda) → snapshot autocontenuto;
     - le tre ore sui task (stimate/pianificate/consumate) + ore di fase
       (vendute/pianificate/consumate);
-    - ore_consumate calcolata QUI da SUM(Consuntivo.ore_dichiarate), NON dalla
+    - ore_consumate calcolata QUI da SUM(ore_settimanali.ore), NON dalla
       colonna denormalizzata (stale): rende la foto veritiera. Fase = somma dei
       consumi dei suoi task (coerenza fase↔task per costruzione).
     Solleva ValueError se il progetto non esiste.
@@ -3959,15 +3981,17 @@ def _serializza_stato_progetto(pid):
             "lezioni_apprese": p.lezioni_apprese,
         }
 
-        # ore_consumate reali: SUM(Consuntivo.ore_dichiarate) per task del progetto.
+        # ore_consumate reali: SUM delle ore della vista `ore_settimanali` per
+        # task del progetto (passo 2 della consuntivazione a ore).
         cons_per_task = dict(
             session.query(
-                Consuntivo.task_id,
-                func.coalesce(func.sum(Consuntivo.ore_dichiarate), 0.0),
+                OreSettimanali.c.task_id,
+                func.coalesce(func.sum(OreSettimanali.c.ore), 0.0),
             )
-            .join(Task, Consuntivo.task_id == Task.id)
+            .select_from(OreSettimanali)
+            .join(Task, OreSettimanali.c.task_id == Task.id)
             .filter(Task.progetto_id == pid)
-            .group_by(Consuntivo.task_id)
+            .group_by(OreSettimanali.c.task_id)
             .all()
         )
 
@@ -4160,7 +4184,7 @@ def margini_economia():
         Fallback (→ costo_stimato=True): fase senza ore_pianificate → split
         uniforme; task/fase senza assegnatario → tariffa media di progetto.
       - PIANIFICATO (piano PM): Σ task (ore_pianificate × costo_ora[assegnatario]).
-      - CONSUMATO  (reale): Σ consuntivi (ore_dichiarate × costo_ora[chi ha loggato]).
+      - CONSUMATO  (reale): Σ ore_settimanali (ore × costo_ora[chi ha loggato]).
         Identico al precedente `margine_attuale` (oracolo invariato).
 
     Due erosioni (euro e punti percentuali):
@@ -4213,22 +4237,26 @@ def margini_economia():
             costo_consumato = 0.0
             ore_consumate = 0.0
             costi_per_persona = {}
-            cons = (session.query(Consuntivo).join(Task, Consuntivo.task_id == Task.id)
+            # Le ore dalla vista `ore_settimanali`, una riga per (task,
+            # dipendente, settimana) come le righe di `consuntivi` che
+            # sostituisce. Il vecchio `if ore_dichiarate <= 0: continue` non
+            # serve più: la vista non ha righe a zero (CHECK ore > 0 sui blocchi).
+            cons = (session.query(OreSettimanali.c.dipendente_id, OreSettimanali.c.ore)
+                    .select_from(OreSettimanali)
+                    .join(Task, OreSettimanali.c.task_id == Task.id)
                     .filter(Task.progetto_id == p.id).all())
-            for c in cons:
-                if c.ore_dichiarate <= 0:
-                    continue
-                r = rate(c.dipendente_id)
-                costo_consumato += c.ore_dichiarate * r
-                ore_consumate += c.ore_dichiarate
-                if c.dipendente_id not in costi_per_persona:
-                    info = dip.get(c.dipendente_id, {"nome": c.dipendente_id, "profilo": "-"})
-                    costi_per_persona[c.dipendente_id] = {
+            for did, ore in cons:
+                r = rate(did)
+                costo_consumato += ore * r
+                ore_consumate += ore
+                if did not in costi_per_persona:
+                    info = dip.get(did, {"nome": did, "profilo": "-"})
+                    costi_per_persona[did] = {
                         "nome": info["nome"], "profilo": info["profilo"],
                         "costo_ora": r, "ore": 0, "costo": 0,
                     }
-                costi_per_persona[c.dipendente_id]["ore"] += c.ore_dichiarate
-                costi_per_persona[c.dipendente_id]["costo"] += c.ore_dichiarate * r
+                costi_per_persona[did]["ore"] += ore
+                costi_per_persona[did]["costo"] += ore * r
 
             # --- PIANIFICATO (piano PM): ore_pianificate × rate assegnatario ---
             costo_pianificato = 0.0

@@ -5,13 +5,14 @@ Eseguire UNA VOLTA per inizializzare il db.
 """
 
 import json
+from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
 
 from models import (
     create_tables, get_session,
-    Azienda, Dipendente, Progetto, Task, DipendenzaTask, Consuntivo,
+    Azienda, Dipendente, Progetto, Task, DipendenzaTask, Consuntivo, BloccoOre,
     Segnalazione, Ruolo, Competenza, DipendentiCompetenze, FaseStandard,
     Fase, Utente, DipendentiRuoliAggiuntivi,
 )
@@ -494,17 +495,51 @@ def seed():
     # ══════════════════════════════════════════════════════════════
     # 10. CONSUNTIVI
     # ══════════════════════════════════════════════════════════════
+    # LE ORE VANNO ANCHE IN `blocchi_ore`, ed è il blocco che conta: dal passo 2
+    # della consuntivazione a ore i lettori sommano la vista `ore_settimanali`,
+    # non `ore_dichiarate`. Un seed che scrivesse solo i consuntivi darebbe un
+    # database con 17.535 ore dichiarate e zero ore visibili.
+    # Stessa regola della migration f1a2b3c4d5e6, perché un DB seminato e uno
+    # migrato devono essere indistinguibili: un blocco sul LUNEDÌ della
+    # settimana, fonte 'storico' (il giorno vero non esiste nei dati), nessun
+    # blocco per le righe a zero ore.
+    # `ore_dichiarate` resta scritta finché `/salva` la scrive: è il guscio
+    # scritto-ma-non-letto del passo 2, e sparisce con lui.
+    n_blocchi = 0
     for _, row in CONSUNTIVI.iterrows():
+        settimana = row["settimana"].date() if hasattr(row["settimana"], "date") else row["settimana"]
+        ore = float(row["ore_dichiarate"])
+        data_compilazione = row["data_compilazione"] if row["compilato"] else None
         session.add(Consuntivo(
             task_id=row["task_id"],
             dipendente_id=row["dipendente_id"],
-            settimana=row["settimana"].date() if hasattr(row["settimana"], "date") else row["settimana"],
-            ore_dichiarate=float(row["ore_dichiarate"]),
+            settimana=settimana,
+            ore_dichiarate=ore,
             compilato=bool(row["compilato"]),
-            data_compilazione=row["data_compilazione"] if row["compilato"] else None,
+            data_compilazione=data_compilazione,
             nota=row["nota"] if row["nota"] else None,
         ))
-    print(f"  ✓ {len(CONSUNTIVI)} consuntivi")
+        if ore > 0:
+            # La convenzione «blocco sul lunedì» regge solo se la settimana È un
+            # lunedì: altrimenti la vista (che normalizza al lunedì) e la riga
+            # del consuntivo parlerebbero di due settimane diverse.
+            if settimana.weekday() != 0:
+                raise ValueError(
+                    f"seed_data.json: consuntivo {row['task_id']}/{row['dipendente_id']} "
+                    f"con settimana {settimana} che non è un lunedì."
+                )
+            session.add(BloccoOre(
+                dipendente_id=row["dipendente_id"],
+                giorno=settimana,
+                task_id=row["task_id"],
+                ore=ore,
+                fonte="storico",
+                # Come la migration: la data vera della dichiarazione se c'è.
+                # Un `None` esplicito scavalcherebbe il default della colonna.
+                created_at=data_compilazione or datetime.utcnow(),
+            ))
+            n_blocchi += 1
+    print(f"  ✓ {len(CONSUNTIVI)} consuntivi, {n_blocchi} blocchi ore 'storico'")
 
     # ══════════════════════════════════════════════════════════════
     # 11. SEGNALAZIONI DEFAULT

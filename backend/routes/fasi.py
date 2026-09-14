@@ -55,7 +55,9 @@ PATTERN AUTH USATI
 
 DIPENDENZE
 ──────────
-- `models`: `get_session`, `Utente`, `Fase`, `Task`, `Consuntivo`.
+- `models`: `get_session`, `Utente`, `Fase`, `Task`, `OreSettimanali` (la
+  vista delle ore: dal passo 2 della consuntivazione a ore le ore consumate non
+  si leggono più da `Consuntivo.ore_dichiarate`).
 - `deps`: `require_manager`.
 - `sqlalchemy.func`: per somma ore consumate.
 
@@ -65,7 +67,8 @@ Questo router NON usa i DataFrame `_DIPENDENTI()` / `_PROGETTI()` / ecc.
 Lavora direttamente con SQLAlchemy via `get_session()`, come
 `routes/configurazione.py`. Coerente: scrive/legge entità di base.
 
-Importa esplicitamente `Task` e `Consuntivo`, mentre il main.py originale
+Importa esplicitamente `Task` (e allora anche `Consuntivo`, oggi sostituito
+dalla vista `OreSettimanali`), mentre il main.py originale
 li usava SENZA averli nell'import (riga 17). Funzionava per accidente
 (probabile import implicito da altri moduli). Qui rendiamo la dipendenza
 esplicita: principio "esplicito è meglio di implicito".
@@ -108,7 +111,7 @@ from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import func
 
 from deps import require_manager
-from models import (get_session, Utente, Fase, Task, Consuntivo, Progetto,
+from models import (get_session, Utente, Fase, Task, OreSettimanali, Progetto,
                     STATI_FASE, LIVELLI_URGENZA, urgenza_fase_risolta)
 
 
@@ -409,9 +412,10 @@ def lista_fasi_progetto(progetto_id: str, _: Utente = Depends(require_manager)):
         consumate_per_fase = dict(
             session.query(
                 Task.fase_id,
-                func.coalesce(func.sum(Consuntivo.ore_dichiarate), 0),
+                func.coalesce(func.sum(OreSettimanali.c.ore), 0),
             )
-            .join(Task, Consuntivo.task_id == Task.id)
+            .select_from(OreSettimanali)
+            .join(Task, OreSettimanali.c.task_id == Task.id)
             .filter(Task.fase_id.in_(fase_ids))
             .group_by(Task.fase_id)
             .all()

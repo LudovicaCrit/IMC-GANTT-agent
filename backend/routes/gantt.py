@@ -86,7 +86,8 @@ DIPENDENZE ESTERNE (oltre al backend)
 DIPENDENZE INTERNE
 ──────────────────
 - `data` (modulo): `get_dipendente`.
-- `models`: `Progetto`, `Fase`, `Task`, `Consuntivo`, `Dipendente`,
+- `models`: `Progetto`, `Fase`, `Task`, `OreSettimanali` (vista delle ore,
+  al posto di `Consuntivo.ore_dichiarate`), `Dipendente`,
   `get_session`, `STATI_PROGETTO_ATTIVI`.
 - `data_db_impl._to_dt`: normalizza `Date` SQL → `datetime` a mezzanotte
   (necessario per l'export Excel — vedi NOTE TECNICHE).
@@ -122,7 +123,7 @@ from sqlalchemy import func
 
 from deps import require_manager
 from models import (
-    Utente, Progetto, Fase, Task, Consuntivo, Dipendente, Sottotask,
+    Utente, Progetto, Fase, Task, OreSettimanali, Dipendente, Sottotask,
     get_session, STATI_PROGETTO_ATTIVI, urgenza_fase_risolta,
 )
 
@@ -217,9 +218,9 @@ def dati_gantt(
     ore_per_task = {}
     if task_ids:
         rows = session.query(
-            Consuntivo.task_id,
-            func.coalesce(func.sum(Consuntivo.ore_dichiarate), 0)
-        ).filter(Consuntivo.task_id.in_(task_ids)).group_by(Consuntivo.task_id).all()
+            OreSettimanali.c.task_id,
+            func.coalesce(func.sum(OreSettimanali.c.ore), 0)
+        ).filter(OreSettimanali.c.task_id.in_(task_ids)).group_by(OreSettimanali.c.task_id).all()
         ore_per_task = {tid: float(ore) for tid, ore in rows}
 
     # Nomi predecessori in UNA query (sostituisce il lookup _TASKS()[...id == pred])
@@ -419,9 +420,9 @@ def gantt_strutturato(
         ore_per_task = {}
         if task_ids_all:
             righe = session.query(
-                Consuntivo.task_id,
-                func.coalesce(func.sum(Consuntivo.ore_dichiarate), 0)
-            ).filter(Consuntivo.task_id.in_(task_ids_all)).group_by(Consuntivo.task_id).all()
+                OreSettimanali.c.task_id,
+                func.coalesce(func.sum(OreSettimanali.c.ore), 0)
+            ).filter(OreSettimanali.c.task_id.in_(task_ids_all)).group_by(OreSettimanali.c.task_id).all()
             ore_per_task = {tid: float(ore) for tid, ore in righe}
 
         # ── 2-bis. Scostamento stime sottotask, in UNA chiamata ───────

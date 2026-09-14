@@ -25,7 +25,7 @@ load_dotenv()
 from sqlalchemy import (
     create_engine, Column, Integer, String, Float, Boolean, Text, Date,
     DateTime, ForeignKey, UniqueConstraint, CheckConstraint, JSON, SmallInteger,
-    Numeric, ForeignKeyConstraint, func, event, DDL,
+    Numeric, ForeignKeyConstraint, func, event, DDL, MetaData, Table,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
@@ -916,6 +916,10 @@ class Sottotask(Base):
     # Migration e9f0a1b2c3d4.
     __table_args__ = (
         UniqueConstraint("id", "task_id", name="uq_sottotask_id_task"),
+        # Esisteva nel DB (migration a3b4c5d6e7f8) ma non qui: la lacuna dei
+        # CHECK spariti — un `create_all` avrebbe creato `sottotask` senza.
+        CheckConstraint(_check_in("stato", STATI_PIANIFICAZIONE_SOTTOTASK),
+                        name="ck_sottotask_stato_pianificazione"),
     )
 
     task = relationship("Task", back_populates="sottotask")
@@ -1219,6 +1223,26 @@ GROUP BY task_id, dipendente_id, (date_trunc('week', giorno))::date
 """
 event.listen(BloccoOre.__table__, "after_create", DDL(VISTA_ORE_SETTIMANALI))
 event.listen(BloccoOre.__table__, "before_drop", DDL("DROP VIEW IF EXISTS ore_settimanali"))
+
+# La vista come oggetto interrogabile dai lettori (`OreSettimanali.c.ore`).
+# SQLAlchemy la conosce SOLO per leggerla: a crearla e distruggerla sono la
+# migration f0a1b2c3d4e5 (passo 1) e, per `create_all`, gli eventi DDL qui sopra.
+#
+# FUORI DA `Base.metadata` DI PROPOSITO — non spostarla lì. Su quel metadata
+# `create_all` (seed, test) emetterebbe CREATE TABLE ore_settimanali, che
+# collide con la vista vera creata dall'evento; e `alembic` proporrebbe di
+# crearla. Filtrarla con `include_object` in env.py NON basta: quel filtro vale
+# solo per Alembic, non per `create_all`. Un MetaData a parte copre entrambi
+# (verificato: l'autogenerate a vuoto resta `pass`). Nessun altro file lo usa.
+# `asdecimal=False`: i lettori ricevono float, come da `ore_dichiarate`.
+_METADATA_VISTE = MetaData()
+OreSettimanali = Table(
+    "ore_settimanali", _METADATA_VISTE,
+    Column("task_id", String(10)),
+    Column("dipendente_id", String(10)),
+    Column("settimana", Date),
+    Column("ore", Numeric(asdecimal=False)),
+)
 
 
 # ══════════════════════════════════════════════════════════════════════

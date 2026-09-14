@@ -134,12 +134,13 @@ from datetime import datetime, timedelta, date
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, model_validator
-from sqlalchemy import func
-from sqlalchemy.orm import joinedload
+from sqlalchemy import func, and_
+from sqlalchemy.orm import joinedload, contains_eager
 
 from deps import get_current_user
 from models import (
-    Utente, Dipendente, Task, Consuntivo, get_session, STATI_DICHIARABILI,
+    Utente, Dipendente, Task, Progetto, Consuntivo, OreSettimanali, get_session,
+    STATI_DICHIARABILI,
 )
 from data import (
     get_dipendente,
@@ -752,11 +753,34 @@ def consuntivi_settimana_corrente(current_user: Utente = Depends(get_current_use
         session.close()
         return []
 
-    # Una sola query con joinedload su Task → Progetto: evita N+1 nel
+    # Una sola query che carica anche Task → Progetto: evita N+1 nel
     # lookup di nome task/progetto durante il loop.
-    q_cons = session.query(Consuntivo).options(
-        joinedload(Consuntivo.task).joinedload(Task.progetto)
-    ).filter(
+    #
+    # LE ORE VENGONO DALLA VISTA `ore_settimanali` (passo 2 della
+    # consuntivazione a ore), agganciata con un OUTER JOIN sulla stessa chiave
+    # della riga — (task, dipendente, settimana) — dentro questa stessa query:
+    # una lookup separata sarebbe stata una query in più a ogni apertura della
+    # vista. Outer perché una riga a zero ore non ha blocchi, e deve restare
+    # (è una dichiarazione-ferma: vedi la regola di scarto più sotto).
+    # Il join sulla `settimana` regge perché `consuntivi.settimana` è sempre il
+    # lunedì (`_lunedi` in scrittura, verificato nella migration f1a2b3c4d5e6).
+    #
+    # Task e Progetto con JOIN ESPLICITI + `contains_eager`, non `joinedload`:
+    # quest'ultimo aggancia le tabelle con alias anonimi, su cui l'ORDER BY più
+    # sotto non può appoggiarsi. Stessa query unica, stesse relazioni caricate.
+    # OUTER come il `joinedload` che sostituiscono: nessuna riga esce dal
+    # risultato per effetto del join.
+    q_cons = session.query(Consuntivo, OreSettimanali.c.ore).outerjoin(
+        Consuntivo.task
+    ).outerjoin(
+        Task.progetto
+    ).options(
+        contains_eager(Consuntivo.task).contains_eager(Task.progetto)
+    ).outerjoin(OreSettimanali, and_(
+        OreSettimanali.c.task_id == Consuntivo.task_id,
+        OreSettimanali.c.dipendente_id == Consuntivo.dipendente_id,
+        OreSettimanali.c.settimana == Consuntivo.settimana,
+    )).filter(
         Consuntivo.settimana >= lun_date,
         Consuntivo.settimana <= ven_date,
     )
@@ -768,13 +792,27 @@ def consuntivi_settimana_corrente(current_user: Utente = Depends(get_current_use
     # senso di questa vista, direbbe il falso.
     if perimetro_dipendenti is not None:
         q_cons = q_cons.filter(Consuntivo.dipendente_id.in_(perimetro_dipendenti or [""]))
-    cons_sett = q_cons.all()
+    # ORDER BY esplicito, e non è cosmetico. Senza, l'«ordine di arrivo» qui
+    # sotto era l'ordine FISICO delle righe, che nessuno garantisce: bastava
+    # un piano diverso per cambiarlo. È successo davvero — l'outer join sulla
+    # vista ha fatto scegliere a Postgres un hash join e i task dentro
+    # `ore_per_task` sono usciti rimescolati (verificato: stessi valori, ordine
+    # diverso).
+    #
+    # PROGETTO → NOME DEL TASK, ed è l'ordine che l'utente VEDE: VistaPM e
+    # VistaManagement rendono `ore_per_task` così come arriva, senza sort lato
+    # client (VistaPM lo divide in «con segnale» / «sole ore», e dentro ciascun
+    # gruppo l'ordine resta questo). I task finiscono raggruppati sotto
+    # l'etichetta-progetto che ogni riga mostra. Il progetto per `id`, come
+    # `gantt_strutturato`. `Task.id` in coda solo come spareggio fra omonimi.
+    # L'ordine delle PERSONE non dipende da qui: lo fissa il `sorted` finale.
+    cons_sett = q_cons.order_by(Progetto.id, Task.nome, Task.id).all()
 
     # Raggruppa per dipendente_id (mantiene l'ordine di arrivo, come
     # `unique()` su pandas Series).
     cons_per_dip = {}
-    for c in cons_sett:
-        cons_per_dip.setdefault(c.dipendente_id, []).append(c)
+    for c, ore in cons_sett:
+        cons_per_dip.setdefault(c.dipendente_id, []).append((c, float(ore or 0)))
 
     risultato = []
     for did, lista_cons in cons_per_dip.items():
@@ -785,7 +823,7 @@ def consuntivi_settimana_corrente(current_user: Utente = Depends(get_current_use
         ore_per_task = []
         totale = 0
         n_segnalazioni = n_fermi = n_ritardo = 0
-        for c in lista_cons:
+        for c, ore in lista_cons:
             t = c.task
             if t is None:
                 continue
@@ -810,7 +848,7 @@ def consuntivi_settimana_corrente(current_user: Utente = Depends(get_current_use
                 "task_nome": t.nome,
                 "progetto_id": t.progetto_id,
                 "progetto": proj.nome if proj else "?",
-                "ore": float(c.ore_dichiarate),
+                "ore": ore,
                 # ── Il CONTENUTO della dichiarazione ─────────────────────
                 # È ciò che la vista-management non ha mai portato: sole ore,
                 # e le ore non dicono cosa sta succedendo.
@@ -826,7 +864,7 @@ def consuntivi_settimana_corrente(current_user: Utente = Depends(get_current_use
                 "in_ritardo": in_ritardo,
                 "presa_visione": bool(c.presa_visione),
             })
-            totale += float(c.ore_dichiarate)
+            totale += ore
             # Conteggi calcolati QUI e non lato client: il management riceve
             # lo stesso payload del PM ma lo rende come sintesi, e una sintesi
             # non può ricavarsi contando righe che si è deciso di non mostrare.
