@@ -25,7 +25,7 @@ load_dotenv()
 from sqlalchemy import (
     create_engine, Column, Integer, String, Float, Boolean, Text, Date,
     DateTime, ForeignKey, UniqueConstraint, CheckConstraint, JSON, SmallInteger,
-    func,
+    Numeric, ForeignKeyConstraint, func, event, DDL,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
@@ -154,6 +154,16 @@ STATI_PIANIFICAZIONE_SOTTOTASK = ("Da iniziare", "Sospeso", "Annullato")
 # CHECK constraint a livello DB: vedi migration alembic e5f6a7b8c9d0
 # (ck_dipendenza_task_tipo). Anche nel modello, su DipendenzaTask.
 TIPI_DIPENDENZA = ("FS", "SS", "FF", "SF")
+
+# Consuntivazione a ore (14/09/2026): da dove arriva un blocco di ore.
+# - manuale: scritto dal dipendente nella griglia della settimana
+# - ia:      proposto dall'assistente e confermato dal dipendente
+# - storico: migrato dai consuntivi SETTIMANALI di prima dei blocchi. Il giorno
+#            vero non esiste: il blocco sta sul lunedì per convenzione, ed è
+#            questa fonte a dirlo — una vista per giorno non deve leggerlo
+#            come «lavorato il lunedì».
+# CHECK a livello DB: ck_blocchi_ore_fonte (migration e9f0a1b2c3d4), su BloccoOre.
+FONTI_BLOCCO_ORE = ("manuale", "ia", "storico")
 
 # Urgenza dichiarata dal PM (A1, 03/09/2026). È INPUT UMANO, non un dato d'uso:
 # dice quanto quel lavoro non può aspettare, e nessuna logica lo deduce.
@@ -899,6 +909,15 @@ class Sottotask(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
+    # (id, task_id) UNIQUE non aggiunge unicità — `id` è già la PK — ma è il
+    # BERSAGLIO che Postgres esige per la FK composta di `blocchi_ore`: una FK
+    # su due colonne deve puntare a una coppia dichiarata unica. È quella FK a
+    # garantire che un blocco su un pezzo porti il task giusto.
+    # Migration e9f0a1b2c3d4.
+    __table_args__ = (
+        UniqueConstraint("id", "task_id", name="uq_sottotask_id_task"),
+    )
+
     task = relationship("Task", back_populates="sottotask")
     dichiarazioni = relationship("ConsuntivoSottotask", back_populates="sottotask",
                                  cascade="all, delete-orphan")
@@ -1112,6 +1131,94 @@ class ConsuntivoSottotask(Base):
 
     sottotask = relationship("Sottotask", back_populates="dichiarazioni")
     dipendente = relationship("Dipendente", back_populates="consuntivi_sottotask")
+
+
+class BloccoOre(Base):
+    """Ore lavorate da una persona, un giorno, su un'unità di lavoro.
+
+    Consuntivazione a ore, passo 1 (14/09/2026). È la sorgente UNICA delle ore
+    consuntivate: «lunedì 2h su T013 + 3h sul pezzo 7 di T020» sono due righe.
+    Le somme per settimana non si scrivono da nessuna parte — le calcola la
+    vista `ore_settimanali`, così una seconda verità non può nascere.
+
+    Accanto resta `Consuntivo` / `ConsuntivoSottotask`, che portano la
+    DICHIARAZIONE per unità e settimana (stato, nota, stima residua, presa
+    visione). Due fatti diversi, due grane diverse: le ore sono del giorno, lo
+    stato è della settimana.
+
+    NESSUNA RIGA A ZERO ORE. «Nessuna ora» è l'assenza della riga, non uno 0.0:
+    è ciò che rende banale svuotare una casella (si cancella la riga) e toglie
+    l'ambiguità NULL/0.0 che `ore_effettive` si portava dietro. Il CHECK
+    `ore > 0` lo impone.
+
+    NESSUN TETTO A 24 ORE nel CHECK, e non per dimenticanza: i blocchi `storico`
+    sono intere SETTIMANE appoggiate sul lunedì (fino a 42h nei dati migrati).
+    «Un giorno non supera 24h» è una regola sui blocchi `manuale`/`ia` e su più
+    righe insieme — sta nella validazione di scrittura, non in un CHECK di riga.
+
+    `ore` È NUMERIC(5,2), non Float: le somme devono tornare al centesimo, e la
+    somma di double accumula rumore (0.1 + 0.2). `asdecimal=False` fa arrivare
+    float ai lettori Python, come `Consuntivo.ore_dichiarate`.
+    """
+    __tablename__ = "blocchi_ore"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    dipendente_id = Column(String(10), ForeignKey("dipendenti.id"), nullable=False)
+    giorno = Column(Date, nullable=False)
+    # task_id SEMPRE valorizzato, anche sui blocchi di un pezzo: la somma per
+    # task è un GROUP BY task_id, senza distinguere task atomici e scomposti.
+    task_id = Column(String(10), ForeignKey("task.id", ondelete="CASCADE"),
+                     nullable=False, index=True)
+    # sottotask_id solo sui pezzi. NULL = il blocco è sul task.
+    sottotask_id = Column(Integer, nullable=True, index=True)
+    ore = Column(Numeric(5, 2, asdecimal=False), nullable=False)
+    # Senza default, di proposito: chi scrive un blocco deve dire da dove viene.
+    fonte = Column(String(10), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        # FK COMPOSTA: il pezzo deve appartenere al task del blocco. Con
+        # sottotask_id NULL non scatta (MATCH SIMPLE), che è il caso-task.
+        ForeignKeyConstraint(
+            ["sottotask_id", "task_id"], ["sottotask.id", "sottotask.task_id"],
+            ondelete="CASCADE", name="fk_blocchi_ore_sottotask_task",
+        ),
+        # Un blocco per (persona, giorno, unità). NULLS NOT DISTINCT: senza,
+        # due blocchi sullo stesso TASK (sottotask_id NULL) lo stesso giorno
+        # passerebbero entrambi, perché per Postgres NULL <> NULL.
+        UniqueConstraint(
+            "dipendente_id", "giorno", "task_id", "sottotask_id",
+            name="uq_blocchi_ore", postgresql_nulls_not_distinct=True,
+        ),
+        CheckConstraint("ore > 0", name="ck_blocchi_ore_positive"),
+        CheckConstraint(_check_in("fonte", FONTI_BLOCCO_ORE), name="ck_blocchi_ore_fonte"),
+    )
+
+
+# ── ore_settimanali: la somma dei blocchi per (task, dipendente, settimana) ──
+# È la sostituta di `consuntivi.ore_dichiarate` come sorgente delle ore
+# settimanali: una VISTA e non una colonna, così non esiste un secondo numero da
+# tenere allineato. `settimana` è il lunedì ISO del giorno — la stessa regola di
+# `_lunedi` in data_db_impl (`date_trunc('week')` in Postgres è ISO: lunedì).
+#
+# PERCHÉ ANCHE QUI E NON SOLO NELLA MIGRATION f0a1b2c3d4e5: è la lezione dei
+# CHECK spariti (vedi `_check_in`). Un database ricreato con `create_tables()`
+# non saprebbe nulla di una vista dichiarata solo in migration, e ogni lettore
+# delle ore fallirebbe su una relazione inesistente. Gli eventi DDL la legano
+# alla tabella: nasce con `create_all`, muore con `drop_all`.
+# Il testo è volutamente identico a quello della migration.
+VISTA_ORE_SETTIMANALI = """
+CREATE VIEW ore_settimanali AS
+SELECT task_id,
+       dipendente_id,
+       (date_trunc('week', giorno))::date AS settimana,
+       sum(ore) AS ore
+FROM blocchi_ore
+GROUP BY task_id, dipendente_id, (date_trunc('week', giorno))::date
+"""
+event.listen(BloccoOre.__table__, "after_create", DDL(VISTA_ORE_SETTIMANALI))
+event.listen(BloccoOre.__table__, "before_drop", DDL("DROP VIEW IF EXISTS ore_settimanali"))
 
 
 # ══════════════════════════════════════════════════════════════════════
