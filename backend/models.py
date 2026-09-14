@@ -157,13 +157,17 @@ TIPI_DIPENDENZA = ("FS", "SS", "FF", "SF")
 
 # Consuntivazione a ore (14/09/2026): da dove arriva un blocco di ore.
 # - manuale: scritto dal dipendente nella griglia della settimana
-# - ia:      proposto dall'assistente e confermato dal dipendente
 # - storico: migrato dai consuntivi SETTIMANALI di prima dei blocchi. Il giorno
 #            vero non esiste: il blocco sta sul lunedì per convenzione, ed è
 #            questa fonte a dirlo — una vista per giorno non deve leggerlo
 #            come «lavorato il lunedì».
-# CHECK a livello DB: ck_blocchi_ore_fonte (migration e9f0a1b2c3d4), su BloccoOre.
-FONTI_BLOCCO_ORE = ("manuale", "ia", "storico")
+# NIENTE 'ia', ed è una decisione, non una dimenticanza: l'IA non scrive mai
+# ore-consuntivo. Lavora sul piano (GANTT, assegnazioni); le ore le dichiara solo
+# chi le ha lavorate. C'era nella prima versione del vincolo ed è stato tolto
+# dalla migration a2b3c4d5e6f8.
+# CHECK a livello DB: ck_blocchi_ore_fonte (migration e9f0a1b2c3d4, ristretto da
+# a2b3c4d5e6f8), su BloccoOre.
+FONTI_BLOCCO_ORE = ("manuale", "storico")
 
 # Urgenza dichiarata dal PM (A1, 03/09/2026). È INPUT UMANO, non un dato d'uso:
 # dice quanto quel lavoro non può aspettare, e nessuna logica lo deduce.
