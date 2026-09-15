@@ -1,9 +1,15 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react'
+import { Link } from 'react-router-dom'
 import { apiFetch } from '../api'
-import { useAuth } from '../contexts/AuthContext'
-import VistaPM from '../components/consuntivazione/VistaPM'
-import VistaManagement from '../components/consuntivazione/VistaManagement'
 import { unitaDichiarata, unitaCompilabili } from '../components/_shared/unitaLavoro'
+// Pezzi condivisi con la griglia a ore (ConsuntivazioneOre.jsx), estratti il
+// 15/09/2026: testata + vista di gruppo, selettore della settimana, promemoria
+// della nota ereditata, formattazione delle date.
+import GuscioConsuntivazione from '../components/consuntivazione/GuscioConsuntivazione'
+import SelettoreSettimana from '../components/consuntivazione/SelettoreSettimana'
+import PromemoriaNota from '../components/consuntivazione/PromemoriaNota'
+import BarraSalvataggio from '../components/consuntivazione/BarraSalvataggio'
+import { fmtData } from '../components/consuntivazione/formato'
 
 /* ── Costanti ─────────────────────────────────────────────────────── */
 const STATI = ['In corso', 'Completato', 'Bloccato']
@@ -38,49 +44,9 @@ const TOOLTIP = {
 /* ── Helpers ──────────────────────────────────────────────────────── */
 const fmtH = (n) => `${(n ?? 0).toFixed(1).replace(/\.0$/, '')}h`
 
-const fmtData = (iso) => {
-  if (!iso) return ''
-  const d = new Date(iso)
-  return d.toLocaleDateString('it-IT', { day: 'numeric', month: 'short' })
-}
-
-/* ── Il promemoria della nota ereditata ────────────────────────────────
- * Nodo F-2 (b). Mostra il perché di un fermo scritto in una settimana
- * PRECEDENTE, così chi compila non deve ridigitare «aspetto le credenziali»
- * ogni lunedì.
- *
- * SOLA LETTURA, E FUORI DAL CAMPO-NOTA. È la regola più importante di questo
- * componente, e non è una scelta di stile. Se il testo ereditato finisse
- * PRECOMPILATO nel `<textarea>` della nota, al salvataggio partirebbe in
- * `note_per_task` / `note_sottotask` come nota PROPRIA di questa settimana, e
- * il backend non ha modo di distinguerla: la barriera costruita nel data layer
- * è sul canale della presa-visione (`viste_*` porta solo id), NON sul campo
- * nota. Il risultato sarebbe che il dipendente firma parole scritte da un
- * collega — o da sé stesso settimane fa — senza averle riscritte.
- * Quindi: un <p>, non un input. Nessun `value`, nessun `onChange`.
- *
- * QUANDO SI MOSTRA — le due condizioni arrivano dal docstring di
- * `task_settimana_dipendente`, che le ha decise e non le applica di proposito
- * («qui non si filtra, si espone il fatto»):
- *   - l'unità è FERMA: chi ha mosso il cursore ha già detto la sua, e un
- *     promemoria di un vecchio fermo sarebbe fuori tempo;
- *   - non ha già una nota PROPRIA questa settimana: se l'utente ha scritto,
- *     il promemoria ha finito il suo lavoro e sparisce.
- */
-function PromemoriaNota({ testo, da, mostra }) {
-  if (!mostra || !testo) return null
-  return (
-    <p className="text-[11px] text-gray-500 italic mt-1 flex items-start gap-1.5">
-      <span className="text-gray-600 not-italic shrink-0" aria-hidden="true">↺</span>
-      <span className="min-w-0">
-        <span className="text-gray-600 not-italic">
-          {da ? `Settimana del ${fmtData(da)}: ` : 'In precedenza: '}
-        </span>
-        «{testo}»
-      </span>
-    </p>
-  )
-}
+// `fmtData` e `PromemoriaNota` vivono ora in components/consuntivazione/: le
+// usa anche la griglia a ore. Il promemoria in questa pagina si mostra quando
+// l'unità è ferma (cursore non mosso) e non ha una nota propria.
 
 /* ── Pagina ───────────────────────────────────────────────────────── */
 export default function ConsuntivazioneUser() {
@@ -103,25 +69,8 @@ export default function ConsuntivazioneUser() {
   const [modificheSottotask, setModificheSottotask] = useState({})
   const [noteSottotaskAperte, setNoteSottotaskAperte] = useState({})
 
-  /* ── Chi sta guardando ─────────────────────────────────────────────
-   * `vistaGruppo` è 'manager' | 'pm' | null, e governa INSIEME il bottone e
-   * la resa. Una variabile sola per le due decisioni: tenendole separate,
-   * prima o poi il bottone porta a una vista che non c'è, o la vista resta
-   * raggiungibile senza bottone — e `vista` è stato locale, quindi la
-   * seconda strada è aperta per davvero.
-   *
-   * `null` per il ruolo 'user': non è un permesso negato da spiegare, è una
-   * domanda che per lui non esiste. Il backend risponde comunque 403 — quella
-   * è la rete; qui si toglie l'invito.
-   */
-  const { user } = useAuth()
-  const vistaGruppo = (user?.ruolo_app === 'manager' || user?.ruolo_app === 'pm')
-    ? user.ruolo_app
-    : null
-  // 'dipendente' | 'gruppo'. Default 'dipendente' per TUTTI, manager compresi:
-  // anche chi supervisiona ha una propria settimana da compilare, e aprire
-  // sulla vista di gruppo gliela farebbe dimenticare.
-  const [vista, setVista] = useState('dipendente')
+  // Chi sta guardando (vista personale o di gruppo) lo decide ora il guscio
+  // condiviso, `GuscioConsuntivazione`: vedi lì il perché di `vistaGruppo`.
 
   /* ── Caricamento ── */
   const carica = useCallback((settimana) => {
@@ -452,66 +401,33 @@ export default function ConsuntivazioneUser() {
   }
 
   /* ── Render ────────────────────────────────────────────────────────
-   * L'INTESTAZIONE SI CALCOLA PRIMA delle uscite anticipate, e sopravvive
-   * a tutte. Prima un errore su `/me` sostituiva l'INTERA pagina con una
-   * riga rossa: sparivano titolo e navigazione, e chi ci arrivava non aveva
-   * più modo di capire dove fosse né di andare altrove.
-   *
-   * Da quando la pagina è a tre viste la cosa peggiora: le tre uscite qui
-   * sotto dipendono tutte da `/me`, cioè dalla vista del DIPENDENTE. Un
-   * manager che apre la vista di gruppo non deve restare fuori perché è
-   * fallita una chiamata che non gli serviva.
+   * Testata e vista di gruppo stanno nel guscio condiviso, che le rende PRIMA e
+   * a prescindere da `/me`: un errore qui sotto non si porta via titolo e
+   * navigazione, e un manager sulla vista di gruppo non attraversa le guardie
+   * di una chiamata che non gli serve.
    */
-  const barra = (
-    <>
-      <h1 className="text-3xl font-bold mb-1">⏱️ Consuntivazione</h1>
-      {vistaGruppo && (
-        <div className="flex gap-2 mb-6 mt-3">
-          <button onClick={() => setVista('dipendente')}
-            className={`px-3 py-1.5 rounded-lg text-sm transition-colors ${
-              vista === 'dipendente' ? 'bg-blue-600 text-white' : 'bg-gray-800 text-gray-400 hover:text-gray-200'
-            }`}>
-            👤 La mia settimana
-          </button>
-          <button onClick={() => setVista('gruppo')}
-            className={`px-3 py-1.5 rounded-lg text-sm transition-colors ${
-              vista === 'gruppo' ? 'bg-blue-600 text-white' : 'bg-gray-800 text-gray-400 hover:text-gray-200'
-            }`}>
-            {vistaGruppo === 'pm' ? '📥 I miei progetti' : '📊 Tutta l\'azienda'}
-          </button>
-        </div>
-      )}
-    </>
-  )
-
-  // LA VISTA DI GRUPPO ESCE PRIMA, per la ragione scritta sopra: non tocca
-  // `dati`, quindi non deve attraversare le guardie di `/me`.
-  if (vista === 'gruppo' && vistaGruppo) {
-    return (
-      <div className="max-w-6xl pb-6">
-        {barra}
-        {vistaGruppo === 'pm' ? <VistaPM /> : <VistaManagement />}
-      </div>
-    )
-  }
-
-  if (loading) return <div className="max-w-6xl pb-6">{barra}<p className="text-gray-400">Caricamento…</p></div>
-  if (errore) return <div className="max-w-6xl pb-6">{barra}<p className="text-red-400">Errore: {errore}</p></div>
-  if (!dati) return <div className="max-w-6xl pb-6">{barra}</div>
+  if (loading) return <GuscioConsuntivazione><p className="text-gray-400">Caricamento…</p></GuscioConsuntivazione>
+  if (errore) return <GuscioConsuntivazione><p className="text-red-400">Errore: {errore}</p></GuscioConsuntivazione>
+  if (!dati) return <GuscioConsuntivazione />
 
   const nome = dati.nome?.split(' ')[0] ?? ''
 
   return (
-    <div className="max-w-6xl pb-6">
-      {barra}
+    <GuscioConsuntivazione>
 
       <div className="flex items-start justify-between mb-6">
         <p className="text-gray-400">
           Ciao {nome} — ecco cosa era in programma per te.
         </p>
 
-        {/* Agganci IA — segnaposto, non ancora collegati */}
         <div className="flex gap-2 shrink-0">
+          {/* La griglia a ore, affiancata a questa pagina fino al passo 5:
+              un pulsante e non una voce di menu, finché è in prova. */}
+          <Link to="/consuntivazione/ore"
+            className="px-3 py-2 rounded-lg text-sm font-medium bg-blue-900/40 text-blue-200 border border-blue-800 hover:bg-blue-900/60">
+            🗓️ Griglia a ore
+          </Link>
+          {/* Agganci IA — segnaposto, non ancora collegati */}
           <button disabled
             title="In arrivo: detta cosa hai fatto, l'assistente compila per te"
             className="px-3 py-2 rounded-lg text-sm font-medium bg-gray-800 text-gray-500 border border-gray-700 cursor-not-allowed">
@@ -526,36 +442,15 @@ export default function ConsuntivazioneUser() {
       </div>
 
       {/* ═══ Selettore settimana ═══ */}
-      <div className="flex items-center gap-2 mb-6">
-        {dati.settimane_disponibili?.map((s) => {
-          const attiva = s.lunedi === dati.settimana
-          return (
-            <button
-              key={s.lunedi}
-              onClick={() => {
-                if (haPendenti && !confirm('Hai modifiche non salvate. Cambiare settimana le perderà. Continuare?')) return
-                carica(s.lunedi)
-              }}
-              className={`px-4 py-2 rounded-lg text-sm font-medium border transition-colors ${
-                attiva
-                  ? 'bg-gray-700 text-white border-gray-600'
-                  : 'bg-gray-900 text-gray-400 border-gray-800 hover:text-gray-200'
-              }`}
-            >
-              {s.etichetta}
-              {!s.compilabile && <span className="ml-2 text-[10px] text-gray-500">già chiusa</span>}
-            </button>
-          )
-        })}
-      </div>
-
-      {soloLettura && (
-        <div className="bg-gray-800/60 border border-gray-700 rounded-lg px-4 py-3 mb-6">
-          <p className="text-sm text-gray-300">
-            Questa settimana è già stata compilata: puoi consultarla, ma non modificarla.
-          </p>
-        </div>
-      )}
+      <SelettoreSettimana
+        settimane={dati.settimane_disponibili}
+        attiva={dati.settimana}
+        soloLettura={soloLettura}
+        onScegli={(lunedi) => {
+          if (haPendenti && !confirm('Hai modifiche non salvate. Cambiare settimana le perderà. Continuare?')) return
+          carica(lunedi)
+        }}
+      />
 
       {/* ═══ Riquadri di sintesi ═══ */}
       <div className="grid grid-cols-3 gap-4 mb-8">
@@ -648,57 +543,16 @@ export default function ConsuntivazioneUser() {
 
       {/* ═══ Barra di salvataggio fissa ═══ */}
       {!soloLettura && (
-        /* STICKY, non FIXED — e la differenza è il logout di Helena.
-           `fixed bottom-0 left-0` ancora al VIEWPORT: `left-0` è il bordo
-           sinistro dello schermo, non l'inizio del contenuto, quindi la barra
-           passava sotto la sidebar per tutta la sua larghezza. E vinceva senza
-           bisogno di z-index: un elemento `fixed` è POSIZIONATO, la sidebar è
-           in flusso normale, e nell'ordine di disegno il posizionato sta sopra.
-           I ~60px della barra cadevano esattamente sul bottone Logout, ultimo
-           elemento del footer-sidebar: azione essenziale, coperta.
-
-           `sticky bottom-0` si ancora invece al fondo dell'area visibile del
-           suo contenitore di scroll — il `<main>` — che comincia DOPO la
-           sidebar. Non può uscirne per costruzione, e non ha bisogno di sapere
-           quanto è larga la sidebar: sopravvive da sola al toggle «Comprimi»,
-           che un `left-64` avrebbe invece mancato.
-
-           NON è un bug nato col consolidamento: la barra c'era già. Fino al
-           07/09 `/consuntivazione` serviva la pagina VECCHIA, che non ha una
-           sola occorrenza di `fixed` — il consolidamento non ha creato il
-           difetto, ha portato tutti sulla pagina che ce l'aveva. */
-        <div className="sticky bottom-0 z-20 -mx-2 mt-4 rounded-t-xl border-t backdrop-blur"
-             style={{ backgroundColor: 'rgba(17,24,39,0.92)', borderColor: 'var(--color-border-subtle, #1f2937)' }}>
-          <div className="px-6 py-3 flex items-center justify-between">
-            <div className="text-sm">
-              {salvataggio === 'ok' && <span className="text-green-400">✓ Salvato</span>}
-              {salvataggio === 'invio' && <span className="text-gray-400">Salvataggio…</span>}
-              {salvataggio && !['ok', 'invio'].includes(salvataggio) && (
-                <span className="text-red-400">{salvataggio}</span>
-              )}
-              {!salvataggio && haPendenti && (
-                <span className="text-amber-300">
-                  {nModifiche} {nModifiche === 1 ? 'modifica' : 'modifiche'} da salvare
-                </span>
-              )}
-              {!salvataggio && !haPendenti && (
-                <span className="text-gray-600">Nessuna modifica</span>
-              )}
-            </div>
-
-            <button
-              onClick={salva}
-              disabled={!haPendenti || salvataggio === 'invio'}
-              className="px-5 py-2 rounded-lg text-sm font-medium bg-blue-600 text-white
-                         hover:bg-blue-500 disabled:bg-gray-800 disabled:text-gray-600
-                         disabled:cursor-not-allowed transition-colors"
-            >
-              Salva
-            </button>
-          </div>
-        </div>
+        // Barra sticky condivisa con la griglia a ore: vedi BarraSalvataggio
+        // per il perché di `sticky` e non `fixed` (il logout coperto).
+        <BarraSalvataggio
+          stato={salvataggio}
+          haPendenti={haPendenti}
+          nModifiche={nModifiche}
+          onSalva={salva}
+        />
       )}
-    </div>
+    </GuscioConsuntivazione>
   )
 }
 

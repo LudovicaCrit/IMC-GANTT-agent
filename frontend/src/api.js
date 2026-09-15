@@ -560,6 +560,13 @@ export async function salvaConsuntivo(data) {
   return apiFetch(`${API_BASE}/consuntivi/salva`, { method: 'POST', body: data });
 }
 
+export async function salvaBlocchi(data) {
+  // Consuntivazione a ore (griglia): { settimana, unita: [{tipo, id, …, blocchi}] }.
+  // Solo per l'utente loggato — niente `dipendente_id` nel body. Un 400 arriva
+  // come Error col messaggio del backend («Consuntivo non salvato: …; …»).
+  return apiFetch(`${API_BASE}/consuntivi/salva-blocchi`, { method: 'POST', body: data });
+}
+
 // ═════════════════════════════════════════════════════════════════════════
 //  EXPORT (PDF — caso speciale: blob, non JSON)
 // ═════════════════════════════════════════════════════════════════════════

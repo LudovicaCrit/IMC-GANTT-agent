@@ -4,6 +4,7 @@ import Home from './pages/Home'
 import Gantt from './pages/Gantt'
 import Risorse from './pages/Risorse'
 import ConsuntivazioneUser from './pages/ConsuntivazioneUser'
+import ConsuntivazioneOre from './pages/ConsuntivazioneOre'
 import AnalisiInterventi from './pages/AnalisiInterventi'
 import Pipeline from './pages/Pipeline'
 import Economia from './pages/Economia'
@@ -182,6 +183,12 @@ function MainLayout() {
           {/* Pagine accessibili a TUTTI gli utenti loggati (user + manager) */}
           <Route path="/" element={<Home />} />
           <Route path="/consuntivazione" element={<ConsuntivazioneUser />} />
+          {/* Consuntivazione a ore (passo 4): la griglia unità × giorni,
+              affiancata alla pagina a cursore fino al passo 5. Nessuna voce di
+              menu: ci si arriva dal pulsante «Griglia a ore» nella pagina qui
+              sopra. La voce «Consuntivazione» resta evidenziata (NavLink senza
+              `end` riconosce il prefisso). */}
+          <Route path="/consuntivazione/ore" element={<ConsuntivazioneOre />} />
           {/* `-new` era un nome di cantiere, e l'URL è visibile quanto
               l'etichetta: diventava una bugia nel momento in cui la pagina
               restava una sola. Il redirect copre i preferiti di chi ha usato
