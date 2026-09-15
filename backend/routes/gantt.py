@@ -269,7 +269,8 @@ def dati_gantt(
             "profile": dip["profilo"],
             "status": t.stato,
             "estimated_hours": ore_stimate,
-            "hours_done": round(ore_cons, 1),
+            # 2 decimali: ore da blocchi (NUMERIC(5,2)), quarti d'ora compresi.
+            "hours_done": round(ore_cons, 2),
         })
 
     return result
@@ -553,7 +554,9 @@ def gantt_strutturato(
                         # scostamento qui sotto: quando quello è null per
                         # assenza di piano, questo campo mostra il perché.
                         "ore_pianificate": float(t.ore_pianificate) if t.ore_pianificate is not None else None,
-                        "ore_consumate": round(ore_cons_t, 1),
+                        # 2 decimali: ore da blocchi, come `hours_done`. Fase e
+                        # progetto sotto sono somme di questo stesso numero.
+                        "ore_consumate": round(ore_cons_t, 2),
                         # Step 2.3: scostamento fra la somma delle stime dei
                         # sottotask e il piano del task, o null se non c'è
                         # niente da segnalare. SEGNALA, NON IMPONE: sono tre
@@ -651,7 +654,7 @@ def gantt_strutturato(
                     "data_fine": f.data_fine.isoformat() if f.data_fine else None,
                     "ore_vendute": ore_vendute_fase,
                     "ore_pianificate": float(f.ore_pianificate or 0),
-                    "ore_consumate": round(ore_consumate_fase, 1),
+                    "ore_consumate": round(ore_consumate_fase, 2),
                     # URGENZA — GREZZA e RISOLTA, due campi distinti (A1).
                     # `urgenza` null = «eredita dal progetto», ed è il caso
                     # normale; `urgenza_risolta` è il valore che vale davvero.
@@ -683,7 +686,7 @@ def gantt_strutturato(
                 "budget_ore": int(p.budget_ore) if p.budget_ore else 0,
                 "pm_id": p.pm_id,
                 "ore_vendute_totali": ore_vendute_proj,
-                "ore_consumate_totali": round(ore_consumate_proj, 1),
+                "ore_consumate_totali": round(ore_consumate_proj, 2),
                 # Urgenza del progetto: un campo solo, sempre valorizzato — è
                 # NOT NULL perché è la RADICE dell'eredità delle fasi.
                 "urgenza": p.urgenza,

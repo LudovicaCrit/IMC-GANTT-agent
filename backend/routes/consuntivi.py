@@ -811,6 +811,16 @@ class SalvaBlocchiRequest(BaseModel):
                     f"(0 è ammesso: «non manca più niente»)"
                 )
 
+            # N22 — «confermo che è ferma» e delle ore nella stessa settimana si
+            # contraddicono. Scatta SOLO con blocchi presenti e NON vuoti:
+            # presa_visione=true con `blocchi: []` (ore azzerate) o con i blocchi
+            # assenti (ore non toccate) è ammessa.
+            if u.presa_visione is True and u.blocchi:
+                errori.append(
+                    f"{et}: un'unità confermata ferma non può avere ore questa "
+                    f"settimana — togli la conferma o togli le ore"
+                )
+
         if errori:
             raise HTTPException(400, "Consuntivo non salvato: " + "; ".join(errori))
         return self
@@ -1013,7 +1023,8 @@ def consuntivi_settimana_corrente(current_user: Utente = Depends(get_current_use
                 "nome": dip["nome"],
                 "profilo": dip["profilo"],
                 "ore_contrattuali": int(dip["ore_sett"]),
-                "totale_ore": round(totale, 1),
+                # 2 decimali: somma di ore da blocchi (NUMERIC(5,2)), come in /me.
+                "totale_ore": round(totale, 2),
                 "ore_per_task": ore_per_task,
                 "compilato": True,
                 # I conteggi della sintesi. Il management li legge in cima e
@@ -1131,6 +1142,34 @@ def consuntivi_settimana_me(
     task_settimana = task_settimana_dipendente(current_user.dipendente_id, lun)
     totale = sum(t["ore_consumate"] for t in task_settimana)
 
+    # ── `unita`: la settimana nella FORMA ESATTA del payload di /salva-blocchi ──
+    # Consuntivazione a ore (passo 3). La griglia la legge e la rimanda così
+    # com'è: rimandarla senza modifiche non cambia nulla nel DB (N8).
+    # SOLO le unità MODIFICABILI: le righe N21 (task chiuso o riassegnato con ore
+    # già messe) restano in `task_settimana` con `modificabile: false` e i loro
+    # blocchi, ma qui non compaiono — omesse dal payload restano intatte (N7),
+    # invece di far fallire tutta la settimana con un 400 (N15).
+    # I blocchi storici non ci sono: il payload non li accetta.
+    unita = []
+    for t in task_settimana:
+        if t["modificabile"]:
+            unita.append({
+                "tipo": "task", "id": t["task_id"],
+                "stato_dichiarato": t["stato_dichiarato"], "nota": t["nota"],
+                "ore_stimate_residue": t["ore_stimate_residue"],
+                "presa_visione": t["presa_visione"],
+                "blocchi": t["blocchi"],
+            })
+        for p in t.get("sottotask", []):
+            if p["modificabile"]:
+                unita.append({
+                    "tipo": "sottotask", "id": p["id"],
+                    "stato_dichiarato": p["stato_dichiarato"], "nota": p["nota"],
+                    "ore_stimate_residue": p["ore_stimate_residue"],
+                    "presa_visione": p["presa_visione"],
+                    "blocchi": p["blocchi"],
+                })
+
     return {
         "dipendente_id": current_user.dipendente_id,
         "nome": dip["nome"],
@@ -1138,8 +1177,10 @@ def consuntivi_settimana_me(
         "ore_contrattuali": int(dip["ore_sett"]),
         "settimana": lun.isoformat(),
         "settimane_disponibili": disponibili,
-        "totale_ore": round(totale, 1),
+        # 2 decimali come le ore da cui è sommato (vedi `ore_consumate`).
+        "totale_ore": round(totale, 2),
         "task_settimana": task_settimana,
+        "unita": unita,
         # ⚠️ DIVERGENZA NOTA — `compilato` e `compilabile` (dentro
         # settimane_disponibili) misurano due cose diverse e possono
         # contraddirsi:
@@ -1362,6 +1403,11 @@ def salva_blocchi_endpoint(
             "stato": u.stato_dichiarato,
             "tocca_nota": "nota" in u.model_fields_set,
             "nota": u.nota,
+            "tocca_residuo": "ore_stimate_residue" in u.model_fields_set,
+            "residuo": u.ore_stimate_residue,
+            # Niente `tocca_`: per la presa visione assente e null coincidono
+            # («non toccare»), e lo decide il valore da solo.
+            "presa_visione": u.presa_visione,
         }
         for u in req.unita
     ]
@@ -1370,12 +1416,11 @@ def salva_blocchi_endpoint(
     except ConsuntivoNonValido as e:
         raise HTTPException(400, "Consuntivo non salvato: " + "; ".join(e.errori))
 
-    # Passo 3, sotto-passo 1: la scrittura non c'è ancora. 501 e non 200: un
-    # «ok» su un salvataggio che non ha scritto nulla sarebbe una bugia.
-    if not esito.get("scritto"):
-        raise HTTPException(
-            501,
-            "Validazione superata, ma la scrittura dei blocchi non è ancora "
-            "implementata (consuntivazione a ore, passo 3.2).",
-        )
-    return esito
+    # `avvisi`: segnalazioni non bloccanti — oggi la propagazione dello stato su
+    # un task fallita dopo il commit («ore salvate, stato non riportato,
+    # riprova»). Lista vuota nel caso normale, sempre presente.
+    return {
+        "salvato": True,
+        "settimana": lun.isoformat(),
+        "avvisi": esito["avvisi"],
+    }

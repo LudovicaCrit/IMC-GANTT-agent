@@ -2001,21 +2001,61 @@ def task_settimana_dipendente(dipendente_id, settimana=None):
                 )
             )
 
+        # ── I BLOCCHI di QUESTO dipendente in QUESTA settimana ────────────
+        # Consuntivazione a ore (passo 3). Una query sola, prima dei task,
+        # perché decide anche QUALI righe esistono (N21 qui sotto).
+        from models import BloccoOre
+        blocchi_rows = (
+            session.query(BloccoOre.task_id, BloccoOre.sottotask_id,
+                          BloccoOre.giorno, BloccoOre.ore, BloccoOre.fonte)
+            .filter(
+                BloccoOre.dipendente_id == dipendente_id,
+                BloccoOre.giorno >= lun, BloccoOre.giorno <= fine_sett,
+            )
+            .order_by(BloccoOre.giorno)
+            .all()
+        )
+        task_con_blocchi = {b.task_id for b in blocchi_rows}
+        pezzi_con_blocchi = {b.sottotask_id for b in blocchi_rows if b.sottotask_id is not None}
+
+        # C2 — i pezzi affidati a ME su un task assegnato a un ALTRO. Senza
+        # questo ramo il filtro `Task.dipendente_id == dip` li nascondeva: erano
+        # scrivibili (l'assegnatario risolto è lui) ma invisibili.
+        task_con_pezzi_miei = (
+            session.query(Sottotask.task_id)
+            .filter(Sottotask.dipendente_id == dipendente_id,
+                    Sottotask.stato != "Annullato")
+        )
+
         tasks = (
             session.query(Task)
             .options(joinedload(Task.progetto))
-            .filter(
-                Task.dipendente_id == dipendente_id,
-                # «Eliminato» accanto ad «Annullato»: il soft-delete scrive
-                # quello stato e la riga resta in tabella, quindi un task
-                # cancellato con la finestra ancora aperta compariva nella
-                # Consuntivazione di chi ce l'aveva assegnato. In DB non ce n'è
-                # nemmeno uno oggi — era un buco latente, non un bug osservato —
-                # ma il ramo-4 allarga la visibilità e un latente allargato
-                # prima o poi si vede. `gantt_strutturato` filtra già entrambi.
-                Task.stato.notin_(("Annullato", "Eliminato")),
-                or_(*rami_finestra),
-            )
+            .filter(or_(
+                and_(
+                    Task.dipendente_id == dipendente_id,
+                    # «Eliminato» accanto ad «Annullato»: il soft-delete scrive
+                    # quello stato e la riga resta in tabella, quindi un task
+                    # cancellato con la finestra ancora aperta compariva nella
+                    # Consuntivazione di chi ce l'aveva assegnato. In DB non ce
+                    # n'è nemmeno uno oggi — era un buco latente, non un bug
+                    # osservato — ma il ramo-4 allarga la visibilità e un
+                    # latente allargato prima o poi si vede.
+                    Task.stato.notin_(("Annullato", "Eliminato")),
+                    or_(*rami_finestra),
+                ),
+                # C2 — stessa finestra e stessi stati esclusi, sul task altrui.
+                and_(
+                    Task.id.in_(task_con_pezzi_miei),
+                    Task.stato.notin_(("Annullato", "Eliminato")),
+                    or_(*rami_finestra),
+                ),
+                # N21 — OGNI task su cui questo dipendente ha ore in questa
+                # settimana, qualunque sia oggi il suo stato o assegnatario:
+                # chiuso, spostato dal PM, annullato. I totali della settimana
+                # contano quelle ore, e le righe mostrate devono tornare con i
+                # totali. Se non è più modificabile lo dice `modificabile`.
+                Task.id.in_(task_con_blocchi),
+            ))
             .order_by(Task.id)
             .all()
         )
@@ -2103,7 +2143,10 @@ def task_settimana_dipendente(dipendente_id, settimana=None):
                 session.query(Sottotask)
                 .filter(
                     Sottotask.task_id.in_(task_ids),
-                    Sottotask.stato != "Annullato",
+                    # N21 anche sui pezzi: un Annullato su cui ho ore in questa
+                    # settimana resta visibile (non modificabile).
+                    or_(Sottotask.stato != "Annullato",
+                        Sottotask.id.in_(pezzi_con_blocchi)),
                 )
                 .order_by(Sottotask.ordine, Sottotask.id)
                 .all()
@@ -2150,7 +2193,11 @@ def task_settimana_dipendente(dipendente_id, settimana=None):
             # Il discriminante NON richiede una query: `sottotask_rows` sopra ha
             # già filtrato i non-Annullati, quindi i task che vi compaiono sono
             # esattamente gli scomposti — stesso criterio, dato già in mano.
-            task_scomposti = {s.task_id for s in sottotask_rows}
+            # Solo i NON Annullati decidono se un task è scomposto: da quando
+            # (N21) la lista può contenere anche pezzi annullati con ore, un task
+            # coi pezzi tutti annullati deve restare unità (M9), come per
+            # `tipo_unita_per_task`.
+            task_scomposti = {s.task_id for s in sottotask_rows if s.stato != "Annullato"}
             task_unita = [tid for tid in task_ids if tid not in task_scomposti]
             if task_unita:
                 # Stessa funzione della baseline dei pezzi, con tipo="task": il
@@ -2166,6 +2213,24 @@ def task_settimana_dipendente(dipendente_id, settimana=None):
                 )
     finally:
         session.close()
+
+    # ── Blocchi per unità, nella STESSA forma del payload di /salva-blocchi ──
+    # `blocchi` = i MANUALI, cioè ciò che la griglia mostra modificabile e
+    # rimanda indietro così com'è ({giorno, ore}). `blocchi_storico` = le ore
+    # migrate, in sola lettura: stanno a parte perché il payload non le accetta
+    # (la sostituzione non le tocca) e rimandarle sarebbe un errore.
+    # Chiave (task_id, sottotask_id): sottotask_id None = blocco sul task.
+    blocchi_per_unita = {}
+    for b in blocchi_rows:
+        voce = blocchi_per_unita.setdefault(
+            (b.task_id, b.sottotask_id), {"blocchi": [], "blocchi_storico": []})
+        voce["blocchi" if b.fonte == "manuale" else "blocchi_storico"].append(
+            {"giorno": b.giorno.isoformat(), "ore": float(b.ore)})
+
+    def _blocchi_unita(task_id, sottotask_id=None):
+        voce = blocchi_per_unita.get((task_id, sottotask_id))
+        return {"blocchi": list(voce["blocchi"]) if voce else [],
+                "blocchi_storico": list(voce["blocchi_storico"]) if voce else []}
 
     # Sottotask raggruppati per task padre, nell'ordine già stabilito dalla
     # query (ordine, id): il dict conserva l'ordine di inserimento.
@@ -2215,6 +2280,9 @@ def task_settimana_dipendente(dipendente_id, settimana=None):
             # dell'accessor `valoreSottotask`, che cade sulla baseline e
             # renderebbe ogni percentuale non-nulla.
             **_nota_ereditata_payload(note_ered_sottotask.get(s.id)),
+            # Consuntivazione a ore: le ore di questo dipendente sul pezzo in
+            # questa settimana. `modificabile` si aggiunge sotto, col task padre.
+            **_blocchi_unita(s.task_id, s.id),
         })
 
     # Ore di questo dipendente in questa settimana, per task: la terza colonna
@@ -2296,9 +2364,14 @@ def task_settimana_dipendente(dipendente_id, settimana=None):
             "ore_iniziale": int(t.ore_stimate or 0),
             "ore_pianificate": pianificate,             # totale del task (contesto)
             "ore_pianificate_settimana": _quota_settimana(t),  # quota settimana
-            "ore_consumate": round(consumate_per_task.get(t.id, 0.0), 1),
+            # 2 DECIMALI, non 1: sono ore da blocchi, NUMERIC(5,2) — quarti d'ora
+            # compresi. La scrittura rifiuta più di 2 decimali (N3) e la lettura
+            # non ne toglie: arrotondando a 1, 2,25 + 5 + 9,5 usciva 16,7. (La
+            # quota di piano `_quota_settimana` resta a 1: è un'altra grandezza.)
+            "ore_consumate": round(consumate_per_task.get(t.id, 0.0), 2),
             # residuo del TASK (non del singolo/settimana): piano − consumato tot.
-            "ore_rimanenti": round(pianificate - consumato_totale_task.get(t.id, 0.0), 1),
+            # 2 decimali per la stessa ragione: il consumato viene dai blocchi.
+            "ore_rimanenti": round(pianificate - consumato_totale_task.get(t.id, 0.0), 2),
             "stato": t.stato,
             # La SCADENZA del task (Tappa 2, 04/09/2026). `in_ritardo` qui
             # accanto dice SE la finestra è chiusa; questa dice QUANDO si
@@ -2330,6 +2403,17 @@ def task_settimana_dipendente(dipendente_id, settimana=None):
             # è il task oggi, `dichiarato` è se ha compilato, questo è la sua
             # dichiarazione. Solo questo può essere attribuito a lui.
             "stato_dichiarato": stato_dichiarato_per_task.get(t.id),
+            # Consuntivazione a ore: le ore sul TASK (sottotask_id NULL). Su un
+            # task scomposto sono quelle messe prima della scomposizione (M8).
+            **_blocchi_unita(t.id),
+            # Se il salvataggio a blocchi accetterebbe questa unità. La regola
+            # è la STESSA della validazione (`_motivo_non_modificabile`): una
+            # riga offerta modificabile e poi rifiutata farebbe fallire la
+            # settimana intera (N15). False sulle righe N21 (task chiuso o
+            # riassegnato) e sui task scomposti, che si compilano sui pezzi.
+            "modificabile": _motivo_non_modificabile(
+                dipendente_id, t.stato, t.dipendente_id,
+                scomposto=t.id in task_scomposti) is None,
         })
 
         # ── Il task come UNITÀ DI LAVORO (Step 4, 07/08/2026) ────────────
@@ -2375,7 +2459,11 @@ def task_settimana_dipendente(dipendente_id, settimana=None):
             # (FK invalida per Postgres, ma scrivibile da un client distratto)
             # deve ricadere sull'eredità come farebbe un NULL.
             out[-1]["sottotask"] = [
-                {**p, "assegnatario_id": p["assegnatario_id"] or t.dipendente_id}
+                {**p, "assegnatario_id": p["assegnatario_id"] or t.dipendente_id,
+                 "modificabile": _motivo_non_modificabile(
+                     dipendente_id, t.stato, t.dipendente_id,
+                     pezzo_stato=p["stato"], pezzo_dipendente_id=p["assegnatario_id"],
+                     task_id=t.id) is None}
                 for p in pezzi
             ]
     return out
@@ -2532,7 +2620,12 @@ def ore_dichiarate_settimana(dipendente_id, settimana=None):
         )
     finally:
         session.close()
-    return round(float(ore_task or 0) + float(ore_assenza or 0), 1)
+    # 2 DECIMALI, e qui non è una questione di display: questo numero decide se
+    # la settimana è ancora COMPILABILE (`settimane_selezionabili`, confronto con
+    # le ore contrattuali). Arrotondato a 1, 39,95h diventavano 40,0 e la
+    # settimana si chiudeva con 3 minuti ancora da dichiarare. Le ore vengono dai
+    # blocchi, NUMERIC(5,2): la soglia si confronta con la loro grana.
+    return round(float(ore_task or 0) + float(ore_assenza or 0), 2)
 
 
 def settimane_selezionabili(dipendente_id):
@@ -3937,17 +4030,55 @@ class ConsuntivoNonValido(Exception):
         self.errori = errori
 
 
-# Le fonti che una sostituzione di unità cancella e riscrive (D1-a). Lo
-# storico MAI: sono le settimane migrate, e nessun salvataggio deve poterle
-# azzerare. `ia` sì: è una proposta pre-caricata in griglia, e quando l'utente
-# salva la sua riga quella proposta diventa il suo dato.
-FONTI_SOSTITUIBILI = ("manuale", "ia")
+# Le fonti che una sostituzione di unità cancella e riscrive: si sostituiscono
+# i blocchi MANUALI dell'unità; lo STORICO resta intoccabile — sono le settimane
+# migrate, e nessun salvataggio deve poterle azzerare.
+FONTI_SOSTITUIBILI = ("manuale",)
 
 TETTO_ORE_GIORNO = 24
 
 
 def _etichetta_unita(u):
     return f"{u['tipo']} {u['id']}"
+
+
+_PEZZO = object()   # sentinella: «non è un pezzo», distinta da uno stato None
+
+
+def _motivo_non_modificabile(dipendente_id, task_stato, task_dipendente_id,
+                             scomposto=False, pezzo_stato=_PEZZO,
+                             pezzo_dipendente_id=None, task_id=None):
+    """Perché un'unità NON è consuntivabile da `dipendente_id`; None se lo è.
+
+    LA REGOLA UNA VOLTA SOLA (N13, M8/M9), per due lettori che non devono poter
+    divergere: la validazione di /salva-blocchi, che ne fa un messaggio di
+    errore, e `/me`, che ne fa il flag `modificabile` della riga. Se la griglia
+    offrisse come modificabile una riga che il salvataggio poi rifiuta, l'intera
+    settimana prenderebbe 400 (N15) per un'incoerenza del sistema, non
+    dell'utente.
+
+    Task (pezzo_stato non passato): non Annullato/Eliminato, assegnato a lui,
+    non scomposto. Pezzo: non Annullato, task padre non Annullato/Eliminato,
+    assegnatario RISOLTO (`pezzo.dipendente_id or task.dipendente_id`) è lui.
+    Sospesi e Completati sono consuntivabili: il lavoro fatto va dichiarabile.
+    Pura: niente query.
+    """
+    if pezzo_stato is _PEZZO:
+        if task_stato in ("Annullato", "Eliminato"):
+            return f"il task è {task_stato}, non si consuntiva"
+        if task_dipendente_id != dipendente_id:
+            return "il task non è assegnato a te"
+        if scomposto:
+            return ("il task è scomposto in sottotask, le ore vanno dichiarate "
+                    "sui singoli pezzi")
+        return None
+    if pezzo_stato == "Annullato":
+        return "il sottotask è Annullato, non si consuntiva"
+    if task_stato in ("Annullato", "Eliminato"):
+        return f"il task padre {task_id} è chiuso dal piano"
+    if (pezzo_dipendente_id or task_dipendente_id) != dipendente_id:
+        return "il sottotask non è assegnato a te"
+    return None
 
 
 def _valida_unita_blocchi(session, dipendente_id, lun, unita):
@@ -3983,7 +4114,7 @@ def _valida_unita_blocchi(session, dipendente_id, lun, unita):
       non viene toccato e il Bloccato sta in DB.
     N14 — UN GIORNO NON SUPERA 24 ORE, contando TUTTE le fonti: i blocchi del
       payload più quelli già in DB del dipendente in quel giorno, esclusi i
-      manuali/ia delle unità che il payload sta sostituendo (verranno
+      manuali delle unità che il payload sta sostituendo (verranno
       cancellati). Lo storico di quelle unità resta nel conto: non si cancella.
       Si valuta solo sulle unità valide, per non sommare ore di unità rifiutate.
     """
@@ -4014,30 +4145,27 @@ def _valida_unita_blocchi(session, dipendente_id, lun, unita):
         et = _etichetta_unita(u)
         if u["tipo"] == "task":
             t = tasks.get(u["id"])
-            if t is None:
-                errori.append(f"{et}: il task non esiste")
-            elif t.stato in ("Annullato", "Eliminato"):
-                errori.append(f"{et}: il task è {t.stato}, non si consuntiva")
-            elif t.dipendente_id != dipendente_id:
-                errori.append(f"{et}: il task non è assegnato a te")
-            elif tipi.get(u["id"]) == "sottotask":
-                errori.append(
-                    f"{et}: il task è scomposto in sottotask, le ore vanno "
-                    f"dichiarate sui singoli pezzi"
-                )
+            motivo = ("il task non esiste" if t is None else _motivo_non_modificabile(
+                dipendente_id, t.stato, t.dipendente_id,
+                scomposto=tipi.get(u["id"]) == "sottotask"))
+            if motivo:
+                errori.append(f"{et}: {motivo}")
             else:
                 chiavi[(u["tipo"], u["id"])] = (u["id"], None)
         else:
             p = pezzi.get(u["id"])
             t = tasks.get(p.task_id) if p else None
             if p is None:
-                errori.append(f"{et}: il sottotask non esiste")
-            elif p.stato == "Annullato":
-                errori.append(f"{et}: il sottotask è Annullato, non si consuntiva")
-            elif t is None or t.stato in ("Annullato", "Eliminato"):
-                errori.append(f"{et}: il task padre {p.task_id} è chiuso dal piano")
-            elif (p.dipendente_id or t.dipendente_id) != dipendente_id:
-                errori.append(f"{et}: il sottotask non è assegnato a te")
+                motivo = "il sottotask non esiste"
+            elif t is None:
+                motivo = f"il task padre {p.task_id} non esiste"
+            else:
+                motivo = _motivo_non_modificabile(
+                    dipendente_id, t.stato, t.dipendente_id,
+                    pezzo_stato=p.stato, pezzo_dipendente_id=p.dipendente_id,
+                    task_id=p.task_id)
+            if motivo:
+                errori.append(f"{et}: {motivo}")
             else:
                 chiavi[(u["tipo"], u["id"])] = (p.task_id, u["id"])
 
@@ -4072,6 +4200,9 @@ def _valida_unita_blocchi(session, dipendente_id, lun, unita):
     sostituite = {chiavi[(u["tipo"], u["id"])] for u in unita
                   if (u["tipo"], u["id"]) in chiavi and u["blocchi"] is not None}
     ore_giorno = {}
+    # Giorni che, per unità, hanno già un blocco che la sostituzione NON cancella
+    # (oggi: lo storico). Servono a N23 qui sotto.
+    intoccabili = set()
     for giorno, t_id, s_id, fonte, ore in session.query(
         BloccoOre.giorno, BloccoOre.task_id, BloccoOre.sottotask_id,
         BloccoOre.fonte, BloccoOre.ore,
@@ -4081,7 +4212,26 @@ def _valida_unita_blocchi(session, dipendente_id, lun, unita):
     ):
         if (t_id, s_id) in sostituite and fonte in FONTI_SOSTITUIBILI:
             continue
+        intoccabili.add((t_id, s_id, giorno))
         ore_giorno[giorno] = ore_giorno.get(giorno, 0) + Decimal(str(ore))
+
+    # N23 — un blocco manuale sullo stesso giorno di un blocco storico della
+    # stessa unità. La UNIQUE (dipendente, giorno, task, sottotask) non include
+    # la fonte, e la sostituzione non cancella lo storico: senza questo
+    # controllo l'inserimento fallirebbe con un IntegrityError, cioè un 500.
+    # Oggi non può capitare dal form (lo storico finisce al 20/07/2026 e le
+    # settimane scrivibili sono le ultime due), ma la regola non deve dipendere
+    # dal calendario.
+    for u in unita:
+        chiave = chiavi.get((u["tipo"], u["id"]))
+        if chiave is None or not u["blocchi"]:
+            continue
+        for giorno, _ore in u["blocchi"]:
+            if (chiave[0], chiave[1], giorno) in intoccabili:
+                errori.append(
+                    f"{_etichetta_unita(u)}: il {giorno.isoformat()} ha già ore "
+                    f"storiche su questa unità, che non si modificano"
+                )
     for u in unita:
         if (u["tipo"], u["id"]) not in chiavi or not u["blocchi"]:
             continue
@@ -4106,16 +4256,228 @@ def salva_blocchi_settimana(dipendente_id, lun, unita):
     UNA sessione per tutto: prima `_valida_unita_blocchi`, poi la scrittura,
     poi un solo commit. Se una regola salta non si è scritto niente (N15).
 
-    Passo 3, sotto-passo 1: SOLO validazione. La scrittura arriva al
-    sotto-passo 2; fino ad allora la funzione valida, non scrive, e lo dice.
+    `unita`: come in `_valida_unita_blocchi`. `blocchi` None = chiave assente.
+
+    1. BLOCCHI — solo per le unità con `blocchi` presente (D3: assente = non
+       toccare le ore). Si sostituiscono i blocchi MANUALI dell'unità in quella
+       settimana; lo storico non si tocca. `[]` = nessun blocco manuale.
+       SOSTITUZIONE PER DIFFERENZA, non cancella-e-riscrivi: si elimina il
+       giorno tolto, si aggiorna il giorno cambiato, si inserisce il giorno
+       nuovo. Un blocco rimandato identico non viene toccato — id e
+       `updated_at` restano — ed è ciò che rende un salvataggio ripetuto
+       davvero idempotente (N8), non solo «uguale nei numeri».
     """
+    from models import BloccoOre, ConsuntivoSottotask
+
     session = get_session()
     try:
-        _valida_unita_blocchi(session, dipendente_id, lun, unita)
-        return {"validato": True, "scritto": False}
-    finally:
+        chiavi = _valida_unita_blocchi(session, dipendente_id, lun, unita)
+        fine_sett = lun + timedelta(days=6)
+
+        # ── 1. BLOCCHI ─────────────────────────────────────────────────────
+        for u in unita:
+            if u["blocchi"] is None:
+                continue
+            task_id, sottotask_id = chiavi[(u["tipo"], u["id"])]
+            q = session.query(BloccoOre).filter(
+                BloccoOre.dipendente_id == dipendente_id,
+                BloccoOre.task_id == task_id,
+                BloccoOre.giorno >= lun, BloccoOre.giorno <= fine_sett,
+                BloccoOre.fonte.in_(FONTI_SOSTITUIBILI),
+            )
+            q = q.filter(BloccoOre.sottotask_id.is_(None) if sottotask_id is None
+                         else BloccoOre.sottotask_id == sottotask_id)
+            esistenti = {b.giorno: b for b in q}
+            nuovi = dict(u["blocchi"])            # giorno -> Decimal
+
+            for giorno, blocco in esistenti.items():
+                if giorno not in nuovi:
+                    session.delete(blocco)
+                elif Decimal(str(blocco.ore)) != nuovi[giorno]:
+                    blocco.ore = nuovi[giorno]
+            for giorno, ore in nuovi.items():
+                if giorno not in esistenti:
+                    session.add(BloccoOre(
+                        dipendente_id=dipendente_id, giorno=giorno,
+                        task_id=task_id, sottotask_id=sottotask_id,
+                        ore=ore, fonte="manuale",
+                    ))
+        session.flush()
+
+        # ── 3. DICHIARAZIONE ───────────────────────────────────────────────
+        # Su `consuntivi` per un task, su `consuntivo_sottotask` per un pezzo,
+        # riga (unità, dipendente, settimana).
+        #
+        # LA SEMANTICA DEI CAMPI (D3), con una MICRO-ASIMMETRIA VOLUTA:
+        #   stato, nota, residuo   assente = non toccare · null = cancella.
+        #                          Sono CONTENUTI: mandarli null vuol dire «non
+        #                          c'è più», e la griglia rimanda l'unità intera.
+        #   presa_visione          assente o null = non toccare · false = ritira
+        #                          · true = conferma.
+        #                          È una CONFERMA («l'ho guardata, è ferma»), non un
+        #                          contenuto: non si spegne per omissione. Il vecchio
+        #                          /salva la scriveva solo a True apposta. Non
+        #                          uniformarla agli altri campi.
+        #
+        # SI SCRIVE SOLO CIÒ CHE CAMBIA. `compilato` e `data_compilazione` si
+        # toccano solo se almeno un campo cambia davvero (o la riga è nuova):
+        # rimandare la stessa dichiarazione non deve lasciare traccia (N8).
+        stati_da_propagare = {}
+        for u in unita:
+            task_id, sottotask_id = chiavi[(u["tipo"], u["id"])]
+            campi = {}
+            if u["tocca_stato"]:
+                campi["stato_dichiarato"] = u["stato"]
+            if u["tocca_nota"]:
+                campi["nota"] = _nota_task(u["nota"])
+            if u["tocca_residuo"]:
+                campi["ore_stimate_residue"] = u["residuo"]
+            if u["presa_visione"] is not None:
+                campi["presa_visione"] = u["presa_visione"]
+            if not campi:
+                continue
+            # Tutti «vuoti» (stato/nota/residuo null, presa visione false):
+            # cancellano contenuti. Su una riga che NON esiste non c'è niente da
+            # cancellare, e crearla vuota con `compilato=True` farebbe risultare
+            # dichiarata un'unità mai toccata — succederebbe a ogni riga della
+            # griglia rimandata così come `/me` l'ha restituita.
+            solo_cancellazioni = all(v is None or v is False for v in campi.values())
+
+            if sottotask_id is None:
+                riga = session.query(Consuntivo).filter(
+                    Consuntivo.task_id == task_id,
+                    Consuntivo.dipendente_id == dipendente_id,
+                    Consuntivo.settimana == lun,
+                ).first()
+                nuova = None if riga is not None or solo_cancellazioni else Consuntivo(
+                    task_id=task_id, dipendente_id=dipendente_id, settimana=lun,
+                    ore_dichiarate=0, presa_visione=False)
+                # N19: lo stato di un task atomico si riporta su Task.stato,
+                # dopo il commit (vedi 4). Un pezzo resta sulla sua riga.
+                if u["tocca_stato"] and u["stato"] is not None:
+                    stati_da_propagare[task_id] = u["stato"]
+            else:
+                riga = session.query(ConsuntivoSottotask).filter(
+                    ConsuntivoSottotask.sottotask_id == sottotask_id,
+                    ConsuntivoSottotask.dipendente_id == dipendente_id,
+                    ConsuntivoSottotask.settimana == lun,
+                ).first()
+                nuova = None if riga is not None or solo_cancellazioni else ConsuntivoSottotask(
+                    sottotask_id=sottotask_id, dipendente_id=dipendente_id,
+                    settimana=lun, presa_visione=False)
+
+            if riga is None and nuova is None:
+                continue                      # solo cancellazioni su una riga che non c'è
+            cambiato = nuova is not None
+            if nuova is not None:
+                session.add(nuova)
+                riga = nuova
+
+            for campo, valore in campi.items():
+                if getattr(riga, campo) != valore:
+                    setattr(riga, campo, valore)
+                    cambiato = True
+            if cambiato:
+                riga.compilato = True
+                riga.data_compilazione = datetime.utcnow()
+        session.flush()
+
+        # ── 2. DOPPIA SCRITTURA di `consuntivi.ore_dichiarate` (N9) ─────────
+        # Nessun lettore la legge più (passo 2), ma `/salva` la scrive ancora e
+        # qualcosa potrebbe leggerla di nascosto: finché la colonna esiste deve
+        # dire il vero. Il valore NON si calcola qui: si LEGGE dalla vista, nella
+        # stessa sessione, dopo il flush — così coincide con `ore_settimanali`
+        # per costruzione, non per un secondo conto tenuto allineato.
+        # Sulla riga del TASK anche quando l'unità è un pezzo: `consuntivi` non
+        # ha righe per sottotask, e la vista somma task + pezzi per task.
+        # Nessun ricalcolo a valle (i :3497/:3507/:3789 del vecchio motore):
+        # le ore sono fatti, una settimana non dipende da un'altra.
+        # `motivo_fermo` non si replica: non ha lettori (colonna morta, passo 5).
+        task_toccati = sorted({task_id for task_id, _s in chiavi.values()})
+        if task_toccati:
+            somme = dict(
+                session.query(OreSettimanali.c.task_id, OreSettimanali.c.ore)
+                .filter(
+                    OreSettimanali.c.dipendente_id == dipendente_id,
+                    OreSettimanali.c.settimana == lun,
+                    OreSettimanali.c.task_id.in_(task_toccati),
+                ).all()
+            )
+            righe = {
+                r.task_id: r for r in session.query(Consuntivo).filter(
+                    Consuntivo.task_id.in_(task_toccati),
+                    Consuntivo.dipendente_id == dipendente_id,
+                    Consuntivo.settimana == lun,
+                )
+            }
+            for task_id in task_toccati:
+                somma = float(somme.get(task_id) or 0.0)
+                riga = righe.get(task_id)
+                if riga is None:
+                    # Riga mancante: la si crea solo se ci sono ore da riportare
+                    # (tipicamente le ore di un pezzo, che non ha una riga sua sul
+                    # task). `compilato=True` come il vecchio :3503 — una
+                    # dichiarazione sui pezzi È una compilazione.
+                    if somma > 0:
+                        session.add(Consuntivo(
+                            task_id=task_id, dipendente_id=dipendente_id,
+                            settimana=lun, ore_dichiarate=somma,
+                            compilato=True, data_compilazione=datetime.utcnow(),
+                        ))
+                elif riga.ore_dichiarate != somma:
+                    riga.ore_dichiarate = somma
+
+        session.commit()
+    except Exception:
         session.rollback()
+        raise
+    finally:
         session.close()
+
+    # ── 4. PROPAGAZIONE dello stato su Task.stato — DOPO il commit ─────────
+    # Solo i task ATOMICI (N19): lo stato di un pezzo resta sulla sua riga.
+    # Passa da `modifica_task`, l'unico punto di scrittura di Task.stato (lo
+    # stesso del Cantiere e del vecchio /salva).
+    #
+    # FUORI DALLA TRANSAZIONE, ed è una scelta (C3-a): `modifica_task` apre una
+    # sessione sua. Se fallisce, ore e dichiarazione sono già salve — e lo si
+    # DICE con un avviso, non con un 200 muto né con un 500 che farebbe credere
+    # perso un salvataggio riuscito.
+    #
+    # Si salta, senza avviso, come nel vecchio /salva: il task già in quello
+    # stato (nessuna scrittura → salvataggio ripetuto idempotente) e i task
+    # Sospesi o Annullati, decisioni del PM che il dipendente non vede e non
+    # deve poter disfare. Uno stato cancellato (null) non si propaga: non dice
+    # quale stato dare al task.
+    avvisi = []
+    if stati_da_propagare:
+        try:
+            s = get_session()
+            try:
+                correnti = dict(s.query(Task.id, Task.stato)
+                                .filter(Task.id.in_(list(stati_da_propagare))).all())
+            finally:
+                s.close()
+        except Exception as e:
+            correnti = None
+            avvisi.append(
+                f"Ore e dichiarazioni salvate, ma lo stato dei task non è stato "
+                f"riportato ({e}). Riprova il salvataggio."
+            )
+        for task_id, stato in sorted(stati_da_propagare.items()) if correnti is not None else []:
+            corrente = correnti.get(task_id)
+            if corrente == stato or corrente in ("Sospeso", "Annullato"):
+                continue
+            try:
+                if not modifica_task(task_id, stato=stato):
+                    raise RuntimeError("task non trovato")
+            except Exception as e:
+                avvisi.append(
+                    f"Task {task_id}: ore e dichiarazione salvate, ma lo stato "
+                    f"«{stato}» non è stato riportato sul task ({e}). Riprova il "
+                    f"salvataggio."
+                )
+    return {"scritto": True, "avvisi": avvisi}
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -4242,7 +4604,9 @@ def _serializza_stato_progetto(pid):
                 "data_inizio": _iso(f.data_inizio), "data_fine": _iso(f.data_fine),
                 "stato": f.stato,
                 "ore_vendute": f.ore_vendute, "ore_pianificate": f.ore_pianificate,
-                "ore_consumate": round(fase_consumate, 1),
+                # 2 decimali: somma delle ore da blocchi dei task (che qui sopra
+                # escono già non arrotondate).
+                "ore_consumate": round(fase_consumate, 2),
                 "task": task_out,
             })
 
@@ -4517,7 +4881,8 @@ def margini_economia():
                 "azienda_id": p.azienda_id,
                 "azienda_nome": azienda_nome.get(p.azienda_id),
                 "valore_contratto": valore,
-                "ore_consuntivate": round(ore_consumate, 1),
+                # 2 decimali: somma di ore da blocchi (i costi accanto lo sono già).
+                "ore_consuntivate": round(ore_consumate, 2),
                 # tre costi e tre margini
                 "costo_venduto": round(costo_venduto, 2),
                 "costo_pianificato": round(costo_pianificato, 2),

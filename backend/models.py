@@ -1161,7 +1161,7 @@ class BloccoOre(Base):
 
     NESSUN TETTO A 24 ORE nel CHECK, e non per dimenticanza: i blocchi `storico`
     sono intere SETTIMANE appoggiate sul lunedì (fino a 42h nei dati migrati).
-    «Un giorno non supera 24h» è una regola sui blocchi `manuale`/`ia` e su più
+    «Un giorno non supera 24h» è una regola sui blocchi `manuale` e su più
     righe insieme — sta nella validazione di scrittura, non in un CHECK di riga.
 
     `ore` È NUMERIC(5,2), non Float: le somme devono tornare al centesimo, e la
