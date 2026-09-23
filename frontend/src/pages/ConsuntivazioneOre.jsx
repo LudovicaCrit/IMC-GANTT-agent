@@ -15,6 +15,10 @@
  * LA MATRICE
  *   righe   = le unità di /me: un task, oppure — se scomposto — i suoi pezzi.
  *             Raggruppate per progetto, nell'ordine in cui /me le restituisce.
+ *             Più le righe AGGIUNTE A MANO (sotto-passo 5): un task proprio che
+ *             /me non propone — fuori finestra, sospeso, chiuso da poco — scelto
+ *             da `AggiungiRiga`. Vivono solo nel browser finché non le si salva
+ *             con delle ore: vedi `avvertenze` più sotto.
  *   colonne = lunedì-venerdì della settimana, ognuno in mattina/pomeriggio.
  *             Il weekend non c'è: il backend non accetta ore di sabato e
  *             domenica (N2).
@@ -30,6 +34,7 @@ import GuscioConsuntivazione from '../components/consuntivazione/GuscioConsuntiv
 import SelettoreSettimana from '../components/consuntivazione/SelettoreSettimana'
 import PromemoriaNota from '../components/consuntivazione/PromemoriaNota'
 import BarraSalvataggio from '../components/consuntivazione/BarraSalvataggio'
+import AggiungiRiga from '../components/consuntivazione/AggiungiRiga'
 import { fmtOre, fmtGiorno } from '../components/consuntivazione/formato'
 import {
   SOGLIE, GIORNI_LAVORATIVI, monteGiornaliero, livelloGiorno, livelloSettimana, giornoCoperto,
@@ -112,8 +117,15 @@ const orePerGiorno = (blocchi) =>
  * della scomposizione (M8) — una riga in sola lettura con quelle: stanno nei
  * totali, quindi devono stare anche nella matrice.
  * `modificabile` arriva da /me, che usa la stessa regola del salvataggio.
+ *
+ * `aggiunte` sono i task scelti a mano (sotto-passo 5). Entrano nel gruppo del
+ * loro progetto se c'è già, altrimenti ne aprono uno — e allora `interna` resta
+ * `null`, perché la tipologia del progetto la sa /me e /api/tasks non la porta:
+ * meglio nessuna etichetta che una etichetta inventata. Sono righe piene a
+ * tutti gli effetti (modificabili, celle vuote, testa editabile) tranne per
+ * `aggiunta: true`, che serve alla × per toglierle e all'avvertenza.
  */
-export function costruisciGruppi(taskSettimana, dipendenteId) {
+export function costruisciGruppi(taskSettimana, dipendenteId, aggiunte = []) {
   const gruppi = new Map()
   for (const t of taskSettimana ?? []) {
     if (!gruppi.has(t.progetto_id)) {
@@ -161,6 +173,21 @@ export function costruisciGruppi(taskSettimana, dipendenteId) {
         blocchi: p.blocchi ?? [], storico: p.blocchi_storico ?? [],
       })
     }
+  }
+
+  for (const t of aggiunte) {
+    if (!gruppi.has(t.progetto_id)) {
+      gruppi.set(t.progetto_id, {
+        progetto_id: t.progetto_id, progetto_nome: t.progetto_nome || t.progetto_id,
+        interna: null, righe: [],
+      })
+    }
+    gruppi.get(t.progetto_id).righe.push({
+      chiave: `task:${t.id}`, tipo: 'task', id: t.id, nome: t.nome, codice: t.id,
+      modificabile: true, aggiunta: true,
+      stato: null, nota: null, residuo: null, presaVisione: false,
+      blocchi: [], storico: [],
+    })
   }
   return [...gruppi.values()]
 }
@@ -228,6 +255,10 @@ export default function ConsuntivazioneOre() {
   const [modifiche, setModifiche] = useState({})
   // …e alla testa della riga: { [chiaveRiga]: { stato?, nota?, residuo? } }
   const [modificheTesta, setModificheTesta] = useState({})
+  // I task aggiunti a mano (sotto-passo 5), nell'ordine in cui li si sceglie.
+  // Non sono uno stato del server: esistono solo finché non si ricarica /me —
+  // e dopo un salvataggio con ore tornano da soli, per N21.
+  const [aggiunte, setAggiunte] = useState([])
   const [salvataggio, setSalvataggio] = useState(null)   // null | 'invio' | 'ok' | messaggio
   const [erroriSalvataggio, setErroriSalvataggio] = useState([])
   const [avvisi, setAvvisi] = useState([])
@@ -240,6 +271,7 @@ export default function ConsuntivazioneOre() {
         setDati(d)
         setModifiche({})
         setModificheTesta({})
+        setAggiunte([])
         setSalvataggio(dopoSalvataggio ? 'ok' : null)
         setErroriSalvataggio([])
         setAvvisi(dopoSalvataggio?.avvisi ?? [])
@@ -252,14 +284,23 @@ export default function ConsuntivazioneOre() {
   const vista = useMemo(() => {
     if (!dati) return null
     const giorni = giorniSettimana(dati.settimana)
-    const gruppi = costruisciGruppi(dati.task_settimana, dati.dipendente_id)
+    const gruppi = costruisciGruppi(dati.task_settimana, dati.dipendente_id, aggiunte)
     const righe = gruppi.flatMap((g) => g.righe).filter((r) => r.tipo !== 'intestazione')
     const monteSettimana = Number(dati.ore_contrattuali) || 0
     // Il monte GIORNALIERO non esiste nel modello: si ricava dal settimanale su
     // 5 giorni (40 → 8, 20 → 4). Serve solo a dividere mattina e pomeriggio.
     const metaMonteGiorno = monteSettimana / 5 / 2
-    return { giorni, gruppi, righe, monteSettimana, metaMonteGiorno }
-  }, [dati])
+    // Le unità già in griglia: non si offrono una seconda volta nella
+    // selezione, che darebbe due righe sullo stesso task.
+    const taskInGriglia = new Set([
+      ...(dati.task_settimana ?? []).map((t) => t.task_id),
+      ...aggiunte.map((t) => t.id),
+    ])
+    // I progetti su cui la persona sta già lavorando: servono all'ordinamento
+    // della selezione, non a filtrarla.
+    const progettiAttivi = new Set((dati.task_settimana ?? []).map((t) => t.progetto_id))
+    return { giorni, gruppi, righe, monteSettimana, metaMonteGiorno, taskInGriglia, progettiAttivi }
+  }, [dati, aggiunte])
 
   // Le celle e la testa correnti di ogni riga, e le righe DAVVERO modificate:
   // una riga toccata e riportata ai valori di partenza non conta come modifica.
@@ -271,12 +312,20 @@ export default function ConsuntivazioneOre() {
   //       dichiarato senza dire a che punto è;
   //   D4  Bloccato senza nota: un fermo va spiegato;
   //   «resta» non numerico o negativo.
+  //
+  // Le AVVERTENZE invece non fermano niente: constatano una conseguenza che
+  // l'utente non può dedurre. Oggi ce n'è una sola — una riga aggiunta a mano
+  // senza ore. /me ripropone un task fuori finestra solo se ci sono BLOCCHI su
+  // quella settimana (N21): uno stato o una nota da soli non bastano, e alla
+  // prossima apertura la riga non ci sarebbe più. Il dato salvato resta in DB,
+  // ma sparirebbe dalla vista senza che nessuno l'abbia detto.
   const stato = useMemo(() => {
     if (!vista) return null
     const celle = {}
     const teste = {}
     const cambi = {}
     const problemi = {}
+    const avvertenze = {}
     const modificate = []
     for (const r of vista.righe) {
       celle[r.chiave] = celleRiga(r, vista.giorni, modifiche[r.chiave], vista.metaMonteGiorno)
@@ -284,6 +333,9 @@ export default function ConsuntivazioneOre() {
       const testa = testaCorrente(r, modificheTesta[r.chiave])
       teste[r.chiave] = testa
       const blocchi = blocchiDaCelle(celle[r.chiave])
+      if (r.aggiunta && blocchi.length === 0) {
+        avvertenze[r.chiave] = 'senza ore questa riga non tornerà: alla prossima apertura questo task non è fra quelli della settimana'
+      }
       const celleCambiate = Boolean(modifiche[r.chiave]) && !stessiBlocchi(r.blocchi, blocchi)
       if (!(celleCambiate || testa.statoCambiato || testa.notaCambiata || testa.residuoCambiato)) continue
       modificate.push(r)
@@ -320,7 +372,7 @@ export default function ConsuntivazioneOre() {
     const giorniOltreTetto = vista.giorni.filter((g) => livelloPerGiorno[g.iso] === 'tetto')
 
     return {
-      celle, teste, cambi, problemi, modificate, totaleGiorno,
+      celle, teste, cambi, problemi, avvertenze, modificate, totaleGiorno,
       totaleSettimana: arrotonda2(totaleSettimana),
       monteGiorno, livelloPerGiorno, giorniCoperti, giorniOltreTetto,
       livelloSettimana: livelloSettimana(totaleSettimana, vista.monteSettimana),
@@ -344,6 +396,22 @@ export default function ConsuntivazioneOre() {
         [riga.chiave]: { ...(prev[riga.chiave] ?? {}), [giorno]: { ...correnti[giorno], [meta]: valore } },
       }
     })
+    setSalvataggio(null)
+    setErroriSalvataggio([])
+  }
+
+  /* Una riga aggiunta a mano si toglie con la ×: è un ripensamento, non una
+   * modifica al DB. Si portano via anche le sue modifiche pendenti — altrimenti
+   * resterebbero appese a una chiave che non ha più riga, e tornerebbero a
+   * galla se si riaggiungesse lo stesso task. */
+  const togliAggiunta = (riga) => {
+    setAggiunte((prev) => prev.filter((t) => t.id !== riga.id))
+    const scarta = (prev) => {
+      const { [riga.chiave]: _via, ...resto } = prev
+      return resto
+    }
+    setModifiche(scarta)
+    setModificheTesta(scarta)
     setSalvataggio(null)
     setErroriSalvataggio([])
   }
@@ -389,6 +457,18 @@ export default function ConsuntivazioneOre() {
       setErroriSalvataggio(problemi)
       setSalvataggio(problemi[0])
       return
+    }
+    // Righe aggiunte a mano che si salvano SENZA ore: il dato va in DB ma la
+    // riga non tornerà (N21 richiede i blocchi). L'avvertenza è già accanto
+    // alla riga; qui si chiede conferma, perché dopo il salvataggio la riga
+    // sparisce dalla griglia e non c'è modo di accorgersene.
+    const senzaOre = stato.modificate.filter((r) => stato.avvertenze[r.chiave])
+    if (senzaOre.length) {
+      const elenco = senzaOre.map((r) => `· ${r.nome}`).join('\n')
+      const quante = senzaOre.length === 1 ? 'Questa attività aggiunta a mano non ha ore' : 'Queste attività aggiunte a mano non hanno ore'
+      if (!window.confirm(
+        `${quante}:\n${elenco}\n\nStato e nota si salvano, ma senza ore la riga non tornerà alla prossima apertura della settimana. Salvare lo stesso?`
+      )) return
     }
     const unita = stato.modificate.map((r) => {
       const testa = stato.teste[r.chiave]
@@ -528,11 +608,17 @@ export default function ConsuntivazioneOre() {
               <React.Fragment key={gruppo.progetto_id}>
                 <tr className="bg-gray-800/40 border-t border-gray-800">
                   <td colSpan={3 + vista.giorni.length * 2} className="px-3 py-1.5">
-                    <span className={`px-2 py-0.5 rounded text-[10px] uppercase tracking-wider font-medium mr-2 ${
-                      gruppo.interna ? 'bg-gray-700 text-gray-300' : 'bg-blue-900/50 text-blue-300 border border-blue-800'
-                    }`}>
-                      {gruppo.interna ? 'Interna' : 'Progetto'}
-                    </span>
+                    {/* La tipologia la sa /me. Un gruppo nato da una riga
+                        aggiunta a mano ha `interna: null` (vedi
+                        costruisciGruppi): nessuna etichetta, invece di
+                        dichiarare «Progetto» senza saperlo. */}
+                    {gruppo.interna != null && (
+                      <span className={`px-2 py-0.5 rounded text-[10px] uppercase tracking-wider font-medium mr-2 ${
+                        gruppo.interna ? 'bg-gray-700 text-gray-300' : 'bg-blue-900/50 text-blue-300 border border-blue-800'
+                      }`}>
+                        {gruppo.interna ? 'Interna' : 'Progetto'}
+                      </span>
+                    )}
                     <span className="font-medium text-gray-200">{gruppo.progetto_nome}</span>
                   </td>
                 </tr>
@@ -540,6 +626,8 @@ export default function ConsuntivazioneOre() {
                   ? <RigaIntestazione key={r.chiave} riga={r} colonne={vista.giorni.length * 2 + 2} />
                   : <RigaUnita key={r.chiave} riga={r} giorni={vista.giorni} celle={stato.celle[r.chiave]}
                                testa={stato.teste[r.chiave]} problemi={stato.problemi[r.chiave]}
+                               avvertenza={stato.avvertenze[r.chiave]}
+                               onRimuovi={r.aggiunta ? () => togliAggiunta(r) : null}
                                onCambiaTesta={(campo, valore) => cambiaTesta(r, campo, valore)}
                                modificata={stato.modificate.includes(r)}
                                bloccata={soloLettura || salvataggio === 'invio'} oggi={oggi}
@@ -583,6 +671,24 @@ export default function ConsuntivazioneOre() {
         Mattina e pomeriggio sono solo un aiuto per comporre la giornata: si salvano le ore del giorno.
         Le ore <span className="text-amber-300/80">storiche</span> vengono dai consuntivi settimanali precedenti e non si modificano.
       </p>
+
+      {/* Fuori programma: un task proprio che la settimana non propone. La
+          selezione riceve già decise le due liste che la riguardano — cosa
+          escludere e cosa mettere in cima — perché sono fatti di QUESTA
+          settimana, e la pagina è l'unica che li ha. */}
+      {!soloLettura && (
+        <AggiungiRiga
+          lunedi={dati.settimana}
+          dipendenteId={dati.dipendente_id}
+          escludi={vista.taskInGriglia}
+          progettiAttivi={vista.progettiAttivi}
+          disabilitato={salvataggio === 'invio'}
+          onScegli={(task) => {
+            setAggiunte((prev) => prev.some((t) => t.id === task.id) ? prev : [...prev, task])
+            setSalvataggio(null)
+          }}
+        />
+      )}
 
       {!soloLettura && (
         <BarraSalvataggio
@@ -718,7 +824,8 @@ function TestaModificabile({ riga: r, testa, problemi, disabilitata, ferma, onCa
 }
 
 /* ── Riga di un'unità ─────────────────────────────────────────────── */
-function RigaUnita({ riga: r, giorni, celle, testa, problemi, modificata, bloccata, oggi, onCambia, onCambiaTesta }) {
+function RigaUnita({ riga: r, giorni, celle, testa, problemi, avvertenza, modificata, bloccata, oggi,
+                     onCambia, onCambiaTesta, onRimuovi }) {
   const storico = orePerGiorno(r.storico)
   const totale = arrotonda2(
     Object.values(celle).reduce((s, c) => s + c.mattina + c.pomeriggio, 0)
@@ -737,14 +844,26 @@ function RigaUnita({ riga: r, giorni, celle, testa, problemi, modificata, blocca
           {r.pezzo && <span className="text-gray-600 mr-1">↳</span>}
           {r.nome}
         </p>
-        <p className="text-[11px] text-gray-600 flex flex-wrap gap-x-2">
+        <p className="text-[11px] text-gray-600 flex flex-wrap gap-x-2 items-center">
           <span>{r.codice}</span>
           {r.previste != null && <span>previste {fmtOre(r.previste)}h</span>}
           {r.inRitardo && <span className="text-amber-500/90">⚠ scaduto</span>}
+          {r.aggiunta && (
+            <span className="px-1.5 rounded bg-blue-950/60 text-blue-300 border border-blue-900">
+              aggiunta da te
+            </span>
+          )}
           {!r.modificabile && (
             <span className="px-1.5 rounded bg-gray-800 text-gray-400 border border-gray-700">
               sola lettura · {r.motivoSolaLettura}
             </span>
+          )}
+          {onRimuovi && (
+            <button type="button" onClick={onRimuovi} disabled={bloccata}
+                    data-togli-riga={r.chiave}
+                    title="Togli questa riga dalla settimana"
+                    aria-label={`Togli ${r.nome} dalla settimana`}
+                    className="text-gray-600 hover:text-red-400 disabled:opacity-40">✕</button>
           )}
         </p>
       </td>
@@ -755,8 +874,17 @@ function RigaUnita({ riga: r, giorni, celle, testa, problemi, modificata, blocca
           lo stato e la nota, lasciando vuote le celle dei giorni. */}
       <td className="px-3 py-2" data-testa={r.chiave}>
         {r.secondaria ? null : modificabileTesta ? (
-          <TestaModificabile riga={r} testa={testa} problemi={problemi} disabilitata={bloccata}
-                             ferma={ferma} onCambia={onCambiaTesta} />
+          <>
+            <TestaModificabile riga={r} testa={testa} problemi={problemi} disabilitata={bloccata}
+                               ferma={ferma} onCambia={onCambiaTesta} />
+            {/* Non è un errore e non ferma il salvataggio: è una conseguenza
+                che dal form non si vede (vedi `avvertenze`). */}
+            {avvertenza && (
+              <p className="text-[11px] text-amber-400/90 mt-1" data-avvertenza={r.chiave}>
+                ⓘ {avvertenza}
+              </p>
+            )}
+          </>
         ) : (
           <>
             <div className="flex flex-wrap items-center gap-1.5">
