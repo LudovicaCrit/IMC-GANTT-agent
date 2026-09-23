@@ -1580,11 +1580,11 @@ def ore_derivate_unita(tipo, avanzamenti, settimana=None, session=None):
             out[sid] = {
                 "task_id": task_id,
                 # round a 1 decimale: è la precisione di TUTTE le ore di questo
-                # modulo (ore_settimanali_task, ore_dichiarate_settimana,
-                # lista_fasi_progetto...). Serve anche a tagliare il rumore
-                # float, che qui è tutt'altro che raro: un Δ del 10% su una
-                # stima da 3h vale 0.30000000000000004 senza arrotondamento, e
-                # le stime piccole sono la norma sui sottotask.
+                # modulo (ore_settimanali_task, lista_fasi_progetto...). Serve
+                # anche a tagliare il rumore float, che qui è tutt'altro che
+                # raro: un Δ del 10% su una stima da 3h vale
+                # 0.30000000000000004 senza arrotondamento, e le stime piccole
+                # sono la norma sui sottotask.
                 "ore": round(ore, 1),
                 "baseline_pct": base,
                 "delta_pct": delta,
@@ -2570,64 +2570,6 @@ def _etichetta_intervallo(lun):
             f"{dom.day} {_MESI_ABBR[dom.month - 1]}")
 
 
-def ore_dichiarate_settimana(dipendente_id, settimana=None):
-    """Ore COPERTE dal dipendente in una settimana (float): ore dichiarate sui
-    task + ore di assenza. È l'input del criterio di completezza.
-
-    Le assenze contano. Chi è in ferie tutta la settimana HA compilato
-    correttamente — ha dichiarato l'assenza. Se contassimo solo i Consuntivi
-    resterebbe a 0 ore, quindi «incompleto», e il sistema gli chiederebbe in
-    eterno di fare una cosa che ha già fatto.
-
-    Indipendente dai task: somma TUTTI i Consuntivi del dip in quella
-    settimana, anche quelli su task che non intersecano più la finestra.
-    `task_settimana_dipendente` invece somma solo i task che vede — va bene
-    per il totale mostrato accanto alla lista, non per decidere se una
-    settimana è «compilata» (un task chiuso e uscito dalla finestra
-    renderebbe la settimana incompleta per sempre).
-
-    Range lun..dom, non `== lunedì`: rete di sicurezza per righe storiche o
-    scritte da altre fonti con una data non normalizzata. Sommarle è il
-    comportamento corretto in quel caso.
-    """
-    from sqlalchemy import func
-    from models import PresenzaSettimanale
-
-    lun = _lunedi(settimana)
-    dom = lun + timedelta(days=6)
-    session = get_session()
-    try:
-        ore_task = (
-            session.query(func.sum(OreSettimanali.c.ore))
-            .filter(
-                OreSettimanali.c.dipendente_id == dipendente_id,
-                OreSettimanali.c.settimana >= lun,
-                OreSettimanali.c.settimana <= dom,
-            )
-            .scalar()
-        )
-        # Due query invece di un join: le presenze stanno su una tabella
-        # separata con cardinalità 1-per-settimana, un join produrrebbe
-        # righe moltiplicate e una somma gonfiata.
-        ore_assenza = (
-            session.query(func.sum(PresenzaSettimanale.ore_assenza))
-            .filter(
-                PresenzaSettimanale.dipendente_id == dipendente_id,
-                PresenzaSettimanale.settimana >= lun,
-                PresenzaSettimanale.settimana <= dom,
-            )
-            .scalar()
-        )
-    finally:
-        session.close()
-    # 2 DECIMALI, e qui non è una questione di display: questo numero decide se
-    # la settimana è ancora COMPILABILE (`settimane_selezionabili`, confronto con
-    # le ore contrattuali). Arrotondato a 1, 39,95h diventavano 40,0 e la
-    # settimana si chiudeva con 3 minuti ancora da dichiarare. Le ore vengono dai
-    # blocchi, NUMERIC(5,2): la soglia si confronta con la loro grana.
-    return round(float(ore_task or 0) + float(ore_assenza or 0), 2)
-
-
 def settimane_selezionabili(dipendente_id):
     """Le settimane che il dipendente può aprire in consuntivazione: la
     corrente e la precedente. Nient'altro — non si compila in anticipo, e il
@@ -2635,20 +2577,29 @@ def settimane_selezionabili(dipendente_id):
 
     Ogni voce: {lunedi (ISO), etichetta, compilabile}.
 
-    `compilabile` sulla settimana corrente è sempre True. Sulla precedente è
-    True solo se INCOMPLETA: il recupero serve a chi non ha compilato, non a
-    rivedere ciò che è chiuso. Criterio di completezza: ore dichiarate >= ore
-    contrattuali del dipendente.
+    FINESTRA TEMPORALE, NON MONTE ORE (fix N17). Entrambe le voci sono
+    `compilabile`: una settimana è aperta finché è «la corrente» o «la
+    precedente», e si chiude quando diventa due-settimane-fa — uscendo dalla
+    lista, non cambiando flag. Il tempo che passa è l'unica cosa che chiude una
+    settimana.
 
-    Nota: la voce resta nella lista anche quando `compilabile` è False — il
-    frontend la mostra disabilitata («già compilata») invece di farla sparire,
-    così l'utente capisce perché non può tornarci.
+    Prima la precedente si chiudeva al raggiungimento delle ore contrattuali
+    («hai finito, chiudi»). Con la consuntivazione a ore quella soglia
+    bloccava due casi legittimi: chi fa oltre-monte non poteva dichiarare le
+    ore oltre le 40, e chi aveva sbagliato non poteva più correggersi. Il
+    recupero (chi si è dimenticato) e il ritocco (chi ha sbagliato) sono la
+    stessa operazione sulla stessa settimana: distinguerli chiedeva di sapere
+    perché l'utente sta scrivendo, e il conto delle ore non lo sa. La finestra
+    di UNA settimana è già il limite al ritocco del passato.
+
+    `compilabile` resta nella risposta, sempre True, perché è un contratto già
+    consumato dal frontend (il selettore settimana e le due pagine di
+    consuntivazione): sparisce con la pulizia del frontend, non qui.
+
+    Aritmetica di date pura: non tocca il database.
     """
     corrente = _lunedi()
     precedente = corrente - timedelta(days=7)
-
-    ore_sett = int(get_dipendente(dipendente_id).get("ore_sett") or 0)
-    dichiarate_prec = ore_dichiarate_settimana(dipendente_id, precedente)
 
     return [
         {
@@ -2659,7 +2610,7 @@ def settimane_selezionabili(dipendente_id):
         {
             "lunedi": precedente.isoformat(),
             "etichetta": f"Settimana scorsa ({_etichetta_intervallo(precedente)})",
-            "compilabile": dichiarate_prec < ore_sett,
+            "compilabile": True,
         },
     ]
 
@@ -3502,8 +3453,9 @@ def salva_consuntivo(dipendente_id, settimana, ore_per_task, stati_per_task,
             #
             # Scrivere un avanzamento a W cambia la BASELINE di chi viene dopo, e
             # le ore già derivate a valle diventano sbagliate. Il caso reale è il
-            # recupero: `settimane_selezionabili` riapre la settimana precedente se
-            # incompleta, quindi si compila W, poi si torna su W−1.
+            # recupero: `settimane_selezionabili` tiene aperta la settimana
+            # precedente finché è la precedente, quindi si compila W, poi si
+            # torna su W−1.
             #   W dichiarato 60% con baseline 0   → 60% delle ore, scritto.
             #   poi W−1 dichiarato 40%            → 40% delle ore.
             #   ma ora il Δ giusto di W è 60−40 = 20%, non 60%.

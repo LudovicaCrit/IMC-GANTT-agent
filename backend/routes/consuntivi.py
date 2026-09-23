@@ -55,8 +55,8 @@ DETTAGLIO ENDPOINT
    - Query param opzionale `settimana` (ISO YYYY-MM-DD, qualsiasi giorno
      della settimana → normalizzato al lunedì da data.lunedi_settimana).
      Assente = settimana corrente. Ammesse solo corrente e precedente:
-     qualsiasi altra → 400. Serve al recupero di chi non ha compilato in
-     tempo; non si compila in anticipo né si riscrive un mese fa.
+     qualsiasi altra → 400. Serve a chi non ha compilato in tempo e a chi
+     deve correggersi; non si compila in anticipo né si riscrive un mese fa.
    - Restituisce: nome, profilo, ore_contrattuali, settimana (lunedì ISO),
      settimane_disponibili, totale_ore, task_settimana, compilato.
    - Ogni voce di `task_settimana` porta `in_ritardo` (bool): DERIVATO
@@ -64,11 +64,11 @@ DETTAGLIO ENDPOINT
      non è uno stato che il dipendente sceglie — non è nella tendina: è una
      segnalazione che il sistema calcola e il frontend mostra accanto al task.
    - `settimane_disponibili`: le due settimane apribili, ciascuna con
-     lunedi/etichetta/compilabile. CONSULTABILE ≠ COMPILABILE: la scorsa si
-     apre sempre in lettura, ma `compilabile` è False se già completa (ore
-     dichiarate >= ore contrattuali) — il recupero serve a chi non ha
-     compilato, non a rivedere ciò che è chiuso. La guardia in scrittura sta
-     su POST /salva, non qui.
+     lunedi/etichetta/compilabile. La finestra è TEMPORALE: corrente e
+     precedente sono entrambe aperte, in lettura e in scrittura, e una
+     settimana si chiude quando diventa due-settimane-fa — cioè esce dalla
+     lista. Le ore già dichiarate non chiudono niente (fix N17). La guardia in
+     scrittura sta su POST /salva, non qui.
 
 3. POST /api/consuntivi/salva
    - Pattern Y (self-or-manager): l'user può salvare SOLO i propri
@@ -508,7 +508,7 @@ def _valida_dichiarazioni_sottotask(req: "SalvaConsuntivoRequest", settimana):
        che esclude gli Annullati dalla somma e tiene i Sospesi.
 
     3. MONOTONIA. Recuperare una settimana passata è ammesso
-       (`settimane_selezionabili` apre la precedente se incompleta), ma
+       (`settimane_selezionabili` tiene aperta la precedente), ma
        l'avanzamento non può tornare indietro nel tempo: dichiarare oggi che
        la settimana scorsa il pezzo era al 70% quando questa settimana risulta
        al 40% descrive un lavoro che si è disfatto.
@@ -1098,16 +1098,16 @@ def consuntivi_settimana_me(
     dichiarate attaccate (0 se non ancora compilato). La logica riusabile
     sta in data.task_settimana_dipendente (la userà anche la Home-utente).
 
-    Il param `settimana` serve al recupero all'indietro: chi non ha compilato
-    entro domenica deve poter tornare sulla settimana scorsa. Si ferma lì —
-    non si compila in anticipo e non si riscrive un mese fa. La
-    normalizzazione al lunedì passa da data.lunedi_settimana (la stessa regola
-    della scrittura: mai ricalcolarla qui).
+    Il param `settimana` serve all'indietro: chi non ha compilato entro
+    domenica deve poter tornare sulla settimana scorsa, e chi ha sbagliato
+    deve potersi correggere. Si ferma lì — non si compila in anticipo e non si
+    riscrive un mese fa. La normalizzazione al lunedì passa da
+    data.lunedi_settimana (la stessa regola della scrittura: mai ricalcolarla
+    qui).
 
-    Attenzione alla differenza fra CONSULTABILE e COMPILABILE: la settimana
-    scorsa è sempre consultabile (la si apre in sola lettura), ma è
-    `compilabile` solo se incompleta. La guardia sulla scrittura sta su
-    POST /salva, non qui.
+    La settimana scorsa si apre in lettura E in scrittura finché è la scorsa
+    (fix N17): la finestra è temporale, le ore già dichiarate non la chiudono.
+    La guardia sulla scrittura sta su POST /salva, non qui.
     """
     if not current_user.dipendente_id:
         raise HTTPException(400, "Utente non collegato a un dipendente")
@@ -1181,15 +1181,11 @@ def consuntivi_settimana_me(
         "totale_ore": round(totale, 2),
         "task_settimana": task_settimana,
         "unita": unita,
-        # ⚠️ DIVERGENZA NOTA — `compilato` e `compilabile` (dentro
-        # settimane_disponibili) misurano due cose diverse e possono
-        # contraddirsi:
-        #   compilato   = totale_ore > 0, sui soli task VISIBILI questa
-        #                 settimana. Vero appena si dichiara un'ora.
-        #   compilabile = ore dichiarate + assenze < ore contrattuali, su
-        #                 TUTTI i consuntivi del dip. Guarda la copertura.
-        # Una settimana con 4h su 40 è `compilato: True` e `compilabile:
-        # True` insieme. `compilato` è un contratto già consumato dal
+        # `compilato` = totale_ore > 0, sui soli task VISIBILI questa
+        # settimana: vero appena si dichiara un'ora, e NON dice che la
+        # settimana è coperta. Non ha più un gemello che lo contraddice —
+        # `compilabile` (dentro settimane_disponibili) dal fix N17 guarda solo
+        # il calendario ed è sempre True. Resta un contratto già consumato dal
         # frontend: si allinea quando rifacciamo la pagina, non prima.
         "compilato": totale > 0,
     }
@@ -1208,8 +1204,8 @@ def salva_consuntivo_endpoint(
     salva_consuntivo per il meccanismo dei duplicati che ne seguiva.
 
     La guardia sta QUI, non solo nel frontend: si scrive sulla settimana
-    corrente sempre, sulla precedente solo se ancora incompleta. Nascondere il
-    bottone non è una guardia — la POST resta raggiungibile.
+    corrente e sulla precedente, su nient'altro. Nascondere il bottone non è
+    una guardia — la POST resta raggiungibile.
     """
     # User può salvare SOLO i propri consuntivi (anti-impersonation)
     if current_user.ruolo_app != "manager" and req.dipendente_id != current_user.dipendente_id:
@@ -1240,18 +1236,12 @@ def salva_consuntivo_endpoint(
     if scelta is None:
         raise HTTPException(
             400,
-            f"Settimana '{lun.isoformat()}' non compilabile: sono ammesse solo "
-            f"la corrente e la precedente ({', '.join(disponibili)})",
-        )
-    if not scelta["compilabile"]:
-        raise HTTPException(
-            400,
-            f"La {scelta['etichetta'].lower()} risulta già compilata: il "
-            f"recupero è previsto per chi non ha compilato, non per rivedere "
-            f"una settimana chiusa",
+            f"Settimana '{lun.isoformat()}' fuori dalla finestra: puoi "
+            f"consuntivare solo questa settimana e la precedente "
+            f"({', '.join(disponibili)})",
         )
 
-    # Dopo le guardie sulla settimana: la nota di un blocco si valuta sulla
+    # Dopo la guardia sulla settimana: la nota di un blocco si valuta sulla
     # settimana bersaglio, che qui è ormai decisa.
     _valida_blocchi_motivati(req, lun)
     _valida_dichiarazioni_sottotask(req, lun)
@@ -1312,6 +1302,8 @@ def _settimana_scrivibile(dipendente_id, settimana_raw):
     """Lunedì della settimana richiesta, se il dipendente può scriverci; 400
     altrimenti. Le regole sono quelle dello strato dati (`lunedi_settimana`,
     `settimane_selezionabili`): qui c'è solo la loro traduzione in errori.
+    Una sola regola da tradurre — la finestra corrente+precedente (N17): la
+    settimana scade col calendario, non col monte ore.
 
     ⚠ DUPLICA la traduzione che sta dentro `salva_consuntivo_endpoint`, e di
     proposito: /salva non si tocca finché esce al passo 5 (D7), e con lui esce
@@ -1325,20 +1317,13 @@ def _settimana_scrivibile(dipendente_id, settimana_raw):
             f"Settimana '{settimana_raw}' non è una data ISO valida "
             f"(atteso YYYY-MM-DD)",
         )
-    disponibili = {s["lunedi"]: s for s in settimane_selezionabili(dipendente_id)}
-    scelta = disponibili.get(lun.isoformat())
-    if scelta is None:
+    disponibili = [s["lunedi"] for s in settimane_selezionabili(dipendente_id)]
+    if lun.isoformat() not in disponibili:
         raise HTTPException(
             400,
-            f"Settimana '{lun.isoformat()}' non compilabile: sono ammesse solo "
-            f"la corrente e la precedente ({', '.join(disponibili)})",
-        )
-    if not scelta["compilabile"]:
-        raise HTTPException(
-            400,
-            f"La {scelta['etichetta'].lower()} risulta già compilata: il "
-            f"recupero è previsto per chi non ha compilato, non per rivedere "
-            f"una settimana chiusa",
+            f"Settimana '{lun.isoformat()}' fuori dalla finestra: puoi "
+            f"consuntivare solo questa settimana e la precedente "
+            f"({', '.join(disponibili)})",
         )
     return lun
 
