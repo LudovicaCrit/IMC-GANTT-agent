@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { request } from '@playwright/test'
-import { esegui } from './dati_prova.js'
+import { esegui, scenario } from './dati_prova.js'
 import { UTENTI, statoAuth, CARTELLA_AUTH } from './utenti.js'
 
 const QUI = path.dirname(fileURLToPath(import.meta.url))
@@ -20,6 +20,8 @@ const QUI = path.dirname(fileURLToPath(import.meta.url))
 export default async function apparecchia() {
   console.log('\n── dati di prova ──')
   esegui(['--pulisci', '--crea'])
+  console.log('── scenario sottotask ──')
+  scenario(['--cancella', '--crea'])
 
   fs.mkdirSync(CARTELLA_AUTH, { recursive: true })
   for (const u of Object.values(UTENTI)) {

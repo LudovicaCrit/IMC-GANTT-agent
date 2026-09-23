@@ -35,6 +35,29 @@ python e2e/dati_prova.py --impronta    # per controllare in qualunque momento
 python e2e/dati_prova.py --pulisci     # se un giro è morto a metà
 ```
 
+## Lo scenario sottotask
+
+`scenario_sottotask.py` crea il progetto `PPROVA` — **[PROVA] Scenario
+sottotask** — con quattro task e nove pezzi che coprono il mondo-scomposto:
+scomposto normale (con le ore messe sul task prima della scomposizione, M8),
+task di un collega con un pezzo affidato a Helena (C2), pezzo Annullato con ore
+già dichiarate (N21 sui pezzi), e task coi pezzi tutti annullati che torna a
+essere un task-unità (M9). Serve perché il database di sviluppo ha **zero**
+sottotask: senza, metà della Consuntivazione non ha righe su cui girare.
+
+I dipendenti sono quelli veri (Helena D004, Roberto D002) e si toccano solo per
+riferimento. Tutto pende dal progetto `PPROVA`: cancellarlo porta via lo
+scenario intero.
+
+```bash
+python e2e/scenario_sottotask.py --crea       # per guardarselo nella griglia
+python e2e/scenario_sottotask.py --stato      # cosa c'è adesso
+python e2e/scenario_sottotask.py --cancella   # via tutto
+```
+
+La suite lo crea e lo cancella da sé a ogni giro; i comandi qui sopra servono
+quando lo si vuole tenere in piedi per guardarlo con i propri occhi.
+
 ## Cosa copre oggi
 
 `aggiungi-riga.spec.js` — la selezione «Ho lavorato su altro» della griglia a
@@ -42,6 +65,15 @@ ore (passo 4, sotto-passo 5): cosa la lista offre e cosa no, il giro completo
 aggiungi → ore → salva → riapri, l'avvertenza sulla riga salvata senza ore, la
 × che toglie una riga aggiunta per sbaglio, e il fatto che a un manager la lista
 resti comunque la sua.
+
+`sottotask-griglia.spec.js` — il ramo scomposto, sopra lo scenario qui sopra:
+intestazione + righe-pezzo, le ore pre-scomposizione in sola lettura, una
+dichiarazione su un pezzo che sopravvive alla riapertura, C2, l'annullato-con-ore
+visibile e non scrivibile, il task-unità di M9. Porta un `test.fixme`: il caso
+T952, dove /me dice che il task è compilabile e la griglia non gli disegna la
+riga.
+
+I selettori della matrice stanno in `griglia.js`, uno solo per tutti gli spec.
 
 I test sono `serial` e nell'ordine in cui stanno nel file: il primo guarda la
 lista, il secondo ci salva dentro e cambia quello che il primo guarderebbe.

@@ -22,10 +22,9 @@
  */
 import { test, expect } from '@playwright/test'
 import { UTENTI, statoAuth } from './utenti.js'
+import { GRIGLIA, riga as rigaUnita, totaleRiga, metti, apriPannello } from './griglia.js'
 
 test.describe.configure({ mode: 'serial' })
-
-const GRIGLIA = '/consuntivazione/ore'
 
 // I task di prova (vedi dati_prova.py).
 const T_ATTIVO = 'T900'     // su P002, progetto su cui Helena sta già lavorando
@@ -35,22 +34,8 @@ const GIA_IN_GRIGLIA = ['T015', 'T024', 'T026', 'T057', 'T063', 'T079', 'T091', 
 // Suoi, ma con la finestra chiusa da mesi: fuori dall'orizzonte del mese.
 const FUORI_ORIZZONTE = ['T004', 'T014', 'T020', 'T030', 'T043', 'T104', 'T109']
 
-const riga = (page, taskId) => page.locator(`[data-riga="task:${taskId}"]`)
-
-/** Apre la selezione, o la lascia aperta se già lo è: il pannello resta aperto
- *  dopo che si è scelto un task, e richiederne l'apertura non deve fallire. */
-const apriPannello = async (page) => {
-  const pannello = page.locator('[data-aggiungi-riga="pannello"]')
-  if (await pannello.count() === 0) await page.locator('[data-aggiungi-riga="apri"]').click()
-  await expect(pannello).toBeVisible()
-}
-
-/** Sceglie le ore di una mezza giornata sulla riga di un task. */
-async function metti(page, taskId, indiceGiorno, meta, ore) {
-  const giorno = await page.locator('[data-totale-giorno]').nth(indiceGiorno)
-    .getAttribute('data-totale-giorno')
-  await riga(page, taskId).locator(`[data-cella="${giorno}:${meta}"] select`).selectOption(String(ore))
-}
+// Qui tutte le righe sono task: l'aiutante condiviso vuole anche il tipo.
+const riga = (page, taskId) => rigaUnita(page, 'task', taskId)
 
 test.describe('da utente normale (Helena)', () => {
   test.use({ storageState: statoAuth(UTENTI.helena) })
@@ -107,12 +92,12 @@ test.describe('da utente normale (Helena)', () => {
       .toContainText('senza ore questa riga non tornerà')
 
     await riga(page, T_ATTIVO).locator('select[aria-label^="Stato"]').selectOption('In corso')
-    await metti(page, T_ATTIVO, 0, 'mattina', 2)
-    await metti(page, T_ATTIVO, 0, 'pomeriggio', 1.5)
+    await metti(page, 'task', T_ATTIVO, 0, 'mattina', 2)
+    await metti(page, 'task', T_ATTIVO, 0, 'pomeriggio', 1.5)
 
     // Con le ore l'avvertenza sparisce: la riga tornerà da sola (N21).
     await expect(page.locator(`[data-avvertenza="task:${T_ATTIVO}"]`)).toHaveCount(0)
-    await expect(page.locator(`[data-totale-riga="task:${T_ATTIVO}"]`)).toHaveText('3,5')
+    await expect(totaleRiga(page, 'task', T_ATTIVO)).toHaveText('3,5')
 
     await page.getByRole('button', { name: 'Salva' }).click()
     await expect(page.getByText('✓ Salvato')).toBeVisible()
@@ -121,7 +106,7 @@ test.describe('da utente normale (Helena)', () => {
     await page.reload()
     await expect(page.locator('[data-sintesi]')).toBeVisible()
     await expect(riga(page, T_ATTIVO)).toBeVisible()
-    await expect(page.locator(`[data-totale-riga="task:${T_ATTIVO}"]`)).toHaveText('3,5')
+    await expect(totaleRiga(page, 'task', T_ATTIVO)).toHaveText('3,5')
     // Non è più «aggiunta da te»: ora è una riga della settimana come le altre.
     await expect(riga(page, T_ATTIVO)).not.toContainText('aggiunta da te')
     // E non si può aggiungere una seconda volta.

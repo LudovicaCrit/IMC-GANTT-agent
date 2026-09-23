@@ -11,9 +11,18 @@ const RADICE = path.resolve(QUI, '..')
  * JavaScript. Qui c'è solo il ponte.
  */
 export function esegui(argomenti) {
+  return python('dati_prova.py', argomenti)
+}
+
+/** Lo scenario del mondo-scomposto (`scenario_sottotask.py`). */
+export function scenario(argomenti) {
+  return python('scenario_sottotask.py', argomenti)
+}
+
+function python(script, argomenti) {
   const out = execFileSync(
     path.join(RADICE, '.venv', 'bin', 'python'),
-    [path.join(QUI, 'dati_prova.py'), ...argomenti],
+    [path.join(QUI, script), ...argomenti],
     { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
   process.stdout.write(out)
   return out

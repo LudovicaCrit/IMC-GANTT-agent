@@ -40,6 +40,7 @@ load_dotenv(os.path.join(RADICE, "backend", ".env"))
 from sqlalchemy import text  # noqa: E402
 from data_db_impl import get_session  # noqa: E402
 from models import Task, BloccoOre, Consuntivo  # noqa: E402
+from scenario_sottotask import TASK as TASK_SCENARIO  # noqa: E402
 
 DIPENDENTE = "D004"          # Helena Ullah — l'utente `user` del seed
 TASK_PROVA = [
@@ -82,13 +83,15 @@ def pulisci():
 
 
 def impronta():
-    """md5 dello storico che questa verifica NON deve toccare.
+    """md5 dello storico che nessuna verifica deve toccare.
 
-    I due task di prova sono esclusi: prima della verifica non esistono, dopo la
-    pulizia nemmeno, ma tenerli fuori rende l'impronta confrontabile anche a
-    verifica in corso.
+    Fuori dal conto stanno TUTTI gli id sintetici — i due task di prova e i
+    quattro dello scenario sottotask. Prima della verifica non esistono e dopo
+    la pulizia nemmeno, ma tenerli fuori rende l'impronta confrontabile anche a
+    verifica in corso, cioè quando lo scenario è in piedi: è l'unico modo perché
+    «md5 PRIMA» e «md5 DOPO» misurino la stessa cosa.
     """
-    ids = tuple(t[0] for t in TASK_PROVA)
+    ids = tuple(t[0] for t in TASK_PROVA) + TASK_SCENARIO
     session = get_session()
     try:
         blocchi = session.execute(text(
@@ -98,10 +101,23 @@ def impronta():
         consuntivi = session.execute(text(
             "select dipendente_id, settimana, task_id, ore_dichiarate, stato_dichiarato, nota "
             "from consuntivi where task_id not in :ids order by 1,2,3"), {"ids": ids}).all()
+        # Anche i TASK, e non per zelo: salvare una dichiarazione PROPAGA lo
+        # stato sul task (`salva_blocchi_settimana` → `modifica_task`). Se una
+        # verifica scrivesse per sbaglio su un task vero, i blocchi tornerebbero
+        # a posto con la pulizia e lo stato no: resterebbe cambiato in silenzio.
+        task = session.execute(text(
+            "select id, stato, dipendente_id, data_inizio, data_fine "
+            "from task where id not in :ids order by 1"), {"ids": ids}).all()
+        # E i DIPENDENTI, che nessuno script di prova deve toccare: sono persone
+        # vere, referenziate e basta.
+        dipendenti = session.execute(text(
+            "select id, nome, ruolo_id, ore_sett, costo_ora, attivo from dipendenti order by 1")).all()
     finally:
         session.close()
     print(f"  blocchi_ore  {hashlib.md5(repr(blocchi).encode()).hexdigest()}  ({len(blocchi)} righe)")
     print(f"  consuntivi   {hashlib.md5(repr(consuntivi).encode()).hexdigest()}  ({len(consuntivi)} righe)")
+    print(f"  task         {hashlib.md5(repr(task).encode()).hexdigest()}  ({len(task)} righe)")
+    print(f"  dipendenti   {hashlib.md5(repr(dipendenti).encode()).hexdigest()}  ({len(dipendenti)} righe)")
 
 
 if __name__ == "__main__":
