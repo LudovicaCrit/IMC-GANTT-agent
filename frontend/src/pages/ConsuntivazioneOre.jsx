@@ -593,8 +593,15 @@ export default function ConsuntivazioneOre() {
   if (errore) return <GuscioConsuntivazione><p className="text-red-400">Errore: {errore}</p></GuscioConsuntivazione>
   if (!dati || !vista || !stato) return <GuscioConsuntivazione />
 
-  const settimanaInfo = dati.settimane_disponibili?.find((s) => s.lunedi === dati.settimana)
-  const soloLettura = settimanaInfo ? !settimanaInfo.compilabile : false
+  // `soloLettura` stava qui, e non c'è più (passo 5.2). Aveva due cause
+  // possibili e le ha perse tutt'e due:
+  //   · la settimana COMPILATA (ore dichiarate ≥ monte) — morta col fix N17,
+  //     che ha reso la chiusura temporale: `compilabile` è True per costruzione
+  //     su tutt'e due le settimane che /me restituisce;
+  //   · la settimana FUORI FINESTRA — non è mai esistita come sola lettura:
+  //     /me risponde 400 («non consultabile») e questa pagina mostra l'errore,
+  //     non una griglia da guardare senza toccare.
+  // Una settimana che si apre è una settimana che si compila.
   const oggi = oggiIso()
   const nome = dati.nome?.split(' ')[0] ?? ''
 
@@ -614,7 +621,6 @@ export default function ConsuntivazioneOre() {
       <SelettoreSettimana
         settimane={dati.settimane_disponibili}
         attiva={dati.settimana}
-        soloLettura={soloLettura}
         onScegli={(lunedi) => {
           if (haPendenti && !window.confirm('Hai modifiche non salvate. Cambiare settimana le perderà. Continuare?')) return
           carica(lunedi)
@@ -716,7 +722,7 @@ export default function ConsuntivazioneOre() {
                                onRimuovi={r.aggiunta ? () => togliAggiunta(r) : null}
                                onCambiaTesta={(campo, valore) => cambiaTesta(r, campo, valore)}
                                modificata={stato.modificate.includes(r)}
-                               bloccata={soloLettura || salvataggio === 'invio'} oggi={oggi}
+                               bloccata={salvataggio === 'invio'} oggi={oggi}
                                onCambia={(giorno, meta, valore) => cambiaCella(r, giorno, meta, valore)} />
                 )}
               </React.Fragment>
@@ -769,7 +775,7 @@ export default function ConsuntivazioneOre() {
           rimprovero per essersi presentati. Il promemoria ha senso quando si è
           cominciato: allora quelle rimaste indietro si vedono per quello che
           sono. */}
-      {!soloLettura && (haPendenti || stato.totaleSettimana > 0) && (
+      {(haPendenti || stato.totaleSettimana > 0) && (
         <BannerScoperti scoperti={stato.senzaSpiegazione} onVai={vaiAllaRiga} />
       )}
 
@@ -777,30 +783,26 @@ export default function ConsuntivazioneOre() {
           selezione riceve già decise le due liste che la riguardano — cosa
           escludere e cosa mettere in cima — perché sono fatti di QUESTA
           settimana, e la pagina è l'unica che li ha. */}
-      {!soloLettura && (
-        <AggiungiRiga
-          lunedi={dati.settimana}
-          dipendenteId={dati.dipendente_id}
-          escludi={vista.taskInGriglia}
-          progettiAttivi={vista.progettiAttivi}
-          disabilitato={salvataggio === 'invio'}
-          onScegli={(task) => {
-            setAggiunte((prev) => prev.some((t) => t.id === task.id) ? prev : [...prev, task])
-            setSalvataggio(null)
-          }}
-        />
-      )}
+      <AggiungiRiga
+        lunedi={dati.settimana}
+        dipendenteId={dati.dipendente_id}
+        escludi={vista.taskInGriglia}
+        progettiAttivi={vista.progettiAttivi}
+        disabilitato={salvataggio === 'invio'}
+        onScegli={(task) => {
+          setAggiunte((prev) => prev.some((t) => t.id === task.id) ? prev : [...prev, task])
+          setSalvataggio(null)
+        }}
+      />
 
-      {!soloLettura && (
-        <BarraSalvataggio
-          stato={salvataggio}
-          haPendenti={haPendenti}
-          nModifiche={stato.modificate.length}
-          onSalva={salva}
-          errori={erroriSalvataggio}
-          avvisi={avvisi}
-        />
-      )}
+      <BarraSalvataggio
+        stato={salvataggio}
+        haPendenti={haPendenti}
+        nModifiche={stato.modificate.length}
+        onSalva={salva}
+        errori={erroriSalvataggio}
+        avvisi={avvisi}
+      />
     </GuscioConsuntivazione>
   )
 }

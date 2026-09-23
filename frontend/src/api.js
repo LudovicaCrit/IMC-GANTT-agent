@@ -556,9 +556,9 @@ export async function fetchHomeDashboard() {
 //  CONSUNTIVI
 // ═════════════════════════════════════════════════════════════════════════
 
-export async function salvaConsuntivo(data) {
-  return apiFetch(`${API_BASE}/consuntivi/salva`, { method: 'POST', body: data });
-}
+// `salvaConsuntivo` (POST /consuntivi/salva) stava qui: era la porta della
+// pagina a cursore, cancellata col passo 5.2. La route esiste ancora nel
+// backend e se ne va al passo 5.3 — da qui non la chiama più nessuno.
 
 export async function salvaBlocchi(data) {
   // Consuntivazione a ore (griglia): { settimana, unita: [{tipo, id, …, blocchi}] }.

@@ -218,11 +218,13 @@ function BloccoAttenzione({ ramo, onApri }) {
  *   2. cosa è fermo e perché       (le note ereditate, F-2)
  *   3. cosa scade a breve          (`data_fine`, aggiunta a /me per questo)
  *
- * IL CONTATORE usa `unitaCompilabili`/`unitaDichiarata` da _shared: le stesse
- * funzioni della Consuntivazione, spostate lì apposta. Se contassero in due modi
- * diversi, la stessa persona vedrebbe «3/8» qui e «4/8» là senza sapere a chi
- * credere. Le mappe di modifiche pendenti sono vuote: in Home non si compila,
- * si guarda ciò che è già salvato.
+ * IL CONTATORE usa `unitaCompilabili`/`unitaDichiarata` da _shared: la stessa
+ * definizione di «unità di lavoro» che usa la Consuntivazione, tenuta in un
+ * posto solo. Se contassero in due modi diversi, la stessa persona vedrebbe
+ * «3/8» qui e «4/8» là senza sapere a chi credere. Qui non si compila, si
+ * guarda ciò che è già salvato: le due funzioni leggono il payload di /me e
+ * basta (fino al passo 5.2 prendevano anche le modifiche pendenti della pagina
+ * a cursore, che non esiste più).
  *
  * LE INTERNE SONO SEPARATE, col flag `interna` che /me porta già: un corso e un
  * task-cliente non chiedono la stessa attenzione, e mescolarli allunga la lista
@@ -232,8 +234,8 @@ const GIORNI_IMMINENTE = 7
 
 function LeMieCose({ me, onVaiACompilare }) {
   const task = me?.task_settimana ?? []
-  const unita = unitaCompilabili(task, me?.dipendente_id, {}, {})
-  const fatte = unita.filter((u) => unitaDichiarata(u.riga, u.pendenti)).length
+  const unita = unitaCompilabili(task, me?.dipendente_id)
+  const fatte = unita.filter(unitaDichiarata).length
   const totali = unita.length
 
   const oggi = new Date(); oggi.setHours(0, 0, 0, 0)
@@ -279,7 +281,7 @@ function LeMieCose({ me, onVaiACompilare }) {
       </div>
 
       {/* Il contatore: la barra dice a colpo d'occhio quanto manca. */}
-      <div className="flex items-center gap-3 mb-4">
+      <div className="flex items-center gap-3 mb-4" data-contatore-unita={`${fatte}/${totali}`}>
         <span className="text-sm text-gray-400">
           <span className="font-data text-gray-100 text-lg">{fatte}</span>
           <span className="text-gray-600">/{totali}</span> compilate

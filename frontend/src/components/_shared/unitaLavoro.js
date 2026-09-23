@@ -4,90 +4,85 @@
  * ═════════════════════════════════════════════════════════════════════════
  *
  * ESTRATTO da ConsuntivazioneUser.jsx il 04/09/2026, quando la Home ha avuto
- * bisogno dello stesso conteggio per «le mie cose». Non è una copia: è uno
- * SPOSTAMENTO, e la ragione è che due copie avrebbero risposto in modo diverso
- * alla stessa domanda. Il contatore della Consuntivazione e quello della Home
- * devono dire lo stesso numero — se divergessero, l'utente vedrebbe «3/8» in
- * una pagina e «4/8» nell'altra sugli stessi dati, senza modo di capire quale
- * creda.
+ * bisogno dello stesso conteggio per «le mie cose». Da allora la pagina da cui
+ * era stato estratto è stata cancellata (passo 5.2, 23/09/2026) e il chiamante
+ * è rimasto uno solo: il contatore della Home. Il file resta qui e non torna
+ * dentro la Home perché la domanda «questa unità è dichiarata?» è la stessa che
+ * fa la griglia quando decide cosa mandare — se un giorno le due risposte
+ * dovessero divergere, questo è il posto dove accorgersene.
  *
  * Entrambe le funzioni sono PURE: nessuna fetch, nessuno stato. Si testano
- * senza montare una pagina, ed è così che sono state verificate.
+ * senza montare una pagina.
  */
 
 /* ── «Questa unità è stata dichiarata?» ────────────────────────────────
  * Nodo F-1. La domanda è UNA e la risposta sta in UN posto, perché la fanno
  * in due: un TASK ATOMICO e un SOTTOTASK. Il payload di /me li rende
- * simmetrici apposta — «i tre campi che il frontend serve per rendere lo
- * slider del task, gemelli di quelli che ogni pezzo porta già» — quindi lo
- * stesso criterio attraversa entrambi senza un `if` sul tipo.
+ * simmetrici apposta, quindi lo stesso criterio attraversa entrambi senza un
+ * `if` sul tipo.
  *
- * `riga`     : la riga COME ARRIVA DAL SERVER (t o p), non filtrata da accessor.
- * `pendenti` : la modifica locale non ancora salvata — `modifiche[task_id]` per
- *              un task, `modificheSottotask[id]` per un pezzo. Le due mappe
- *              hanno grana diversa e restano separate: qui si passa quella
- *              giusta, la funzione non deve saperlo.
+ * LE ORE HANNO PRESO IL POSTO DELLA PERCENTUALE (passo 5.2). Fino al
+ * 23/09/2026 la prima cosa che si guardava era `riga.percentuale`: era il
+ * cursore, la dichiarazione principale del vecchio mondo. Nel mondo a blocchi
+ * la dichiarazione principale sono le ORE, e `percentuale` è una colonna che
+ * nessuno scrive più e che sparisce al passo 5.6 — continuare a leggerla
+ * avrebbe reso il contatore sempre più cieco a mano a mano che i dati vecchi
+ * invecchiavano, e poi rotto di colpo al drop.
  *
- * SI LEGGE IL CAMPO GREZZO, MAI `valore()`/`valoreSottotask()`. Quegli
- * accessor cadono sulla baseline quando la dichiarazione manca
- * (`p.percentuale ?? p.baseline_pct`) — è giusto per uno slider, che non deve
- * mai ripartire da zero, ed è fatale qui: `percentuale` non sarebbe MAI null e
- * ogni unità risulterebbe dichiarata. Il contatore direbbe sempre M/M.
+ * `blocchi` sono le ore MANUALI di questa settimana su questa unità, nella
+ * stessa forma in cui la griglia le rimanda. `blocchi_storico` NON conta: sono
+ * ore migrate dai consuntivi vecchi, in sola lettura, e non sono una
+ * dichiarazione fatta questa settimana da questa persona.
  *
- * F-2 aggiungerà qui la PRESA VISIONE del fermo — un quinto termine in questo
- * `||`, e nient'altro da toccare: è la ragione per cui questa funzione esiste
- * separata invece di stare inline nel `useMemo`.
+ * Gli altri tre termini restano quelli di prima, e sono il motivo per cui
+ * «dichiarata» non vuol dire «ha delle ore»: un lavoro fermo si dichiara con
+ * lo stato e la nota, senza ore (N6), e chi l'ha fatto ha compilato.
  */
-export const unitaDichiarata = (riga, pendenti) => {
-  // 1. Modifiche pendenti: contano SUBITO, prima del salvataggio. Chi muove
-  //    lo slider deve vedere il contatore salire, altrimenti sembra rotto.
-  //    Solo i campi che sono una dichiarazione: `ore_effettive` non c'è
-  //    (decisione presa) e `ore` è ormai derivata, non scritta a mano.
-  if (pendenti && (pendenti.percentuale !== undefined ||
-                   pendenti.bloccato !== undefined ||
-                   pendenti.nota !== undefined ||
-                   // Nodo F-2: il gesto appena fatto, non ancora salvato.
-                   pendenti.presaVisione !== undefined)) return true
-
-  // 2. Quello che il server ha già registrato per QUESTA settimana.
-  //    `percentuale` è `d.percentuale if d else None`: null = non pervenuta.
-  if (riga.percentuale != null) return true
+export const unitaDichiarata = (riga) => {
+  if ((riga.blocchi ?? []).length > 0) return true
   if (riga.stato_dichiarato != null) return true
   if ((riga.nota ?? '').trim() !== '') return true
-  // Nodo F-2: «l'ho guardata, è ancora ferma» è una dichiarazione a tutti gli
-  // effetti — è il motivo per cui questo nodo esiste. NON si legge
-  // `nota_ereditata`: è il promemoria di una settimana precedente, non una
-  // traccia di questa, e contarla direbbe «dichiarato» di chi non ha aperto
-  // la pagina.
+  // «L'ho guardata, è ancora ferma» è una dichiarazione a tutti gli effetti.
+  // NON si legge `nota_ereditata`: è il promemoria di una settimana
+  // precedente, non una traccia di questa, e contarla direbbe «dichiarato» di
+  // chi non ha aperto la pagina.
   if (riga.presa_visione === true) return true
-
   return false
 }
+
+/* ── «Scomposto» vuol dire CHE HA PEZZI VIVI ──────────────────────────
+ * Gemella della costante omonima in ConsuntivazioneOre.jsx, e per la stessa
+ * ragione: `Annullato` è lo stato con cui il PM toglie un pezzo dal PIANO, e
+ * un task i cui pezzi sono stati annullati tutti torna a essere un'unità di
+ * lavoro (M9). La lista dei pezzi che /me restituisce NON è vuota in quel caso
+ * — ci restano dentro gli annullati su cui ci sono ore (N21) — quindi
+ * `pezzi.length` non è la domanda giusta.
+ *
+ * È lo stesso identico confronto del backend (`tipo_unita_per_task` e
+ * `task_scomposti`). Se di là cambia, questa è una delle due righe da cambiare.
+ */
+const PEZZO_ANNULLATO = 'Annullato'
+const haPezziVivi = (pezzi) => pezzi.some((p) => p.stato !== PEZZO_ANNULLATO)
 
 /* ── Le unità COMPILABILI della settimana ──────────────────────────────
  * Nodo F-1. L'unità di conteggio non è il task: è il pezzo di lavoro su cui
  * si dichiara. Un task scomposto NON conta per sé — «lo stato vive sui pezzi»
  * — contano i suoi sottotask, uno per uno. Un task con 3 pezzi vale 3.
+ * Un task i cui pezzi sono tutti annullati torna a contare per uno: è M9, ed è
+ * la stessa riga che la griglia disegna compilabile.
  *
  * COMPILABILI, non «mostrate». Un pezzo affidato a un collega compare in /me
- * ma è in sola lettura (`bloccatoInput = soloLettura || !mio` in
- * PezzoSottotask): contarlo renderebbe il denominatore IRRAGGIUNGIBILE — 2/5
- * per sempre, con tre unità che chi guarda non può toccare in nessun modo. Un
- * contatore a cui non si può arrivare non è un obiettivo, è un rimprovero.
+ * ma è in sola lettura: contarlo renderebbe il denominatore IRRAGGIUNGIBILE —
+ * 2/5 per sempre, con tre unità che chi guarda non può toccare in nessun modo.
+ * Un contatore a cui non si può arrivare non è un obiettivo, è un rimprovero.
+ * Per lo stesso motivo restano fuori i pezzi ANNULLATI: che abbiano ore o no,
+ * nessuno ci può più scrivere.
  * I task atomici non hanno questo problema: /me li filtra già per dipendente.
- *
- * Restituisce coppie {riga, pendenti} già appaiate alla mappa locale giusta,
- * così il chiamante non deve più distinguere i due tipi.
  */
-export const unitaCompilabili = (taskSettimana, dipendenteId, modifiche, modificheSottotask) =>
+export const unitaCompilabili = (taskSettimana, dipendenteId) =>
   (taskSettimana ?? []).flatMap((t) => {
     const pezzi = t.sottotask ?? []
-    // La chiave `sottotask` arriva da /me SOLO sui task scomposti: la sua
-    // presenza è il discriminante, come nel submit (`if (pezzi.length) continue`).
-    if (pezzi.length === 0) {
-      return [{ riga: t, pendenti: modifiche[t.task_id] }]
-    }
-    return pezzi
-      .filter((p) => p.assegnatario_id === dipendenteId)
-      .map((p) => ({ riga: p, pendenti: modificheSottotask[p.id] }))
+    if (!haPezziVivi(pezzi)) return [t]
+    return pezzi.filter((p) =>
+      p.stato !== PEZZO_ANNULLATO && p.assegnatario_id === dipendenteId)
   })

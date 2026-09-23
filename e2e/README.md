@@ -91,6 +91,12 @@ tendina, le righe in sola lettura che non ci entrano mai, il silenzio su una
 settimana ancora vuota, e il salvataggio che passa senza chiedere niente
 lasciando il promemoria nella barra.
 
+`unita-lavoro.spec.js` — le due funzioni pure di `_shared/unitaLavoro.js`
+(«questa unità è dichiarata?», «quali sono le unità della settimana»), provate
+importandole direttamente: niente browser, niente database. Più un giro vero
+sul contatore della Home. Copre i due sganci del passo 5.2 — «dichiarata» non
+guarda più `percentuale`, e «scomposto» si decide sui pezzi vivi (M9).
+
 `pagina-unica.spec.js` — il routing del passo 5.1: `/consuntivazione` è la
 griglia, i due indirizzi di cantiere reindirizzano invece di dare 404, le tre
 strade che ci portano (menu, Home, Attività interne) ci arrivano davvero, e chi
