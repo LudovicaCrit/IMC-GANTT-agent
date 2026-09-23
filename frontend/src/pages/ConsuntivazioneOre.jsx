@@ -30,7 +30,22 @@ import GuscioConsuntivazione from '../components/consuntivazione/GuscioConsuntiv
 import SelettoreSettimana from '../components/consuntivazione/SelettoreSettimana'
 import PromemoriaNota from '../components/consuntivazione/PromemoriaNota'
 import BarraSalvataggio from '../components/consuntivazione/BarraSalvataggio'
-import { fmtOre } from '../components/consuntivazione/formato'
+import { fmtOre, fmtGiorno } from '../components/consuntivazione/formato'
+import {
+  SOGLIE, GIORNI_LAVORATIVI, monteGiornaliero, livelloGiorno, livelloSettimana, giornoCoperto,
+} from '../components/consuntivazione/soglie'
+
+/* ── Come si mostra un livello di saturazione ─────────────────────────
+ * Il segnale è sul NUMERO e le parole sono neutre: «oltre il monte» constata,
+ * non valuta. Ambra e arancio per «oltre» e «è tanto», che non bloccano nulla;
+ * il rosso solo oltre le 24 ore, l'unico caso che il backend rifiuta.
+ */
+const ASPETTO_LIVELLO = {
+  normale: { cella: 'text-gray-300', etichetta: null },
+  oltre:   { cella: 'text-amber-300', etichetta: 'oltre il monte' },
+  alto:    { cella: 'bg-orange-950/50 text-orange-200', etichetta: 'è tanto' },
+  tetto:   { cella: 'bg-red-950/60 text-red-200', etichetta: 'oltre 24h' },
+}
 
 /* ── Costanti ─────────────────────────────────────────────────────── */
 const NOMI_GIORNO = ['Lun', 'Mar', 'Mer', 'Gio', 'Ven']
@@ -293,7 +308,23 @@ export default function ConsuntivazioneOre() {
       }
     }
     for (const g of vista.giorni) totaleGiorno[g.iso] = arrotonda2(totaleGiorno[g.iso])
-    return { celle, teste, cambi, problemi, modificate, totaleGiorno, totaleSettimana: arrotonda2(totaleSettimana) }
+
+    // ── Saturazione e giorni coperti: letti dai totali, contro il monte ──
+    // Tutte le ore contano, anche storico e righe in sola lettura: sono le
+    // stesse che il backend somma per il tetto delle 24h (N14). Un task fermo
+    // non aggiunge ore, quindi non sposta nulla.
+    const monteGiorno = monteGiornaliero(vista.monteSettimana)
+    const livelloPerGiorno = Object.fromEntries(
+      vista.giorni.map((g) => [g.iso, livelloGiorno(totaleGiorno[g.iso], monteGiorno)]))
+    const giorniCoperti = vista.giorni.filter((g) => giornoCoperto(totaleGiorno[g.iso], monteGiorno)).length
+    const giorniOltreTetto = vista.giorni.filter((g) => livelloPerGiorno[g.iso] === 'tetto')
+
+    return {
+      celle, teste, cambi, problemi, modificate, totaleGiorno,
+      totaleSettimana: arrotonda2(totaleSettimana),
+      monteGiorno, livelloPerGiorno, giorniCoperti, giorniOltreTetto,
+      livelloSettimana: livelloSettimana(totaleSettimana, vista.monteSettimana),
+    }
   }, [vista, modifiche, modificheTesta])
 
   const haPendenti = (stato?.modificate.length ?? 0) > 0
@@ -349,6 +380,11 @@ export default function ConsuntivazioneOre() {
       const nome = vista.righe.find((r) => r.chiave === chiave)?.nome ?? chiave
       return Object.values(p).map((m) => `«${nome}»: ${m}`)
     })
+    // Il tetto delle 24h in un giorno: il backend lo rifiuterebbe (N14), quindi
+    // lo si dice PRIMA, con il giorno scritto come lo legge l'utente.
+    for (const g of stato.giorniOltreTetto) {
+      problemi.push(`${fmtGiorno(g.iso)}: ${fmtOre(stato.totaleGiorno[g.iso])}h in un giorno, oltre il massimo di ${SOGLIE.giornoTettoOre}h — togli qualche ora`)
+    }
     if (problemi.length) {
       setErroriSalvataggio(problemi)
       setSalvataggio(problemi[0])
@@ -396,7 +432,14 @@ export default function ConsuntivazioneOre() {
             Per ogni attività: lo stato, le ore di ogni mezza giornata, quante ne restano. Un'attività ferma si dichiara con stato e nota, senza ore.
           </p>
         </div>
+        {/* Stessa guardia della chiusura scheda e del cambio settimana: uscire
+            di qui con modifiche non salvate le perderebbe in silenzio. */}
         <Link to="/consuntivazione"
+          onClick={(e) => {
+            if (haPendenti && !window.confirm('Hai modifiche non salvate. Tornare alla consuntivazione a cursore le perderà. Continuare?')) {
+              e.preventDefault()
+            }
+          }}
           className="px-3 py-2 rounded-lg text-sm font-medium bg-gray-800 text-gray-300 border border-gray-700 hover:text-white shrink-0">
           ← Consuntivazione a cursore
         </Link>
@@ -411,6 +454,48 @@ export default function ConsuntivazioneOre() {
           carica(lunedi)
         }}
       />
+
+      {/* ═══ Sintesi: giorni coperti + settimana contro il monte ═══
+          Il completamento si misura per GIORNO, non per attività: «ho reso
+          conto delle mie giornate». Un giorno è coperto quando le sue ore
+          arrivano circa al monte giornaliero, da qualunque attività vengano. */}
+      <div className="flex flex-wrap items-stretch gap-4 mb-4" data-sintesi>
+        <div className="bg-gray-800 rounded-xl px-5 py-3 border border-gray-700">
+          <p className="text-xs text-gray-400">Giorni coperti</p>
+          <p className="text-2xl font-bold mt-0.5" data-giorni-coperti={stato.giorniCoperti}>
+            {stato.giorniCoperti}<span className="text-gray-500 text-lg">/{GIORNI_LAVORATIVI}</span>
+          </p>
+          <div className="flex gap-1 mt-1.5">
+            {vista.giorni.map((g) => {
+              const coperto = giornoCoperto(stato.totaleGiorno[g.iso], stato.monteGiorno)
+              return (
+                <span key={g.iso}
+                      title={`${fmtGiorno(g.iso)}: ${fmtOre(stato.totaleGiorno[g.iso])}h su ${fmtOre(stato.monteGiorno)}h`}
+                      className={`text-[10px] px-1.5 py-0.5 rounded border ${
+                        coperto ? 'bg-emerald-900/40 border-emerald-800 text-emerald-200' : 'border-gray-700 text-gray-500'}`}>
+                  {g.nome.toLowerCase()}
+                </span>
+              )
+            })}
+          </div>
+          <p className="text-[10px] text-gray-500 mt-1">
+            coperto da {fmtOre(stato.monteGiorno * SOGLIE.giornoCopertoQuota)}h (monte {fmtOre(stato.monteGiorno)}h al giorno)
+          </p>
+        </div>
+        <div className={`rounded-xl px-5 py-3 border ${
+          stato.livelloSettimana === 'normale' ? 'bg-gray-800 border-gray-700'
+            : stato.livelloSettimana === 'oltre' ? 'bg-amber-950/30 border-amber-800/60'
+            : 'bg-orange-950/40 border-orange-800/70'}`}
+             data-livello-settimana={stato.livelloSettimana}>
+          <p className="text-xs text-gray-400">Ore della settimana</p>
+          <p className={`text-2xl font-bold mt-0.5 ${ASPETTO_LIVELLO[stato.livelloSettimana].cella}`}>
+            {fmtOre(stato.totaleSettimana)}<span className="text-gray-500 text-lg">/{fmtOre(vista.monteSettimana)}h</span>
+          </p>
+          <p className="text-[11px] mt-1 text-gray-400">
+            {ASPETTO_LIVELLO[stato.livelloSettimana].etichetta ?? 'entro il monte settimanale'}
+          </p>
+        </div>
+      </div>
 
       <div className="bg-gray-900 rounded-xl border border-gray-800 overflow-x-auto"
            data-totale-settimana={stato.totaleSettimana} data-totale-me={dati.totale_ore}>
@@ -469,13 +554,23 @@ export default function ConsuntivazioneOre() {
               <td colSpan={2} className="px-3 py-2 text-right text-xs uppercase tracking-wider text-gray-500">
                 Totale giorno
               </td>
-              {vista.giorni.map((g) => (
-                <td key={g.iso} colSpan={2} className="px-1 py-2 text-center font-mono border-l border-gray-700"
-                    data-totale-giorno={g.iso}>
-                  {stato.totaleGiorno[g.iso] ? fmtOre(stato.totaleGiorno[g.iso]) : <span className="text-gray-600">·</span>}
-                </td>
-              ))}
-              <td className="px-3 py-2 text-right font-mono font-semibold border-l border-gray-700">
+              {vista.giorni.map((g) => {
+                const livello = stato.livelloPerGiorno[g.iso]
+                const aspetto = ASPETTO_LIVELLO[livello]
+                return (
+                  <td key={g.iso} colSpan={2}
+                      className={`px-1 py-2 text-center font-mono border-l border-gray-700 ${aspetto.cella}`}
+                      data-totale-giorno={g.iso} data-livello={livello}
+                      title={`${fmtGiorno(g.iso)}: ${fmtOre(stato.totaleGiorno[g.iso])}h su ${fmtOre(stato.monteGiorno)}h di monte`}>
+                    {stato.totaleGiorno[g.iso] ? fmtOre(stato.totaleGiorno[g.iso]) : <span className="text-gray-600">·</span>}
+                    {aspetto.etichetta && (
+                      <span className="block text-[10px] font-sans leading-tight">{aspetto.etichetta}</span>
+                    )}
+                  </td>
+                )
+              })}
+              <td className={`px-3 py-2 text-right font-mono font-semibold border-l border-gray-700 ${
+                ASPETTO_LIVELLO[stato.livelloSettimana].cella}`}>
                 {fmtOre(stato.totaleSettimana)}
                 <span className="block text-[10px] font-normal text-gray-500">su {fmtOre(vista.monteSettimana)} di monte</span>
               </td>
@@ -507,15 +602,19 @@ export default function ConsuntivazioneOre() {
  * Il messaggio di un 400 in una lista leggibile. Il backend manda «Consuntivo
  * non salvato: a; b; c» con gli id delle unità («task T063: …»): qui si
  * dividono le violazioni e si mette accanto all'id il NOME dell'attività, che
- * è ciò che l'utente vede in griglia.
+ * è ciò che l'utente vede in griglia. Le date ISO diventano «lun 7 set» e le ore
+ * «29.0h» diventano «29h»: il messaggio va letto da chi compila, non dal backend.
  */
-function leggiErrori(messaggio, righe) {
+export function leggiErrori(messaggio, righe) {
   const nomi = new Map(righe.map((r) => [`${r.tipo} ${r.id}`, r.nome]))
   return messaggio
     .replace(/^Consuntivo non salvato:\s*/, '')
     .split('; ')
-    .map((m) => m.replace(/^(task \S+|sottotask \d+)(:|,)/, (tutto, chiave, seg) =>
-      nomi.has(chiave) ? `«${nomi.get(chiave)}» (${chiave})${seg}` : tutto))
+    .map((m) => m
+      .replace(/^(task \S+|sottotask \d+)(:|,)/, (tutto, chiave, seg) =>
+        nomi.has(chiave) ? `«${nomi.get(chiave)}» (${chiave})${seg}` : tutto)
+      .replace(/\b(\d{4}-\d{2}-\d{2})\b/g, (iso) => fmtGiorno(iso))
+      .replace(/\b(\d+(?:\.\d+)?)h\b/g, (_, n) => `${fmtOre(Number(n))}h`))
     .filter(Boolean)
 }
 

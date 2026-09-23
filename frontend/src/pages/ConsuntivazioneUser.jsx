@@ -422,8 +422,14 @@ export default function ConsuntivazioneUser() {
 
         <div className="flex gap-2 shrink-0">
           {/* La griglia a ore, affiancata a questa pagina fino al passo 5:
-              un pulsante e non una voce di menu, finché è in prova. */}
+              un pulsante e non una voce di menu, finché è in prova. Chiede
+              conferma se ci sono modifiche non salvate, come il cambio settimana. */}
           <Link to="/consuntivazione/ore"
+            onClick={(e) => {
+              if (haPendenti && !confirm('Hai modifiche non salvate. Passare alla griglia a ore le perderà. Continuare?')) {
+                e.preventDefault()
+              }
+            }}
             className="px-3 py-2 rounded-lg text-sm font-medium bg-blue-900/40 text-blue-200 border border-blue-800 hover:bg-blue-900/60">
             🗓️ Griglia a ore
           </Link>

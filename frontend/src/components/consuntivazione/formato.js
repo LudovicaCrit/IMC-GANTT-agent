@@ -14,6 +14,18 @@ export const fmtData = (iso) => {
 }
 
 /**
+ * «lun 7 set» da una data ISO 'YYYY-MM-DD' — la forma in cui l'utente legge un
+ * giorno. Mai la data ISO in faccia a chi compila. Letta a mezzogiorno locale:
+ * a mezzanotte un fuso la sposterebbe al giorno prima.
+ */
+export const fmtGiorno = (iso) => {
+  if (!iso) return ''
+  const d = new Date(`${String(iso).slice(0, 10)}T12:00:00`)
+  if (Number.isNaN(d.getTime())) return String(iso)
+  return d.toLocaleDateString('it-IT', { weekday: 'short', day: 'numeric', month: 'short' })
+}
+
+/**
  * Ore a DUE decimali, all'italiana: 16,75 · 8 · 2,5.
  *
  * Due e non uno: le ore da blocchi sono NUMERIC(5,2) e il backend le espone a
