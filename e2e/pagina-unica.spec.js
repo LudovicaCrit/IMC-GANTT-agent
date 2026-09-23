@@ -14,6 +14,11 @@
  * E che chi supervisiona non ci abbia rimesso niente: manager e PM devono
  * trovare la vista del gruppo dov'era, nel guscio, accanto alla propria
  * settimana.
+ *
+ * In fondo, la porta di scrittura: dal passo 5.3 `POST /api/consuntivi/salva`
+ * non esiste più e ne resta una sola. Sta in questo file perché è la stessa
+ * cosa vista dall'altro lato — una strada sola per arrivarci, una sola per
+ * scrivere.
  */
 import { test, expect } from '@playwright/test'
 import { UTENTI, statoAuth } from './utenti.js'
@@ -99,5 +104,43 @@ test.describe('da manager (Ludovica)', () => {
     await page.getByRole('button', { name: 'Consuntivazione', exact: true }).click()
     expect(url(page)).toBe('/consuntivazione')
     await griglia(page)
+  })
+})
+
+test.describe('la porta di scrittura è una sola', () => {
+  test.use({ storageState: statoAuth(UTENTI.helena) })
+
+  test('POST /consuntivi/salva non esiste più: 404 netto', async ({ request }) => {
+    // 404 e non 500: la porta è tolta, non rotta. Un chiamante fantasma deve
+    // vedere «questo indirizzo non c'è», non un errore che viene da dentro il
+    // motore — è la ragione per cui il 5.3 (la porta) viene prima del 5.4
+    // (il motore).
+    const r = await request.post('/api/consuntivi/salva', {
+      data: { dipendente_id: 'D004', ore_per_task: {}, stati_per_task: {} },
+    })
+    expect(r.status()).toBe(404)
+  })
+
+  test('POST /consuntivi/salva-blocchi scrive come prima', async ({ request }) => {
+    // Il path nuovo non è stato toccato: un giro di scrittura completo deve
+    // passare identico. Si scrive e si rilegge da /me, che è l'unico modo di
+    // dire «è arrivato davvero in database».
+    const me = await (await request.get('/api/consuntivi/me')).json()
+    const r = await request.post('/api/consuntivi/salva-blocchi', {
+      data: {
+        settimana: me.settimana,
+        unita: [{
+          tipo: 'task', id: 'T902', stato_dichiarato: 'In corso',
+          blocchi: [{ giorno: me.settimana, ore: 0.5 }],
+        }],
+      },
+    })
+    expect(r.status(), await r.text()).toBe(200)
+    expect((await r.json()).salvato).toBe(true)
+
+    const dopo = await (await request.get('/api/consuntivi/me')).json()
+    const t902 = dopo.task_settimana.find((t) => t.task_id === 'T902')
+    expect(t902.blocchi).toEqual([{ giorno: me.settimana, ore: 0.5 }])
+    expect(t902.stato_dichiarato).toBe('In corso')
   })
 })

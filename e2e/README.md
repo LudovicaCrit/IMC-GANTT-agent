@@ -16,6 +16,12 @@ Backend e frontend li accende Playwright (`webServer` nella config) e li spegne
 alla fine. Se sono già aperti sulle porte 8000 e 3000 li riusa, così si può
 lanciare la verifica mentre si sviluppa.
 
+⚠ **Un backend già aperto serve il codice che aveva quando è partito.** Vite
+ricarica da sé, `uvicorn` senza `--reload` no: se si è modificato il backend e
+la porta 8000 è ancora occupata dal processo di prima, la suite prova la
+versione vecchia e i test nuovi falliscono per un motivo che non c'entra.
+Nel dubbio, chiudere il backend e lasciarlo riavviare a Playwright.
+
 Serve un Postgres con il seed applicato e `backend/.env` a posto: la verifica
 gira sul database di sviluppo, non su uno suo.
 

@@ -146,9 +146,10 @@ con messaggio parlante (non `ValueError`, che pydantic tradurrebbe in un dump
 422). Le regole che dipendono dal DB — il task esiste, il sottotask appartiene
 a quel task, ci sono dichiarazioni sopra — stanno nelle route.
 
-Il 400 sullo stato non ammesso segue `SalvaConsuntivoRequest`, che è il
-precedente sulla validazione degli stati (`aggiorna_fase` usa invece 422 per
-STATI_FASE: convenzione più vecchia, non replicata qui).
+Il 400 sullo stato non ammesso segue la convenzione della Consuntivazione
+(`SalvaBlocchiRequest._valida_payload` in routes/consuntivi.py), che è il
+precedente sulla validazione degli stati dichiarabili (`aggiorna_fase` usa
+invece 422 per STATI_FASE: convenzione più vecchia, non replicata qui).
 
 DIPENDENZE
 ──────────
@@ -246,8 +247,8 @@ class SottotaskUpdate(BaseModel):
         va rimandato alla Consuntivazione invece di leggere solo «non ammesso».
 
         `HTTPException` e non `ValueError` per la stessa ragione documentata in
-        `SalvaConsuntivoRequest._valida_stati_dichiarabili`: vogliamo un 400 con
-        un messaggio leggibile, non un dump di validazione 422.
+        `SalvaBlocchiRequest._valida_payload` (routes/consuntivi.py): vogliamo
+        un 400 con un messaggio leggibile, non un dump di validazione 422.
         """
         campi_set = self.model_fields_set
 

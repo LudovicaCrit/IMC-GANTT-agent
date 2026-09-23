@@ -1289,9 +1289,10 @@ def _prima_settimana_dopo(session, tipo, ids, settimana):
     di chi viene dopo, e la sola settimana da rifare è la prima dichiarata dopo
     W (le successive hanno per baseline quella, il cui VALORE non cambia).
 
-    Generalizzata all'unità di lavoro come le sorelle `_baseline_percentuali` e
-    `percentuali_successive`: stesso `if` che sceglie solo (tabella, colonna),
-    stessa riduzione scritta una volta.
+    Generalizzata all'unità di lavoro come la sorella `_baseline_percentuali`:
+    stesso `if` che sceglie solo (tabella, colonna), stessa riduzione scritta
+    una volta. (La terza sorella, `percentuali_successive`, è uscita col passo
+    5.3 insieme ai validator di /salva che la chiamavano.)
     """
     from models import ConsuntivoSottotask
 
@@ -1325,60 +1326,6 @@ def _prima_settimana_dopo(session, tipo, ids, settimana):
         if unita_id not in prima or sett < prima[unita_id]:
             prima[unita_id] = sett
     return prima
-
-
-def percentuali_successive(session, tipo, ids, settimana):
-    """{id: (settimana, percentuale)} della dichiarazione SUCCESSIVA più bassa.
-
-    Gemella in avanti di `_baseline_percentuali`, e come quella generalizzata
-    all'unità di lavoro (Step 4, 07/08/2026): "sottotask" guarda
-    ConsuntivoSottotask, "task" guarda Consuntivo, e l'`if` sceglie SOLO la
-    coppia (tabella, colonna) — filtro e riduzione sono scritti una volta.
-
-    Serve alla MONOTONIA: recuperare una settimana passata è ammesso, ma non
-    può risultare più avanti di una successiva già dichiarata. La regola guarda
-    quindi in AVANTI, ed è per questo che non può stare né nel DTO né dentro il
-    calcolo del Δ, che guarda solo all'indietro.
-
-    Si tiene il MINIMO fra le percentuali successive: se anche solo una è più
-    indietro di quella in arrivo, la sequenza non è monotòna. Le unità senza
-    dichiarazioni successive non compaiono nel dict — nessun tetto.
-
-    Come per la baseline: solo percentuali non-NULL, e la ricerca è per UNITÀ e
-    non per dipendente (la percentuale descrive il lavoro, non la persona).
-    """
-    from models import ConsuntivoSottotask
-
-    ids = list(ids)
-    if not ids:
-        return {}
-
-    if tipo == "sottotask":
-        Dichiarazione = ConsuntivoSottotask
-        colonna_unita = ConsuntivoSottotask.sottotask_id
-    elif tipo == "task":
-        Dichiarazione = Consuntivo
-        colonna_unita = Consuntivo.task_id
-    else:
-        raise ValueError(
-            f"tipo '{tipo}' non ammesso per la monotonia: attesi {TIPI_UNITA}."
-        )
-
-    righe = (
-        session.query(colonna_unita, Dichiarazione.settimana, Dichiarazione.percentuale)
-        .filter(
-            colonna_unita.in_(ids),
-            Dichiarazione.settimana > settimana,
-            Dichiarazione.percentuale.isnot(None),
-        )
-        .all()
-    )
-
-    minimo_dopo = {}
-    for unita_id, sett, pct in righe:
-        if unita_id not in minimo_dopo or pct < minimo_dopo[unita_id][1]:
-            minimo_dopo[unita_id] = (sett, pct)
-    return minimo_dopo
 
 
 def ore_derivate_unita(tipo, avanzamenti, settimana=None, session=None):
@@ -2480,80 +2427,6 @@ def lunedi_settimana(d=None):
     duplicazione che ha generato il bug dei duplicati.
     """
     return _lunedi(d)
-
-
-def note_consuntivi_settimana(dipendente_id, settimana=None):
-    """{task_id: nota} delle note NON VUOTE già scritte dal dipendente in quella
-    settimana. I task senza nota non compaiono nel dict.
-
-    Serve alla validazione «Bloccato richiede una nota», che deve guardare ciò
-    che ESISTE e non solo ciò che è arrivato nella richiesta: il form manda solo
-    le note MODIFICATE, quindi ridichiarare Bloccato senza ritoccare la nota è
-    il caso normale, non un errore. La lettura sta qui e non nella route perché
-    è una domanda sul DB, e le route non fanno SQL.
-
-    Query indicizzata su (dipendente_id, settimana), le stesse colonne del resto
-    del modulo; il range lun..dom è quello di /me e /settimana.
-    """
-    lun = _lunedi(settimana)
-    fine_sett = lun + timedelta(days=6)
-
-    session = get_session()
-    try:
-        rows = (
-            session.query(Consuntivo.task_id, Consuntivo.nota)
-            .filter(
-                Consuntivo.dipendente_id == dipendente_id,
-                Consuntivo.settimana >= lun,
-                Consuntivo.settimana <= fine_sett,
-                Consuntivo.nota.isnot(None),
-            )
-            .all()
-        )
-    finally:
-        session.close()
-
-    # Lo strip finale: in DB una nota vuota è NULL (vedi _nota_task), ma righe
-    # scritte da altri percorsi potrebbero portare spazi — «vuota» resta vuota.
-    return {tid: nota for tid, nota in rows if (nota or "").strip()}
-
-
-def note_sottotask_settimana(dipendente_id, settimana=None):
-    """{sottotask_id: nota} delle note NON VUOTE già scritte dal dipendente su
-    un SOTTOTASK in quella settimana. I sottotask senza nota non compaiono.
-
-    Gemella di `note_consuntivi_settimana`, stessa forma e stesso scopo un
-    livello più giù: serve alla validazione «un sottotask Bloccato richiede una
-    nota», che deve guardare ciò che ESISTE e non solo ciò che è arrivato nel
-    body. Il form manda le sole note modificate, quindi ridichiarare bloccato un
-    pezzo che è fermo da tre settimane — senza ritoccarne il testo — è il caso
-    normale, non un errore da rifiutare.
-
-    Query sulla UNIQUE (sottotask, dipendente, settimana); il range lun..dom è
-    la stessa rete di sicurezza della gemella per righe con data non
-    normalizzata.
-    """
-    from models import ConsuntivoSottotask
-
-    lun = _lunedi(settimana)
-    fine_sett = lun + timedelta(days=6)
-
-    session = get_session()
-    try:
-        rows = (
-            session.query(ConsuntivoSottotask.sottotask_id, ConsuntivoSottotask.nota)
-            .filter(
-                ConsuntivoSottotask.dipendente_id == dipendente_id,
-                ConsuntivoSottotask.settimana >= lun,
-                ConsuntivoSottotask.settimana <= fine_sett,
-                ConsuntivoSottotask.nota.isnot(None),
-            )
-            .all()
-        )
-    finally:
-        session.close()
-
-    return {sid: nota for sid, nota in rows if (nota or "").strip()}
 
 
 _MESI_ABBR = ["gen", "feb", "mar", "apr", "mag", "giu",
