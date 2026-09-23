@@ -99,8 +99,10 @@ lasciando il promemoria nella barra.
 
 `letture-intatte.spec.js` — la rete del passo 5: un colpo secco su tutte le
 letture dell'applicazione (comprese GANTT, Economia e SAL) per accorgersi subito
-se una cancellazione ne ha spenta una. Va riletto a ogni sotto-passo, e
-soprattutto ai drop del 5.6.
+se una cancellazione ne ha spenta una, più il controllo opposto — che i campi
+sganciati al 5.5 (`percentuale`, `baseline_pct`, `ore_effettive`, `unita`,
+`compilato`, `compilabile`) non ricompaiano nei payload. Va riletto a ogni
+sotto-passo, e soprattutto ai drop del 5.6.
 
 `unita-lavoro.spec.js` — le due funzioni pure di `_shared/unitaLavoro.js`
 («questa unità è dichiarata?», «quali sono le unità della settimana»), provate

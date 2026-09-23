@@ -33,7 +33,7 @@ def _to_dt(d):
 # progetto — useranno identica.
 #
 # PERCHÉ UNA SOLA REGOLA PER QUATTRO LIVELLI. È lo stesso principio che
-# `_baseline_percentuali` difende per le due tabelle dell'avanzamento: un
+# `_note_ereditate` difende per le due tabelle della dichiarazione: un
 # semaforo che sbaglia colore non fa fallire nessuna query, non rompe nessun
 # test di forma e non alza nessun 500 — è un guasto SILENZIOSO, e due copie
 # della regola che divergono sono il modo più facile di produrlo. Chi legge il
@@ -238,11 +238,10 @@ def colore_unita(data_fine, stato, oggi,
     DA ORA perché aggiungerli dopo significherebbe toccare ogni chiamante.
     In strato 1 sono ACCETTATI E IGNORATI: non influenzano il colore in nessun
     caso. Non è una svista, ed è verificato da un test.
-    Vale la pena sapere che oggi sarebbero comunque inerti: in DB ci sono ZERO
-    righe con `percentuale` non-NULL, in `consuntivi` come in
-    `consuntivo_sottotask`. Lo slider dell'avanzamento uniforme è vivo ma non è
-    ancora stato usato da nessuno, e finché non lo sarà la famiglia B non
-    avrebbe nulla da dire nemmeno se fosse accesa.
+    Vale la pena sapere che `percentuale` non è più nemmeno un dato: lo slider
+    che la scriveva è uscito con la Consuntivazione a cursore (passo 5) e la
+    colonna se ne va al 5.6. Quando la famiglia B si accenderà, il parametro
+    andrà riempito da un'altra parte — le ore dichiarate contro le stimate.
 
     Nota su `stato`: si accetta la stringa grezza dell'entità, senza
     normalizzarla. Uno stato sconosciuto o `None` non è né finito né fermo,
@@ -495,8 +494,8 @@ def progetti_attivi_visibili(current_user, solo_attivi=True):
     `filtro_stato` è una lista di condizioni che si aggiunge o resta vuota,
     mentre i due rami dell'identità (manager / PM+membro) sono scritti una volta
     e valgono per entrambi gli scope. Se un domani cambiasse chi vede cosa,
-    cambierebbe in un punto. È la stessa disciplina di `_baseline_percentuali`,
-    dove l'`if` sceglie SOLO la coppia (tabella, colonna) e il resto è comune.
+    cambierebbe in un punto. È la stessa disciplina di `_note_ereditate`, dove
+    l'`if` sceglie SOLO la coppia (tabella, colonna) e il resto è comune.
 
     CHI USA `False`, e perché: il POLSO della Home (`/home/dashboard`). Un
     progetto COMPLETATO non chiede decisioni — quindi resta fuori
@@ -1050,111 +1049,6 @@ def scostamento_stime_sottotask(task_ids):
 TIPI_UNITA = ("task", "sottotask")
 
 
-def _baseline_percentuali(session, tipo, ids, settimana):
-    """{id: percentuale} dell'ultima dichiarazione PRECEDENTE a `settimana`.
-
-    Step 4 (06/08/2026, generalizzata il 07/08). È la definizione — unica — di
-    «da dove riparte l'avanzamento», e sta in una funzione a sé perché la usano
-    in due: `ore_derivate_sottotask`, che ci calcola il Δ, e
-    `task_settimana_dipendente`, che la manda al frontend come punto di partenza
-    dello slider. Se le due copie divergessero, il dipendente vedrebbe un
-    cursore che parte da un valore e ore calcolate da un altro — e non avrebbe
-    alcun modo di accorgersene.
-
-    UNITÀ DI LAVORO, NON SOLO SOTTOTASK
-    -----------------------------------
-    `tipo` dice su cosa si cerca:
-      "sottotask" → ConsuntivoSottotask.percentuale, per sottotask_id
-      "task"      → Consuntivo.percentuale, per task_id  (task NON scomposto,
-                    che dichiara l'avanzamento come farebbe un pezzo)
-
-    Due tabelle, ma UNA regola. Nel codice sotto l'`if` sceglie SOLO la coppia
-    (tabella, colonna-che-identifica-l'unità): il filtro e la riduzione sono
-    scritti una volta e attraversati da entrambi i tipi. È deliberato, ed è la
-    ragione per cui non ci sono due funzioni: se la regola che decide QUALE
-    riga vince divergesse fra task e sottotask, il bug sarebbe invisibile —
-    nessuna query fallirebbe, nessun test di forma se ne accorgerebbe, e le ore
-    derivate sarebbero semplicemente sbagliate per metà del sistema.
-
-    `tipo` è obbligatorio e senza default di proposito. Un default "sottotask"
-    sarebbe comodo e pericoloso: un chiamante nuovo che se lo dimentica non
-    prende un errore, prende la semantica sbagliata in silenzio — che è
-    esattamente il modo in cui questa funzione può fare danno.
-
-    LE REGOLE, identiche per entrambi i tipi
-    ----------------------------------------
-    Le unità senza storia NON compaiono nel dict: il chiamante usa
-    `.get(id, 0)`, cioè «prima dichiarazione, si parte da zero».
-
-    PER UNITÀ, NON PER DIPENDENTE. La percentuale descrive il LAVORO («a che
-    punto è»), non la persona. Entrambe le tabelle hanno il dipendente nella
-    grana perché la DICHIARAZIONE ha un autore, ma il fatto dichiarato è del
-    lavoro: cercando la baseline per (unità, dipendente) ogni passaggio di
-    consegne produrrebbe una falsa prima dichiarazione, e su un pezzo già
-    portato al 60% il nuovo assegnatario rideriverebbe da zero.
-
-    Le righe con `percentuale` NULL non fanno baseline: sono di chi si è
-    espresso sullo stato e non sull'avanzamento. Senza il filtro diventerebbero
-    una baseline fantasma a 0.
-
-    Se nella settimana-baseline ci sono più dichiarazioni non-NULL (possibile:
-    la UNIQUE include il dipendente in entrambe le tabelle), vince la
-    percentuale PIÙ ALTA — il lavoro è avanzato almeno quanto la dichiarazione
-    più avanti, e una baseline più alta dà un Δ più piccolo: sbaglia dalla parte
-    di derivare MENO ore, mai di più.
-
-    Una query sola, ridotta in Python. Non una per unità (N+1); e non una
-    window function pur essendo ora possibile — Postgres è obbligatorio dal
-    07/08/2026 e il vincolo SQLite che la sconsigliava è caduto — perché su un
-    punto di fallimento SILENZIOSO due rami leggibili a occhio valgono più di
-    una query più elegante. Le righe in gioco sono comunque poche: una per
-    persona per settimana, sulla vita di un'unità di lavoro.
-    """
-    from models import ConsuntivoSottotask
-
-    if not ids:
-        return {}
-
-    # ── L'UNICO punto in cui i due tipi divergono ────────────────────────
-    # Da qui in giù non si sa più se si stia parlando di task o di sottotask,
-    # e non deve importare: la regola è la stessa.
-    if tipo == "sottotask":
-        Dichiarazione = ConsuntivoSottotask
-        colonna_unita = ConsuntivoSottotask.sottotask_id
-    elif tipo == "task":
-        Dichiarazione = Consuntivo
-        colonna_unita = Consuntivo.task_id
-    else:
-        raise ValueError(
-            f"tipo '{tipo}' non ammesso per la baseline: attesi {TIPI_UNITA}."
-        )
-
-    storiche = (
-        session.query(
-            colonna_unita,
-            Dichiarazione.settimana,
-            Dichiarazione.percentuale,
-        )
-        .filter(
-            colonna_unita.in_(list(ids)),
-            Dichiarazione.settimana < settimana,
-            Dichiarazione.percentuale.isnot(None),
-        )
-        .all()
-    )
-
-    # ── La riduzione: scritta UNA volta, per entrambi i tipi ─────────────
-    migliore = {}      # id unità → (settimana, percentuale)
-    for unita_id, sett_storica, pct in storiche:
-        corrente = migliore.get(unita_id)
-        if corrente is None or sett_storica > corrente[0]:
-            migliore[unita_id] = (sett_storica, pct)
-        elif sett_storica == corrente[0] and pct > corrente[1]:
-            migliore[unita_id] = (sett_storica, pct)
-
-    return {unita_id: pct for unita_id, (_sett, pct) in migliore.items()}
-
-
 def _nota_ereditata_payload(coppia):
     """(settimana, nota) → i due campi del payload. Sempre presenti, anche None.
 
@@ -1185,7 +1079,9 @@ def _note_ereditate(session, tipo, ids, settimana):
     riprendere l'ultima spiegazione scritta e la rende disponibile alla
     settimana corrente.
 
-    GEMELLA DI `_baseline_percentuali`, e non per somiglianza: stessa domanda
+    ERA LA GEMELLA di `_baseline_percentuali`, che cercava l'ultima percentuale
+    dichiarata con la stessa identica forma e che è uscita col passo 5.5 quando
+    il suo campo (`baseline_pct`) è rimasto senza lettori. Stessa domanda
     («qual è l'ultima cosa detta su questa unità prima d'ora»), stessa forma
     (batch, una query, riduzione in Python), stesso `if` che sceglie SOLO la
     coppia (tabella, colonna-che-identifica-l'unità). Da lì in giù non si sa più
@@ -1536,11 +1432,10 @@ def task_settimana_dipendente(dipendente_id, settimana=None):
     stesso guasto silenzioso dell'accessor che cade sulla baseline.
 
     QUI NON SI FILTRA, SI ESPONE IL FATTO. La nota ereditata si restituisce
-    sempre che esista, anche quando l'unità ha già una nota propria o è
-    avanzata. Decidere SE mostrarla è resa, e le due condizioni — «non ha una
-    nota sua questa settimana» (`nota is None`) e «è ferma» (`percentuale` nulla
-    oppure uguale a `baseline_pct`) — si calcolano interamente da campi che il
-    payload porta già. Filtrare qui significherebbe scrivere la definizione di
+    sempre che esista, anche quando l'unità ha già una nota propria o ci sono
+    delle ore sopra. Decidere SE mostrarla è resa, e le due condizioni — «non ha
+    una nota sua questa settimana» (`nota is None`) e «è ferma» (nessun blocco
+    di ore) — si calcolano interamente da campi che il payload porta già. Filtrare qui significherebbe scrivere la definizione di
     «ferma» in un secondo posto, dopo che il semaforo ha già mostrato cosa
     costa una regola in due copie; e farebbe apparire e sparire un campo a
     seconda di cosa l'utente ha appena digitato, che è più difficile da leggere
@@ -1683,10 +1578,6 @@ def task_settimana_dipendente(dipendente_id, settimana=None):
             session.query(Consuntivo.task_id,
                           Consuntivo.nota, Consuntivo.compilato,
                           Consuntivo.stato_dichiarato,
-                          # Step 4 (07/08/2026): la dichiarazione del task come
-                          # UNITÀ di lavoro. Due colonne in più sulla query che
-                          # c'era già, non una query nuova.
-                          Consuntivo.percentuale, Consuntivo.ore_effettive,
                           # Nodo F-2 (02/09/2026): una colonna in più sulla
                           # stessa query, come sopra.
                           Consuntivo.presa_visione,
@@ -1746,10 +1637,8 @@ def task_settimana_dipendente(dipendente_id, settimana=None):
         # asimmetria di `scostamento_stime_sottotask` e della validazione).
         sottotask_rows = []
         dich_sottotask = {}
-        baseline_sottotask = {}
         note_ered_sottotask = {}
         task_unita = []
-        baseline_task = {}
         note_ered_task = {}
         if task_ids:
             sottotask_rows = (
@@ -1784,13 +1673,6 @@ def task_settimana_dipendente(dipendente_id, settimana=None):
                 ):
                     dich_sottotask[r.sottotask_id] = r
 
-                # Baseline: stessa identica funzione che il motore userà per
-                # calcolare il Δ al salvataggio. Il cursore deve partire dal
-                # punto da cui partirà il conto, non da un numero che gli
-                # somiglia.
-                baseline_sottotask = _baseline_percentuali(
-                    session, "sottotask", sottotask_ids, lun
-                )
                 # Nodo F-2 (b): il perché di un fermo, ripescato all'indietro.
                 # Stessa forma della baseline qui sopra — una query, batch — e
                 # per la stessa ragione: sono la stessa domanda su due colonne
@@ -1813,11 +1695,6 @@ def task_settimana_dipendente(dipendente_id, settimana=None):
             task_scomposti = {s.task_id for s in sottotask_rows if s.stato != "Annullato"}
             task_unita = [tid for tid in task_ids if tid not in task_scomposti]
             if task_unita:
-                # Stessa funzione della baseline dei pezzi, con tipo="task": il
-                # cursore deve partire dal punto da cui partirà il conto.
-                baseline_task = _baseline_percentuali(
-                    session, "task", task_unita, lun
-                )
                 # Nodo F-2 (b), gemella per i task-unità. Solo per i NON
                 # scomposti: su un task con pezzi la nota-del-perché sta sui
                 # pezzi, come tutto il resto della dichiarazione.
@@ -1865,10 +1742,11 @@ def task_settimana_dipendente(dipendente_id, settimana=None):
             # riempito nel ciclo sotto, dove il task padre è a portata di mano.
             "assegnatario_id": s.dipendente_id,
             # Dichiarazione di questa settimana, o None se non pervenuta.
-            "percentuale": d.percentuale if d else None,
+            # `percentuale` e `ore_effettive` stavano qui e sono uscite col
+            # passo 5.5: erano i campi del cursore, li leggeva solo la pagina a
+            # cursore, e le colonne dietro escono al 5.6.
             "stato_dichiarato": d.stato_dichiarato if d else None,
             "nota": d.nota if d else None,
-            "ore_effettive": d.ore_effettive if d else None,
             # Consuntivazione A: «quante ore mancano ancora su questo pezzo».
             # None quando la riga non c'è O quando c'è ma nessuno ha stimato —
             # i due casi collassano di proposito: per il form sono la stessa
@@ -1882,8 +1760,6 @@ def task_settimana_dipendente(dipendente_id, settimana=None):
             # None — quando la riga non c'è: la domanda «l'ha preso in visione?»
             # ha risposta, ed è no.
             "presa_visione": bool(d.presa_visione) if d else False,
-            # Da dove riparte l'avanzamento: 0 = mai dichiarato prima.
-            "baseline_pct": baseline_sottotask.get(s.id, 0),
             # Nodo F-2 (b): l'ultima nota scritta su questo pezzo PRIMA di
             # questa settimana, con la settimana da cui viene.
             # DUE CAMPI DISTINTI DA `nota`, e la separazione non è cosmetica: se
@@ -1904,18 +1780,10 @@ def task_settimana_dipendente(dipendente_id, settimana=None):
     note_per_task = {}
     dichiarati = set()
     stato_dichiarato_per_task = {}
-    percentuale_per_task = {}
-    ore_effettive_per_task = {}
     residuo_per_task = {}
     presa_visione_per_task = set()
-    for (tid, nota, compilato, stato_dich,
-         pct, ore_eff, presa_vis, residuo) in cons_rows:
-        # Come lo stato e la nota: non si sommano, vince la prima valorizzata.
-        if pct is not None and tid not in percentuale_per_task:
-            percentuale_per_task[tid] = pct
-        if ore_eff is not None and tid not in ore_effettive_per_task:
-            ore_effettive_per_task[tid] = ore_eff
-        # Stessa regola: NON si somma. Due stime residue sulla stessa settimana
+    for (tid, nota, compilato, stato_dich, presa_vis, residuo) in cons_rows:
+        # NON si somma. Due stime residue sulla stessa settimana
         # non fanno «55 ore mancanti», fanno due opinioni sullo stesso lavoro, e
         # sommarle produrrebbe un numero che nessuno ha detto. `is not None` e
         # non un test di verità, perché 0.0 — «non manca più niente» — è una
@@ -2030,30 +1898,26 @@ def task_settimana_dipendente(dipendente_id, settimana=None):
         })
 
         # ── Il task come UNITÀ DI LAVORO (Step 4, 07/08/2026) ────────────
-        # I tre campi che il frontend serve per rendere lo slider del task,
-        # gemelli di quelli che ogni pezzo porta già. Compaiono SOLO sui task
-        # non scomposti: sulla voce di un task con pezzi sarebbero la doppia
-        # verità che il motore rifiuta, e il payload di quei task resta
-        # identico a prima — nessun consumatore esistente vede campi nuovi.
+        # I campi della dichiarazione sul task, gemelli di quelli che ogni pezzo
+        # porta già. Compaiono SOLO sui task non scomposti: sulla voce di un
+        # task con pezzi sarebbero una doppia verità — là la dichiarazione vive
+        # sui pezzi, e basta.
         #
-        # `baseline_pct` è None e non 0 quando non c'è storia: 0 direbbe «il
-        # lavoro è a zero», None dice «non c'è un punto di partenza», e sono
-        # due cose diverse per uno slider che deve decidere il proprio minimo.
+        # `percentuale`, `baseline_pct` e `ore_effettive` stavano qui: erano i
+        # tre campi che servivano a rendere lo slider del cursore. Sono usciti
+        # col passo 5.5 insieme ai loro gemelli sui pezzi, quando la pagina che
+        # li leggeva non c'era più.
         if t.id not in task_scomposti:
             out[-1].update({
-                "percentuale": percentuale_per_task.get(t.id),
-                "baseline_pct": baseline_task.get(t.id),
-                "ore_effettive": ore_effettive_per_task.get(t.id),
                 # Consuntivazione A, gemella di quella sui pezzi. Dentro questo
-                # ramo come tutte le altre: su un task SCOMPOSTO il residuo vive
-                # sui pezzi, e una stima-del-task accanto alle stime-dei-pezzi
-                # sarebbe la doppia verità che il motore rifiuta per le ore.
+                # ramo come le altre: su un task SCOMPOSTO il residuo vive sui
+                # pezzi, e una stima-del-task accanto alle stime-dei-pezzi
+                # sarebbe una doppia verità.
                 "ore_stimate_residue": residuo_per_task.get(t.id),
                 # Nodo F-2 (a) e (b), gemelli esatti di quelli sui pezzi — e
                 # stanno qui, dentro il ramo dei NON scomposti, per la stessa
-                # ragione degli altri tre: su un task con pezzi sarebbero la
-                # doppia verità che il motore rifiuta, e il payload di quei task
-                # deve restare identico a prima.
+                # ragione: su un task con pezzi sarebbero una doppia verità, e
+                # il payload di quei task deve restare identico a prima.
                 "presa_visione": t.id in presa_visione_per_task,
                 **_nota_ereditata_payload(note_ered_task.get(t.id)),
             })
@@ -2114,13 +1978,13 @@ def settimane_selezionabili(dipendente_id):
     corrente e la precedente. Nient'altro — non si compila in anticipo, e il
     recupero all'indietro si ferma a una settimana.
 
-    Ogni voce: {lunedi (ISO), etichetta, compilabile}.
+    Ogni voce: {lunedi (ISO), etichetta}.
 
-    FINESTRA TEMPORALE, NON MONTE ORE (fix N17). Entrambe le voci sono
-    `compilabile`: una settimana è aperta finché è «la corrente» o «la
-    precedente», e si chiude quando diventa due-settimane-fa — uscendo dalla
-    lista, non cambiando flag. Il tempo che passa è l'unica cosa che chiude una
-    settimana.
+    FINESTRA TEMPORALE, NON MONTE ORE (fix N17). Una settimana è aperta finché
+    è «la corrente» o «la precedente», e si chiude quando diventa
+    due-settimane-fa — uscendo dalla lista. Il tempo che passa è l'unica cosa
+    che chiude una settimana, ed ESSERE NELLA LISTA è tutto ciò che c'è da
+    sapere: non c'è un secondo stato da leggere accanto.
 
     Prima la precedente si chiudeva al raggiungimento delle ore contrattuali
     («hai finito, chiudi»). Con la consuntivazione a ore quella soglia
@@ -2131,9 +1995,11 @@ def settimane_selezionabili(dipendente_id):
     perché l'utente sta scrivendo, e il conto delle ore non lo sa. La finestra
     di UNA settimana è già il limite al ritocco del passato.
 
-    `compilabile` resta nella risposta, sempre True, perché è un contratto già
-    consumato dal frontend (il selettore settimana e le due pagine di
-    consuntivazione): sparisce con la pulizia del frontend, non qui.
+    C'era anche un flag `compilabile`, che era il modo in cui la vecchia regola
+    diceva «questa si può ancora compilare». Dopo il fix N17 valeva True su
+    tutt'e due le voci per costruzione, e il suo ultimo lettore — il badge «già
+    chiusa» del selettore — è uscito col passo 5.2. Tolto al 5.5: un campo che
+    non può essere falso non è un'informazione.
 
     Aritmetica di date pura: non tocca il database.
     """
@@ -2144,12 +2010,10 @@ def settimane_selezionabili(dipendente_id):
         {
             "lunedi": corrente.isoformat(),
             "etichetta": "Questa settimana",
-            "compilabile": True,
         },
         {
             "lunedi": precedente.isoformat(),
             "etichetta": f"Settimana scorsa ({_etichetta_intervallo(precedente)})",
-            "compilabile": True,
         },
     ]
 
@@ -3007,7 +2871,7 @@ def salva_blocchi_settimana(dipendente_id, lun, unita):
                 ).first()
                 nuova = None if riga is not None or solo_cancellazioni else Consuntivo(
                     task_id=task_id, dipendente_id=dipendente_id, settimana=lun,
-                    ore_dichiarate=0, presa_visione=False)
+                    presa_visione=False)
                 # N19: lo stato di un task atomico si riporta su Task.stato,
                 # dopo il commit (vedi 4). Un pezzo resta sulla sua riga.
                 if u["tocca_stato"] and u["stato"] is not None:
@@ -3038,50 +2902,52 @@ def salva_blocchi_settimana(dipendente_id, lun, unita):
                 riga.data_compilazione = datetime.utcnow()
         session.flush()
 
-        # ── 2. DOPPIA SCRITTURA di `consuntivi.ore_dichiarate` (N9) ─────────
-        # Nessun lettore la legge più (passo 2), ma `/salva` la scrive ancora e
-        # qualcosa potrebbe leggerla di nascosto: finché la colonna esiste deve
-        # dire il vero. Il valore NON si calcola qui: si LEGGE dalla vista, nella
-        # stessa sessione, dopo il flush — così coincide con `ore_settimanali`
-        # per costruzione, non per un secondo conto tenuto allineato.
-        # Sulla riga del TASK anche quando l'unità è un pezzo: `consuntivi` non
-        # ha righe per sottotask, e la vista somma task + pezzi per task.
-        # Nessun ricalcolo a valle (i :3497/:3507/:3789 del vecchio motore):
-        # le ore sono fatti, una settimana non dipende da un'altra.
-        # `motivo_fermo` non si replica: non ha lettori (colonna morta, passo 5).
+        # ── 2. LA RIGA-TASK DI CHI HA DICHIARATO SUI PEZZI ──────────────────
+        # `consuntivi` non ha righe per sottotask: chi dichiara le ore su un
+        # pezzo lascia una riga in `consuntivo_sottotask` e NIENTE sul task. Ma
+        # la vista di chi supervisiona (`GET /settimana`) parte dalle righe di
+        # `consuntivi` — è lì che legge chi ha compilato e su cosa. Senza questa
+        # riga, un dipendente che ha lavorato solo sui pezzi di un task
+        # scomposto sparirebbe da quella vista, e se fosse il suo unico lavoro
+        # della settimana risulterebbe fra i NON-COMPILANTI. La riga esiste per
+        # essere VISTA, non per il suo contenuto.
+        #
+        # FINO AL PASSO 5.5 QUESTO BLOCCO FACEVA ANCHE UN'ALTRA COSA: teneva
+        # `consuntivi.ore_dichiarate` allineata alla vista `ore_settimanali`
+        # (N9), come specchio per un eventuale lettore nascosto. Nessuno legge
+        # più quella colonna, che esce al passo 5.6: la doppia scrittura è
+        # sparita e la riga nasce con lo zero di default. Le ORE stanno nei
+        # blocchi, e si sommano dalla vista.
+        #
+        # La query sulla vista resta, ma adesso risponde a una domanda sola:
+        # «su quali di questi task ci sono ore?». È il criterio per cui la riga
+        # va creata — una riga-task a zero ore non l'ha chiesta nessuno.
         task_toccati = sorted({task_id for task_id, _s in chiavi.values()})
         if task_toccati:
-            somme = dict(
-                session.query(OreSettimanali.c.task_id, OreSettimanali.c.ore)
-                .filter(
+            con_ore = {
+                tid for tid, ore in session.query(
+                    OreSettimanali.c.task_id, OreSettimanali.c.ore
+                ).filter(
                     OreSettimanali.c.dipendente_id == dipendente_id,
                     OreSettimanali.c.settimana == lun,
                     OreSettimanali.c.task_id.in_(task_toccati),
                 ).all()
-            )
-            righe = {
-                r.task_id: r for r in session.query(Consuntivo).filter(
+                if float(ore or 0.0) > 0
+            }
+            gia_presenti = {
+                r.task_id for r in session.query(Consuntivo.task_id).filter(
                     Consuntivo.task_id.in_(task_toccati),
                     Consuntivo.dipendente_id == dipendente_id,
                     Consuntivo.settimana == lun,
                 )
             }
-            for task_id in task_toccati:
-                somma = float(somme.get(task_id) or 0.0)
-                riga = righe.get(task_id)
-                if riga is None:
-                    # Riga mancante: la si crea solo se ci sono ore da riportare
-                    # (tipicamente le ore di un pezzo, che non ha una riga sua sul
-                    # task). `compilato=True` come il vecchio :3503 — una
-                    # dichiarazione sui pezzi È una compilazione.
-                    if somma > 0:
-                        session.add(Consuntivo(
-                            task_id=task_id, dipendente_id=dipendente_id,
-                            settimana=lun, ore_dichiarate=somma,
-                            compilato=True, data_compilazione=datetime.utcnow(),
-                        ))
-                elif riga.ore_dichiarate != somma:
-                    riga.ore_dichiarate = somma
+            for task_id in sorted(con_ore - gia_presenti):
+                # `compilato=True`: una dichiarazione sui pezzi È una
+                # compilazione, e la vista-PM la conta come tale.
+                session.add(Consuntivo(
+                    task_id=task_id, dipendente_id=dipendente_id, settimana=lun,
+                    compilato=True, data_compilazione=datetime.utcnow(),
+                ))
 
         session.commit()
     except Exception:

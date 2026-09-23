@@ -427,7 +427,10 @@ def seed():
             # erosioni in Economia divergono. Colonna fornita da seed_data.json;
             # fallback alla stima se assente (retrocompat.).
             ore_pianificate=float(row.get("ore_pianificate", row["ore_stimate"])),
-            ore_rimanenti=float(row.get("ore_pianificate", row["ore_stimate"])),  # rimanenti = piano corrente al seed
+            # `ore_rimanenti` non si semina più (passo 5.5): era una copia
+            # denormalizzata che nessuno aggiornava e nessuno leggeva — chi
+            # mostra «quanto resta» lo calcola al volo (routes/fasi.py,
+            # task_settimana_dipendente). La colonna esce al passo 5.6.
             data_inizio=row["data_inizio"].date() if hasattr(row["data_inizio"], "date") else row["data_inizio"],
             data_fine=row["data_fine"].date() if hasattr(row["data_fine"], "date") else row["data_fine"],
             stato=row["stato"],
@@ -503,8 +506,10 @@ def seed():
     # migrato devono essere indistinguibili: un blocco sul LUNEDÌ della
     # settimana, fonte 'storico' (il giorno vero non esiste nei dati), nessun
     # blocco per le righe a zero ore.
-    # `ore_dichiarate` resta scritta finché `/salva` la scrive: è il guscio
-    # scritto-ma-non-letto del passo 2, e sparisce con lui.
+    # `ore_dichiarate` NON si semina più (passo 5.5): la colonna era il guscio
+    # scritto-ma-non-letto del passo 2 ed esce al 5.6. Il campo omonimo di
+    # `seed_data.json` resta e resta necessario — è da lì che escono le ore dei
+    # blocchi qui sotto. Sparisce la colonna, non il dato.
     n_blocchi = 0
     for _, row in CONSUNTIVI.iterrows():
         settimana = row["settimana"].date() if hasattr(row["settimana"], "date") else row["settimana"]
@@ -514,7 +519,6 @@ def seed():
             task_id=row["task_id"],
             dipendente_id=row["dipendente_id"],
             settimana=settimana,
-            ore_dichiarate=ore,
             compilato=bool(row["compilato"]),
             data_compilazione=data_compilazione,
             nota=row["nota"] if row["nota"] else None,

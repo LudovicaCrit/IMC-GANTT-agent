@@ -389,11 +389,12 @@ def gantt_strutturato(
     Il colore del pezzo, però, RIFLETTE quella data ereditata: un pezzo vivo
     dentro un task scaduto è rosso.
 
-    NIENTE PERCENTUALE, per ora. Serve `_baseline_percentuali(tipo="sottotask")`
-    — una query in più e una decisione su dove viva «avanzamento corrente» — e
-    oggi uscirebbe `null` per ogni pezzo: in DB non c'è UNA riga con
-    `percentuale` non-NULL, né in `consuntivi` né in `consuntivo_sottotask`.
-    Si aggiunge col lavoro A, quando le barre andranno disegnate davvero.
+    NIENTE PERCENTUALE. Era una nota di lavoro futuro — serviva una funzione che
+    cercasse l'ultima percentuale dichiarata — ma l'avanzamento a percentuale è
+    uscito con la Consuntivazione a cursore (passo 5): nessuno la scrive più e
+    le colonne se ne vanno al 5.6. Se un giorno le barre dovranno mostrare un
+    avanzamento, andrà deciso da capo da dove viene — le ore dichiarate contro
+    le ore stimate sono il candidato naturale.
     """
     session = get_session()
     try:

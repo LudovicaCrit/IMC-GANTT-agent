@@ -15,6 +15,11 @@
  * Il SAL è in lista di proposito: è il lettore più goloso di dati-consuntivo di
  * tutta l'applicazione, quello che serializza la fotografia di un progetto.
  * Se un drop gli toglie una colonna da sotto, lo dice per primo.
+ *
+ * In fondo, il controllo opposto: che i campi SGANCIATI al passo 5.5 non
+ * ricompaiano. Un campo che rientra nel payload per abitudine — qualcuno
+ * riaggiunge una colonna alla SELECT «così c'è» — rimetterebbe in vita una
+ * colonna che sta per essere droppata, e il guasto si vedrebbe solo al 5.6.
  */
 import { test, expect } from '@playwright/test'
 import { UTENTI, statoAuth } from './utenti.js'
@@ -62,6 +67,70 @@ test.describe('le letture dell’applicazione rispondono', () => {
       // La sua vista è /me. Il 403 è una regola, non un guasto: se diventasse
       // 500 vorrebbe dire che il dispatch sul ruolo si è rotto.
       expect((await request.get('/api/consuntivi/settimana')).status()).toBe(403)
+    })
+  })
+})
+
+/** I campi usciti col passo 5.5: erano del mondo a cursore, non li legge
+ *  nessuno, e le colonne dietro escono al 5.6. Se uno di questi torna nel
+ *  payload, qualcuno ha rimesso in vita una colonna condannata. */
+const CAMPI_SGANCIATI = ['percentuale', 'baseline_pct', 'ore_effettive']
+
+test.describe('i payload non riportano i campi sganciati', () => {
+  test.describe('da utente normale', () => {
+    test.use({ storageState: statoAuth(UTENTI.helena) })
+
+    test('/me: né sui task, né sui pezzi, né in cima', async ({ request }) => {
+      const me = await (await request.get('/api/consuntivi/me')).json()
+
+      // In cima: `unita` (la settimana già impacchettata per /salva-blocchi) e
+      // `compilato` erano avanzi mai letti.
+      expect(Object.keys(me)).not.toContain('unita')
+      expect(Object.keys(me)).not.toContain('compilato')
+
+      // Le settimane portano il lunedì e l'etichetta, e basta: `compilabile`
+      // non poteva più essere falso, e un campo che non può essere falso non è
+      // un'informazione.
+      for (const s of me.settimane_disponibili) {
+        expect(Object.keys(s).sort()).toEqual(['etichetta', 'lunedi'])
+      }
+
+      for (const t of me.task_settimana) {
+        for (const campo of CAMPI_SGANCIATI) {
+          expect(Object.keys(t), `task ${t.task_id}`).not.toContain(campo)
+        }
+        for (const p of t.sottotask ?? []) {
+          for (const campo of CAMPI_SGANCIATI) {
+            expect(Object.keys(p), `pezzo #${p.id}`).not.toContain(campo)
+          }
+        }
+      }
+
+      // E ciò che la griglia usa davvero è ancora tutto lì.
+      const t = me.task_settimana[0]
+      for (const campo of ['task_id', 'blocchi', 'stato_dichiarato', 'nota',
+                           'ore_stimate_residue', 'presa_visione', 'modificabile']) {
+        expect(Object.keys(t)).toContain(campo)
+      }
+    })
+  })
+
+  test.describe('da manager', () => {
+    test.use({ storageState: statoAuth(UTENTI.ludovica) })
+
+    test('/settimana: le voci portano il contenuto, non il cursore', async ({ request }) => {
+      const dati = await (await request.get('/api/consuntivi/settimana')).json()
+      const voci = dati.flatMap((d) => d.ore_per_task ?? [])
+      expect(voci.length).toBeGreaterThan(0)
+      for (const v of voci) {
+        for (const campo of CAMPI_SGANCIATI) {
+          expect(Object.keys(v), `task ${v.task_id}`).not.toContain(campo)
+        }
+        // Quello che la vista-PM legge davvero resta.
+        expect(Object.keys(v)).toContain('nota')
+        expect(Object.keys(v)).toContain('ore_stimate_residue')
+        expect(Object.keys(v)).toContain('stato_dichiarato')
+      }
     })
   })
 })

@@ -30,9 +30,9 @@ DETTAGLIO ENDPOINT
    - Settimana corrente. Per ogni dipendente: ore_per_task, totale_ore,
      flag `compilato`, e i conteggi n_segnalazioni / n_fermi / n_in_ritardo.
    - Ogni voce di `ore_per_task` porta il CONTENUTO della dichiarazione, non
-     le sole ore: nota, percentuale, ore_effettive, ore_stimate_residue,
-     stato_dichiarato, stato_task, data_fine, in_ritardo, presa_visione,
-     più task_id/progetto_id per agganciare un drill-down.
+     le sole ore: nota, ore_stimate_residue, stato_dichiarato, stato_task,
+     data_fine, in_ritardo, presa_visione, più task_id/progetto_id per
+     agganciare un drill-down.
    - Include anche dipendenti che NON hanno compilato (totale_ore=0,
      compilato=False), purché abbiano almeno 1 task attivo E siano nel
      perimetro di chi chiede.
@@ -64,7 +64,7 @@ DETTAGLIO ENDPOINT
      non è uno stato che il dipendente sceglie — non è nella tendina: è una
      segnalazione che il sistema calcola e il frontend mostra accanto al task.
    - `settimane_disponibili`: le due settimane apribili, ciascuna con
-     lunedi/etichetta/compilabile. La finestra è TEMPORALE: corrente e
+     lunedi/etichetta. La finestra è TEMPORALE: corrente e
      precedente sono entrambe aperte, in lettura e in scrittura, e una
      settimana si chiude quando diventa due-settimane-fa — cioè esce dalla
      lista. Le ore già dichiarate non chiudono niente (fix N17). La guardia in
@@ -484,11 +484,10 @@ def consuntivi_settimana_corrente(current_user: Utente = Depends(get_current_use
                 # ── Il CONTENUTO della dichiarazione ─────────────────────
                 # È ciò che la vista-management non ha mai portato: sole ore,
                 # e le ore non dicono cosa sta succedendo.
+                # `percentuale` e `ore_effettive` stavano qui: uscite col passo
+                # 5.5, nessun client le leggeva e le colonne escono al 5.6.
                 "nota": c.nota,
-                "percentuale": c.percentuale,
-                "ore_effettive": c.ore_effettive,
-                # Il campo della A (04/09): fin qui scritto e letto da
-                # nessuno. Questa vista è il suo primo lettore.
+                # Il campo della A (04/09): questa vista è il suo primo lettore.
                 "ore_stimate_residue": c.ore_stimate_residue,
                 "stato_dichiarato": c.stato_dichiarato,
                 "stato_task": t.stato,
@@ -634,34 +633,12 @@ def consuntivi_settimana_me(
     task_settimana = task_settimana_dipendente(current_user.dipendente_id, lun)
     totale = sum(t["ore_consumate"] for t in task_settimana)
 
-    # ── `unita`: la settimana nella FORMA ESATTA del payload di /salva-blocchi ──
-    # Consuntivazione a ore (passo 3). La griglia la legge e la rimanda così
-    # com'è: rimandarla senza modifiche non cambia nulla nel DB (N8).
-    # SOLO le unità MODIFICABILI: le righe N21 (task chiuso o riassegnato con ore
-    # già messe) restano in `task_settimana` con `modificabile: false` e i loro
-    # blocchi, ma qui non compaiono — omesse dal payload restano intatte (N7),
-    # invece di far fallire tutta la settimana con un 400 (N15).
-    # I blocchi storici non ci sono: il payload non li accetta.
-    unita = []
-    for t in task_settimana:
-        if t["modificabile"]:
-            unita.append({
-                "tipo": "task", "id": t["task_id"],
-                "stato_dichiarato": t["stato_dichiarato"], "nota": t["nota"],
-                "ore_stimate_residue": t["ore_stimate_residue"],
-                "presa_visione": t["presa_visione"],
-                "blocchi": t["blocchi"],
-            })
-        for p in t.get("sottotask", []):
-            if p["modificabile"]:
-                unita.append({
-                    "tipo": "sottotask", "id": p["id"],
-                    "stato_dichiarato": p["stato_dichiarato"], "nota": p["nota"],
-                    "ore_stimate_residue": p["ore_stimate_residue"],
-                    "presa_visione": p["presa_visione"],
-                    "blocchi": p["blocchi"],
-                })
-
+    # C'ERA ANCHE `unita`: la settimana già impacchettata nella forma esatta del
+    # payload di /salva-blocchi, costruita al passo 3 perché la griglia la
+    # rimandasse così com'era. La griglia ha poi scelto di costruirsi il payload
+    # da `task_settimana`, che le serve comunque per disegnare le righe, e
+    # `unita` non l'ha letta mai nessuno: è uscita col passo 5.5 insieme a
+    # `compilato`, che aveva la stessa storia.
     return {
         "dipendente_id": current_user.dipendente_id,
         "nome": dip["nome"],
@@ -672,14 +649,6 @@ def consuntivi_settimana_me(
         # 2 decimali come le ore da cui è sommato (vedi `ore_consumate`).
         "totale_ore": round(totale, 2),
         "task_settimana": task_settimana,
-        "unita": unita,
-        # `compilato` = totale_ore > 0, sui soli task VISIBILI questa
-        # settimana: vero appena si dichiara un'ora, e NON dice che la
-        # settimana è coperta. Non ha più un gemello che lo contraddice —
-        # `compilabile` (dentro settimane_disponibili) dal fix N17 guarda solo
-        # il calendario ed è sempre True. Resta un contratto già consumato dal
-        # frontend: si allinea quando rifacciamo la pagina, non prima.
-        "compilato": totale > 0,
     }
 
 
