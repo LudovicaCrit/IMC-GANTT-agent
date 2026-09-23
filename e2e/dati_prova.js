@@ -19,6 +19,11 @@ export function scenario(argomenti) {
   return python('scenario_sottotask.py', argomenti)
 }
 
+/** Le due fasi della guardia «Da iniziare» (`scenario_fasi.py`). */
+export function scenarioFasi(argomenti) {
+  return python('scenario_fasi.py', argomenti)
+}
+
 function python(script, argomenti) {
   const out = execFileSync(
     path.join(RADICE, '.venv', 'bin', 'python'),

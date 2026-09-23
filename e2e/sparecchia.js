@@ -1,5 +1,5 @@
 import fs from 'node:fs'
-import { esegui, scenario } from './dati_prova.js'
+import { esegui, scenario, scenarioFasi } from './dati_prova.js'
 import { CARTELLA_AUTH } from './utenti.js'
 
 /** Dopo la verifica: via i task di prova e tutto ciò che ci è stato scritto
@@ -10,6 +10,7 @@ export default async function sparecchia() {
   console.log('\n── pulizia ──')
   esegui(['--pulisci'])
   scenario(['--cancella'])
+  scenarioFasi(['--cancella'])
   console.log('── impronta DOPO ──')
   esegui(['--impronta'])
 }

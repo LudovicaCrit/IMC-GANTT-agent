@@ -60,6 +60,15 @@ python e2e/scenario_sottotask.py --cancella   # via tutto
 La suite lo crea e lo cancella da sé a ogni giro; i comandi qui sopra servono
 quando lo si vuole tenere in piedi per guardarlo con i propri occhi.
 
+## Lo scenario fasi
+
+`scenario_fasi.py` crea il progetto `PFASI` con due fasi «In corso» che
+differiscono per una cosa sola: sui task di una ci sono ore dichiarate, sugli
+altri no. Serve alla guardia del ritorno a «Da iniziare» (`PATCH /api/fasi`).
+Stessi comandi (`--crea`, `--stato`, `--cancella`); `--stato` stampa le ore vere
+accanto a `Task.ore_consumate`, ed è lì che si vede perché la guardia andava
+riparata.
+
 ## Cosa copre oggi
 
 `aggiungi-riga.spec.js` — la selezione «Ho lavorato su altro» della griglia a
@@ -81,6 +90,12 @@ stato, oppure con le ore), il bottone che porta alla riga col fuoco sulla
 tendina, le righe in sola lettura che non ci entrano mai, il silenzio su una
 settimana ancora vuota, e il salvataggio che passa senza chiedere niente
 lasciando il promemoria nella barra.
+
+`guardia-fasi.spec.js` — la guardia del ritorno a «Da iniziare» (passo 5.0).
+**Via API, non via browser**: è una regola del backend, e provarla dal DOM
+proverebbe il bottone del Cantiere, non la regola. Copre il 409 con le ore, il
+200 senza, e il caso che la vecchia guardia non poteva cogliere — una fase che
+smette di poter tornare indietro appena il dipendente dichiara un'ora.
 
 I selettori della matrice stanno in `griglia.js`, uno solo per tutti gli spec.
 

@@ -199,8 +199,9 @@ CASCADE_FASE_TASK = {
         "to_stato": "Completato",
     },
     "Da iniziare": {
-        # Caso speciale: tornare indietro da In corso. Vedi note nel PATCH:
-        # il backend rifiuta se ci sono task con ore_consumate > 0.
+        # Caso speciale: tornare indietro da In corso. Vedi note nel PATCH: il
+        # backend rifiuta se sui task della fase ci sono ORE DICHIARATE (lette
+        # dalla vista `ore_settimanali`, non dalla colonna-copia).
         "from_stati": ["In corso"],
         "to_stato": "Da iniziare",
     },
@@ -266,10 +267,13 @@ def aggiorna_fase(fase_id: int, req: FaseUpdate, _: Utente = Depends(require_man
       Tutto in transazione: o cambiano fase+task insieme, o niente.
 
     Caso speciale "Da iniziare":
-    - Se un qualunque task della fase ha ore_consumate > 0, l'operazione è
+    - Se un qualunque task della fase ha ORE DICHIARATE, l'operazione è
       bloccata (HTTP 409): non si può "fingere" che il lavoro non sia iniziato.
       Il PM deve prima azzerare la consuntivazione (operazione esplicita,
       out-of-scope di questo endpoint).
+      Le ore si leggono dalla vista `ore_settimanali`, come ovunque dal passo 2
+      della consuntivazione a ore. Fino al 23/09/2026 si leggevano da
+      `Task.ore_consumate` — vedi il commento sulla guardia qui sotto.
     """
     session = get_session()
     try:
@@ -288,23 +292,45 @@ def aggiorna_fase(fase_id: int, req: FaseUpdate, _: Utente = Depends(require_man
         update_data = req.model_dump(exclude_unset=True, exclude={"cascade"})
 
         # Caso bloccante PRIMA di toccare la fase: ritorno a "Da iniziare" con
-        # task aventi ore consumate. Il check va fatto prima per non lasciare
-        # la fase aggiornata e poi rifiutare la cascata.
+        # task su cui ci sono ore dichiarate. Il check va fatto prima per non
+        # lasciare la fase aggiornata e poi rifiutare la cascata.
+        #
+        # LE ORE SI LEGGONO DALLA VISTA, non da `Task.ore_consumate`.
+        # Quella colonna è una COPIA denormalizzata che nessuno aggiorna da
+        # quando le ore vengono dai blocchi (passo 2): al 23/09/2026 valeva 0 su
+        # tutti e 114 i task, con 2249 blocchi e 17.535 ore in database. La
+        # guardia c'era, la query girava, e non poteva rifiutare niente —
+        # chiedeva a un testimone che non guarda più da un anno. È lo stesso
+        # dato che l'aggregata di `GET /api/fasi/{progetto_id}` qui sotto legge
+        # dalla vista: due risposte alla stessa domanda, e una era ferma.
+        #
+        # UNA QUERY SOLA, aggregata per task. La guardia non gira in un ciclo e
+        # non deve: un `sum()` per ogni task della fase sarebbe un N+1 su una
+        # fase da venti task. Il join con la vista è già il filtro — i task
+        # senza blocchi non hanno righe — e l'`having` ripete comunque la
+        # soglia, perché è la condizione che l'endpoint promette («ha ore»), non
+        # un effetto collaterale del CHECK `ore > 0` su `blocchi_ore`.
         stato_nuovo = update_data.get("stato")
         if req.cascade and stato_nuovo == "Da iniziare" and fase.stato == "In corso":
-            task_con_consumate = session.query(Task).filter(
-                Task.fase_id == fase_id,
-                Task.ore_consumate > 0,
-            ).all()
-            if task_con_consumate:
-                nomi = ", ".join(f"{t.id} ({t.nome})" for t in task_con_consumate[:5])
-                if len(task_con_consumate) > 5:
-                    nomi += f" e altri {len(task_con_consumate) - 5}"
+            task_con_ore = (
+                session.query(Task.id, Task.nome, func.sum(OreSettimanali.c.ore))
+                .select_from(Task)
+                .join(OreSettimanali, OreSettimanali.c.task_id == Task.id)
+                .filter(Task.fase_id == fase_id)
+                .group_by(Task.id, Task.nome)
+                .having(func.sum(OreSettimanali.c.ore) > 0)
+                .order_by(Task.id)
+                .all()
+            )
+            if task_con_ore:
+                nomi = ", ".join(f"{tid} ({nome})" for tid, nome, _ore in task_con_ore[:5])
+                if len(task_con_ore) > 5:
+                    nomi += f" e altri {len(task_con_ore) - 5}"
                 raise HTTPException(
                     status_code=409,
                     detail=(
                         f"Impossibile riportare la fase '{fase.nome}' a 'Da iniziare': "
-                        f"{len(task_con_consumate)} task hanno ore consumate ({nomi}). "
+                        f"{len(task_con_ore)} task hanno ore consumate ({nomi}). "
                         "Azzera prima la consuntivazione di questi task."
                     )
                 )

@@ -51,6 +51,7 @@ from sqlalchemy import text  # noqa: E402
 from data_db_impl import get_session  # noqa: E402
 from models import Task, BloccoOre, Consuntivo  # noqa: E402
 from scenario_sottotask import TASK as TASK_SCENARIO  # noqa: E402
+from scenario_fasi import TASK as TASK_FASI  # noqa: E402
 
 DIPENDENTE = "D004"          # Helena Ullah — l'utente `user` del seed
 
@@ -104,13 +105,13 @@ def pulisci():
 def impronta():
     """md5 dello storico che nessuna verifica deve toccare.
 
-    Fuori dal conto stanno TUTTI gli id sintetici — i due task di prova e i
-    quattro dello scenario sottotask. Prima della verifica non esistono e dopo
+    Fuori dal conto stanno TUTTI gli id sintetici — i quattro task di prova, i
+    cinque dello scenario sottotask e i due dello scenario fasi. Prima della verifica non esistono e dopo
     la pulizia nemmeno, ma tenerli fuori rende l'impronta confrontabile anche a
     verifica in corso, cioè quando lo scenario è in piedi: è l'unico modo perché
     «md5 PRIMA» e «md5 DOPO» misurino la stessa cosa.
     """
-    ids = tuple(t[0] for t in TASK_PROVA) + TASK_SCENARIO
+    ids = tuple(t[0] for t in TASK_PROVA) + TASK_SCENARIO + TASK_FASI
     session = get_session()
     try:
         blocchi = session.execute(text(
