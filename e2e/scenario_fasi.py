@@ -14,8 +14,10 @@ fase vera per provare una guardia vuol dire scrivere sui dati di qualcun altro.
 
 Il primo PATCH deve prendere 409, il secondo 200. Prima del fix del 23/09/2026
 prendevano tutti e due 200, perché la guardia leggeva `Task.ore_consumate` — una
-colonna che nessuno aggiorna più e che vale 0 ovunque. `--stato` lo mostra:
-stampa le ore vere accanto alla colonna-copia, e si vedono divergere.
+colonna-copia che nessuno aggiornava più e che valeva 0 ovunque. Quella colonna
+è stata droppata al passo 5.6, quindi la divergenza non si può più mostrare
+affiancando i due numeri: `--stato` stampa le ore vere, che sono le uniche
+rimaste, ed è quello che la guardia legge.
 
 Le ore si scrivono con `salva_blocchi_settimana`, la stessa funzione di
 /salva-blocchi: la guardia legge la vista `ore_settimanali`, e la vista si nutre
@@ -132,7 +134,7 @@ def cancella():
 
 
 def stato():
-    """Le ore VERE accanto alla colonna-copia, che è il punto di tutto."""
+    """Le ore vere dei task dello scenario: quelle che la guardia legge."""
     session = get_session()
     try:
         prog = session.query(Progetto).filter(Progetto.id == PROGETTO).first()
@@ -149,8 +151,8 @@ def stato():
             print(f"    fase {f.id} «{f.nome}» [{f.stato}]")
             for t in (session.query(Task).filter(Task.fase_id == f.id)
                       .order_by(Task.id).all()):
-                print(f"       {t.id}  ore vere (vista): {float(reali.get(t.id) or 0):4.1f}h"
-                      f"   Task.ore_consumate (colonna-copia): {float(t.ore_consumate or 0):4.1f}h")
+                print(f"       {t.id}  ore dalla vista ore_settimanali: "
+                      f"{float(reali.get(t.id) or 0):4.1f}h")
     finally:
         session.close()
 

@@ -719,16 +719,14 @@ class Task(Base):
     # ore_pianificate: ore allocate nel piano corrente (può differire da
     #   ore_stimate se il PM ha rivisto la pianificazione mantenendo lo
     #   storico).
-    # ore_consumate: somma dei consuntivi (Consuntivo.ore_dichiarate) dei
-    #   dipendenti assegnati al task. NON va aggiornata a mano: è derivata
-    #   ma denormalizzata per performance (un trigger o un job può
-    #   ricalcolarla; al 13 mag 2026 viene aggiornata applicativamente in
-    #   data_db_impl.modifica_consuntivo). 📌 TODO Blocco 3: rendere
-    #   l'aggiornamento sistematico e testato.
-    # ore_rimanenti: ore_pianificate - ore_consumate. Denormalizzata come sopra.
+    #
+    # C'ERANO ANCHE `ore_consumate` e `ore_rimanenti`, due copie denormalizzate
+    # del consumato e del residuo. Nessuno le aggiornava da quando le ore
+    # vengono dai blocchi: valevano 0 e «copia di ore_pianificate» su tutti i
+    # task, mentre in database c'erano 17.535 ore. Droppate al passo 5.6
+    # (migration e2f3a4b5c6d7 e f3a4b5c6d7e8). Il consumato si somma dalla
+    # vista `ore_settimanali`, il residuo si calcola dove serve.
     ore_stimate = Column(Integer, nullable=True)
-    ore_consumate = Column(Float, nullable=True, default=0)
-    ore_rimanenti = Column(Float, nullable=True)
     ore_pianificate = Column(Float, nullable=True)
     data_inizio = Column(Date, nullable=True)
     data_fine = Column(Date, nullable=True)
@@ -976,37 +974,19 @@ class Consuntivo(Base):
     task_id = Column(String(10), ForeignKey("task.id", ondelete="CASCADE"), nullable=False)
     dipendente_id = Column(String(10), ForeignKey("dipendenti.id"), nullable=False)
     settimana = Column(Date, nullable=False)
-    ore_dichiarate = Column(Float, nullable=False, default=0)
     compilato = Column(Boolean, nullable=False, default=False)
     data_compilazione = Column(DateTime, nullable=True)
-    modalita = Column(String(10), nullable=True)
-    motivo_fermo = Column(String(120), nullable=True)
     nota = Column(Text, nullable=True)
-    # ── Dichiarazione del task come UNITÀ DI LAVORO (Step 4, 07/08/2026) ──
-    # Un task NON scomposto dichiara l'avanzamento come lo dichiara un pezzo:
-    # con una percentuale, non con un booleano di stato. Queste due colonne
-    # sono le gemelle esatte di quelle su `ConsuntivoSottotask` — stesso tipo,
-    # stessa semantica del NULL, stesso CHECK — perché il motore ore-derivate
-    # possa trattare task e sottotask come la stessa cosa: un'unità di lavoro
-    # su cui qualcuno dichiara quanto è avanti.
+    # ── QUI C'ERA IL CURSORE (Step 4, 07/08/2026 — droppato al passo 5.6) ──
+    # `ore_dichiarate`, `percentuale`, `ore_effettive`, `modalita`,
+    # `motivo_fermo`: le colonne della Consuntivazione a slider. Un task non
+    # scomposto dichiarava l'avanzamento con una percentuale, e le ore si
+    # DERIVAVANO da quella; `ore_dichiarate` teneva il totale settimanale.
+    # Con la Consuntivazione a ore le ore si dichiarano per giorno in
+    # `blocchi_ore` e si sommano dalla vista `ore_settimanali`: nessuna delle
+    # cinque aveva più uno scrittore (passo 5.4) né un lettore (5.5).
+    # Migration b1c2d3e4f5a6, c2d3e4f5a6b7, d1e2f3a4b5c6.
     #
-    # La grana lo permette già: questa tabella è UNIQUE su
-    # (task_id, dipendente_id, settimana), quella dei pezzi su
-    # (sottotask_id, dipendente_id, settimana). Identiche a meno del nome
-    # della colonna-entità.
-    #
-    # percentuale: avanzamento 0-100 dichiarato. NULL = non si è espresso —
-    #   diverso da 0, che è «l'ho guardato e non è avanzato». CHECK a livello
-    #   DB: ck_consuntivi_percentuale (migration d6e7f8a9b0c1), gemello di
-    #   ck_consuntivo_sottotask_percentuale.
-    percentuale = Column(Integer, nullable=True)
-    # ore_effettive: le ore REALI della settimana su questo task, quando
-    #   l'avanzamento non le cattura (fermo che è costato tempo, o costato più
-    #   della stima). Quando è valorizzata SOSTITUISCE la derivata, non ci si
-    #   somma. NULL = nessuna ora effettiva, si deriva; 0.0 = «zero ore, e lo
-    #   dico io», che spegne la derivazione. È la ragione per cui è nullable
-    #   mentre `ore_dichiarate` qui sopra è NOT NULL DEFAULT 0.
-    ore_effettive = Column(Float, nullable=True)
     # ore_stimate_residue: quante ore MANCANO ancora per finire, secondo chi ci
     #   sta lavorando, dichiarate nella settimana in cui lo dice (04/09/2026).
     #
@@ -1085,43 +1065,19 @@ class ConsuntivoSottotask(Base):
     #   d6e7f8a9b0c1 è servita a togliere. Vedi migration e7f8a9b0c1d2.
     presa_visione = Column(Boolean, nullable=False, default=False,
                            server_default="false")
-    # percentuale: avanzamento 0-100 dichiarato sullo slider. Integer perché lo
-    # slider è a passi interi: un Float introdurrebbe una precisione decimale
-    # che nessuno intende su una stima soggettiva.
-    # nullable=True È INTENZIONALE: se il dipendente non muove lo slider resta
-    # NULL e il sistema NON inventa un default. È il motore ore-derivate che,
-    # trovando NULL, deriverà l'avanzamento dallo STATO.
-    # Range 0-100 imposto da CHECK a livello DB: ck_consuntivo_sottotask_percentuale.
-    percentuale = Column(Integer, nullable=True)
-    # ore_effettive: le ore REALI di questa settimana su questo pezzo, scritte a
-    # mano dal dipendente quando l'avanzamento non le cattura (Step 4 strato 2,
-    # 06/08/2026). Tre casi: pezzo fermo che è comunque costato tempo, pezzo
-    # finito che è costato più della stima, soccorso a un collega.
+    # QUI C'ERANO `percentuale` e `ore_effettive`, le due colonne del cursore
+    # sul pezzo: l'avanzamento 0-100 dichiarato con lo slider, e le ore scritte
+    # a mano quando quell'avanzamento non le catturava. Le ore si derivavano
+    # dalla prima e la seconda le sostituiva. Droppate al passo 5.6 (migration
+    # a4b5c6d7e8f9) insieme alle gemelle su `Consuntivo`: nella Consuntivazione
+    # a ore le ore non si derivano da niente, si dichiarano per giorno.
     #
-    # Quando è valorizzata SOSTITUISCE la derivata (Δpct × Sottotask.ore_stimate)
-    # per quel sottotask in quella settimana — non ci si somma. Sono due
-    # risposte alla stessa domanda «quante ore è costato questo pezzo questa
-    # settimana», e quella esplicita vince su quella calcolata.
-    #
-    # PER SETTIMANA, non cumulativa: 8h questa e 5h la prossima si scrivono 8 e
-    # poi 5. È la grana di tutto il resto del sistema, e gli 11 lettori di
-    # Consuntivo.ore_dichiarate sommano già per settimana.
-    #
-    # Float come `Consuntivo.ore_dichiarate` (mezze giornate, quarti d'ora), ma
-    # nullable=True mentre quella è NOT NULL default 0 — ed è la differenza che
-    # conta: qui NULL significa «non dichiarate, deriva pure», che è tutt'altro
-    # da 0.0 = «zero ore effettive, e lo sto dicendo io». Un default a 0
-    # spegnerebbe la derivazione su ogni riga.
-    ore_effettive = Column(Float, nullable=True)
     # ore_stimate_residue: gemella esatta di `Consuntivo.ore_stimate_residue` —
     # «quante ore mancano ancora su questo PEZZO», per settimana. Le stesse
     # ragioni, che là sono scritte per esteso: NULL = non stimato, 0.0 = non
     # manca niente; INERTE (non entra in nessun calcolo di ore); il QUANTO qui,
-    # il COSA in `nota`.
-    #
-    # Aggiunte dalla STESSA migration (b0c1d2e3f4a5, un ciclo sui due nomi):
-    # `ore_effettive` fu invece introdotta da due migration a un mese di
-    # distanza, e nel frattempo le due tabelle non erano gemelle.
+    # il COSA in `nota`. Aggiunta dalla stessa migration su entrambe le tabelle
+    # (b0c1d2e3f4a5, un ciclo sui due nomi).
     ore_stimate_residue = Column(Float, nullable=True)
     # nota: la nota-sottotask vive TUTTA qui, attaccata al pezzo che descrive.
     # «Obbligatoria se Bloccato» è validazione della route, non della colonna.
@@ -1295,36 +1251,13 @@ class Intervento(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
-class PresenzaSettimanale(Base):
-    __tablename__ = "presenze_settimanali"
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    dipendente_id = Column(String(10), ForeignKey("dipendenti.id"), nullable=False)
-    settimana = Column(Date, nullable=False)
-    giorni_sede = Column(SmallInteger, default=0)
-    giorni_remoto = Column(SmallInteger, default=0)
-    ore_assenza = Column(Float, default=0)
-    tipo_assenza = Column(String(60), nullable=True)
-    nota_assenza = Column(Text, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-
-    __table_args__ = (
-        UniqueConstraint("dipendente_id", "settimana", name="uq_presenza"),
-    )
-
-
-class Spesa(Base):
-    __tablename__ = "spese"
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    dipendente_id = Column(String(10), ForeignKey("dipendenti.id"), nullable=False)
-    settimana = Column(Date, nullable=False)
-    descrizione = Column(String(200), nullable=False)
-    importo = Column(Float, nullable=False)
-    categoria = Column(String(60), nullable=True)
-    progetto_id = Column(String(10), ForeignKey("progetti.id"), nullable=True)
-    nota = Column(Text, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+# QUI C'ERANO `PresenzaSettimanale` e `Spesa`, due tabelle che non sono mai
+# entrate in funzione: le scriveva solo il vecchio `POST /salva`, il form non
+# gliele ha mai mandate, non le ha lette mai nessuno e in database avevano zero
+# righe. Droppate al passo 5.6 (migration a6b7c8d9e0f1).
+# Se un giorno serviranno le assenze — e probabilmente serviranno, perché una
+# settimana di ferie oggi non si sa dire — andranno ridisegnate con la grana
+# della griglia: a ore e per giorno, non con quella di un form che non c'è più.
 
 
 # ══════════════════════════════════════════════════════════════════════

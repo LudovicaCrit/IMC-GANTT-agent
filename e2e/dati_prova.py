@@ -118,8 +118,13 @@ def impronta():
             "select dipendente_id, giorno, task_id, sottotask_id, ore, fonte "
             "from blocchi_ore where task_id not in :ids or task_id is null "
             "order by 1,2,3,4,5,6"), {"ids": ids}).all()
+        # SOLO LE COLONNE SUPERSTITI. `ore_dichiarate` stava in questa lista
+        # ed è uscita col passo 5.6: un'impronta che la includesse cambierebbe
+        # per il drop stesso, cioè misurerebbe la migration invece dei dati.
+        # Le ore non spariscono dal conto — sono in `blocchi_ore`, la prima
+        # impronta qui sopra.
         consuntivi = session.execute(text(
-            "select dipendente_id, settimana, task_id, ore_dichiarate, stato_dichiarato, nota "
+            "select dipendente_id, settimana, task_id, compilato, stato_dichiarato, nota "
             "from consuntivi where task_id not in :ids order by 1,2,3"), {"ids": ids}).all()
         # Anche i TASK, e non per zelo: salvare una dichiarazione PROPAGA lo
         # stato sul task (`salva_blocchi_settimana` → `modifica_task`). Se una
