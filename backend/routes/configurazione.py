@@ -432,9 +432,9 @@ def _associa_competenze(session, dipendente_id, nomi):
 def _avvisi_competenze(scartati):
     """Gli scarti in forma leggibile, per il payload di risposta.
 
-    Stessa convenzione di `salva_consuntivo`, che ritorna `{ok, avvisi}`: lista
-    VUOTA nel caso normale, così il client non deve distinguere «campo assente»
-    da «nessun avviso».
+    Stessa convenzione di `salva_blocchi_settimana`, che ritorna `{ok, avvisi}`:
+    lista VUOTA nel caso normale, così il client non deve distinguere «campo
+    assente» da «nessun avviso».
 
     DA QUANDO IL JSON NON SI SCRIVE PIÙ, QUESTI AVVISI PESANO DI PIÙ. Prima uno
     scarto era invisibile ma recuperabile: il nome restava nella colonna JSON e

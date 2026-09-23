@@ -97,6 +97,11 @@ tendina, le righe in sola lettura che non ci entrano mai, il silenzio su una
 settimana ancora vuota, e il salvataggio che passa senza chiedere niente
 lasciando il promemoria nella barra.
 
+`letture-intatte.spec.js` — la rete del passo 5: un colpo secco su tutte le
+letture dell'applicazione (comprese GANTT, Economia e SAL) per accorgersi subito
+se una cancellazione ne ha spenta una. Va riletto a ogni sotto-passo, e
+soprattutto ai drop del 5.6.
+
 `unita-lavoro.spec.js` — le due funzioni pure di `_shared/unitaLavoro.js`
 («questa unità è dichiarata?», «quali sono le unità della settimana»), provate
 importandole direttamente: niente browser, niente database. Più un giro vero

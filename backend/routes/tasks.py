@@ -502,7 +502,7 @@ def modifica_task_singolo(
     # ha un assegnatario», non solo «l'istante della transizione».
     #
     # La guardia sta QUI e non in `modifica_task`: quella è attraversata anche
-    # dalla propagazione di `salva_consuntivo`, dove a scrivere è il dipendente
+    # dalla propagazione di `salva_blocchi_settimana`, dove a scrivere è il dipendente
     # che dichiara «ci sto lavorando». L'obbligo è del PM che avvia il task dal
     # Cantiere, non di chi lo consuntiva — vedi il commento gemello in
     # `data_db_impl.aggiungi_task`.

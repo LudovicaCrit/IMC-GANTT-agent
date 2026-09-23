@@ -1014,11 +1014,11 @@ class Consuntivo(Base):
     #   meno il consumato, aritmetica sul PIANO — dice quanto budget avanza, non
     #   quanto lavoro manca. Coincidono solo se la stima iniziale era giusta.
     #
-    #   INERTE, ed è la differenza da `ore_effettive` qui sopra, che le somiglia
-    #   per forma: quella entra in `_aggrega_ore_unita` e sostituisce la
-    #   derivata. Questa non tocca nulla — né ore derivate, né `ore_dichiarate`,
-    #   né `Task.stato`. Si scrive e si rilegge; i consumatori
-    #   (ri-stanziamento, aggregazione-PM, IA) sono futuri.
+    #   INERTE. Non tocca nulla — né `ore_dichiarate`, né `Task.stato`: si
+    #   scrive e si rilegge, e la vista-PM la mostra. Lo era anche rispetto alle
+    #   ore DERIVATE dall'avanzamento, in cui `ore_effettive` (qui sopra)
+    #   entrava per sostituirle; quel motore è uscito col passo 5.4 e le ore
+    #   oggi si dichiarano per giorno, senza derivare da niente.
     #
     #   NULL = «non l'ho stimato»; 0.0 = «non manca niente, ho finito», che è
     #   un'affermazione. È la ragione del nullable senza default: un default a 0
@@ -1116,8 +1116,8 @@ class ConsuntivoSottotask(Base):
     # ore_stimate_residue: gemella esatta di `Consuntivo.ore_stimate_residue` —
     # «quante ore mancano ancora su questo PEZZO», per settimana. Le stesse
     # ragioni, che là sono scritte per esteso: NULL = non stimato, 0.0 = non
-    # manca niente; INERTE (non entra in `_aggrega_ore_unita`, a differenza di
-    # `ore_effettive` qui sopra); il QUANTO qui, il COSA in `nota`.
+    # manca niente; INERTE (non entra in nessun calcolo di ore); il QUANTO qui,
+    # il COSA in `nota`.
     #
     # Aggiunte dalla STESSA migration (b0c1d2e3f4a5, un ciclo sui due nomi):
     # `ore_effettive` fu invece introdotta da due migration a un mese di

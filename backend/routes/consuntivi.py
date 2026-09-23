@@ -86,9 +86,10 @@ DETTAGLIO ENDPOINT
 
    ⓘ C'ERA ANCHE `POST /api/consuntivi/salva`, la porta della pagina a
      cursore, con Pattern Y (self-or-manager) e un body a dizionari paralleli.
-     È uscita col passo 5.3 (23/09/2026) insieme alla pagina che la chiamava.
-     Il motore che ci stava dietro (`salva_consuntivo`) è ancora nello strato
-     dati e non lo chiama più nessuno: esce al passo 5.4.
+     È uscita col passo 5.3 (23/09/2026) insieme alla pagina che la chiamava, e
+     col passo 5.4 è uscito anche il motore che ci stava dietro — quello che
+     DERIVAVA le ore dall'avanzamento dichiarato. Oggi le ore si dichiarano per
+     giorno e non si derivano da niente.
 
 PATTERN AUTH USATI
 ──────────────────
