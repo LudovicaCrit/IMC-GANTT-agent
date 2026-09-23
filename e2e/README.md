@@ -91,6 +91,11 @@ tendina, le righe in sola lettura che non ci entrano mai, il silenzio su una
 settimana ancora vuota, e il salvataggio che passa senza chiedere niente
 lasciando il promemoria nella barra.
 
+`pagina-unica.spec.js` — il routing del passo 5.1: `/consuntivazione` è la
+griglia, i due indirizzi di cantiere reindirizzano invece di dare 404, le tre
+strade che ci portano (menu, Home, Attività interne) ci arrivano davvero, e chi
+supervisiona trova ancora la vista del gruppo accanto alla propria settimana.
+
 `guardia-fasi.spec.js` — la guardia del ritorno a «Da iniziare» (passo 5.0).
 **Via API, non via browser**: è una regola del backend, e provarla dal DOM
 proverebbe il bottone del Cantiere, non la regola. Copre il 409 con le ore, il

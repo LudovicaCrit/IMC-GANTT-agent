@@ -1,5 +1,8 @@
+/* ⚠ PAGINA NON PIÙ RAGGIUNGIBILE dal passo 5.1 (23/09/2026): `/consuntivazione`
+ * porta alla griglia a ore, e nessuna rotta punta più qui. Il file resta sul
+ * disco fino al passo 5.2, che lo cancella insieme al vecchio `POST /salva`.
+ * Non aggiungerci niente: quello che serve va nella griglia. */
 import React, { useState, useEffect, useMemo, useCallback } from 'react'
-import { Link } from 'react-router-dom'
 import { apiFetch } from '../api'
 import { unitaDichiarata, unitaCompilabili } from '../components/_shared/unitaLavoro'
 // Pezzi condivisi con la griglia a ore (ConsuntivazioneOre.jsx), estratti il
@@ -421,18 +424,9 @@ export default function ConsuntivazioneUser() {
         </p>
 
         <div className="flex gap-2 shrink-0">
-          {/* La griglia a ore, affiancata a questa pagina fino al passo 5:
-              un pulsante e non una voce di menu, finché è in prova. Chiede
-              conferma se ci sono modifiche non salvate, come il cambio settimana. */}
-          <Link to="/consuntivazione/ore"
-            onClick={(e) => {
-              if (haPendenti && !confirm('Hai modifiche non salvate. Passare alla griglia a ore le perderà. Continuare?')) {
-                e.preventDefault()
-              }
-            }}
-            className="px-3 py-2 rounded-lg text-sm font-medium bg-blue-900/40 text-blue-200 border border-blue-800 hover:bg-blue-900/60">
-            🗓️ Griglia a ore
-          </Link>
+          {/* Il pulsante «Griglia a ore» stava qui. Col passo 5.1 la griglia
+              è diventata la pagina unica e questa non è più raggiungibile: un
+              traghetto che parte da un porto chiuso. */}
           {/* Agganci IA — segnaposto, non ancora collegati */}
           <button disabled
             title="In arrivo: detta cosa hai fatto, l'assistente compila per te"

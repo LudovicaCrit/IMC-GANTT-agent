@@ -3,9 +3,15 @@
  * ConsuntivazioneOre.jsx — la settimana a ore, unità × giorni
  * ═════════════════════════════════════════════════════════════════════════
  *
- * Consuntivazione a ore, passo 4. AFFIANCATA a ConsuntivazioneUser.jsx (la
- * pagina a cursore), che resta viva fino al passo 5. Legge `/api/consuntivi/me`
- * e scrive su `/api/consuntivi/salva-blocchi`.
+ * LA pagina della Consuntivazione, su `/consuntivazione`. Dal passo 5.1
+ * (23/09/2026) è l'unica: la pagina a cursore (ConsuntivazioneUser.jsx) non ha
+ * più una rotta che ci porti, e sparisce col passo 5.2. Legge
+ * `/api/consuntivi/me` e scrive su `/api/consuntivi/salva-blocchi`.
+ *
+ * Sta dentro `GuscioConsuntivazione` come ci stava la pagina a cursore: a un
+ * manager o a un PM il guscio offre lo scambio fra «la mia settimana» — questa
+ * griglia — e la vista del gruppo. Essere diventata la pagina unica non toglie
+ * niente a chi supervisiona.
  *
  * Dalla griglia si dichiara TUTTO: le celle si SELEZIONANO (mezz'ore) e la
  * TESTA della riga — stato, resta, nota — si modifica (sotto-passi 2 e 3). La
@@ -28,7 +34,6 @@
  * si calcolano una volta (`giorniSettimana`) e non sono cablati nella tabella.
  */
 import React, { useState, useEffect, useCallback, useMemo } from 'react'
-import { Link } from 'react-router-dom'
 import { fetchConsuntiviMe, salvaBlocchi } from '../api'
 import GuscioConsuntivazione from '../components/consuntivazione/GuscioConsuntivazione'
 import SelettoreSettimana from '../components/consuntivazione/SelettoreSettimana'
@@ -595,24 +600,15 @@ export default function ConsuntivazioneOre() {
 
   return (
     <GuscioConsuntivazione>
-      <div className="flex items-start justify-between mb-6 gap-4">
-        <div>
-          <p className="text-gray-400">Ciao {nome} — la tua settimana, a ore.</p>
-          <p className="text-xs text-gray-600 mt-1">
-            Per ogni attività: lo stato, le ore di ogni mezza giornata, quante ne restano. Un'attività ferma si dichiara con stato e nota, senza ore.
-          </p>
-        </div>
-        {/* Stessa guardia della chiusura scheda e del cambio settimana: uscire
-            di qui con modifiche non salvate le perderebbe in silenzio. */}
-        <Link to="/consuntivazione"
-          onClick={(e) => {
-            if (haPendenti && !window.confirm('Hai modifiche non salvate. Tornare alla consuntivazione a cursore le perderà. Continuare?')) {
-              e.preventDefault()
-            }
-          }}
-          className="px-3 py-2 rounded-lg text-sm font-medium bg-gray-800 text-gray-300 border border-gray-700 hover:text-white shrink-0">
-          ← Consuntivazione a cursore
-        </Link>
+      {/* Il pulsante «← Consuntivazione a cursore» stava qui e se n'è andato
+          col passo 5.1: non c'è più un altro posto dove andare. Resta la
+          guardia sulla chiusura della scheda e sul cambio settimana, che sono
+          gli altri due modi di perdere delle modifiche. */}
+      <div className="mb-6">
+        <p className="text-gray-400">Ciao {nome} — la tua settimana, a ore.</p>
+        <p className="text-xs text-gray-600 mt-1">
+          Per ogni attività: lo stato, le ore di ogni mezza giornata, quante ne restano. Un'attività ferma si dichiara con stato e nota, senza ore.
+        </p>
       </div>
 
       <SelettoreSettimana

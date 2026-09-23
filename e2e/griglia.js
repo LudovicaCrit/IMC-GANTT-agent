@@ -8,7 +8,7 @@
  */
 import { expect } from '@playwright/test'
 
-export const GRIGLIA = '/consuntivazione/ore'
+export const GRIGLIA = '/consuntivazione'
 
 /** La riga di un'unità: `riga(page, 'task', 'T950')`, `riga(page, 'sott', 748)`. */
 export const riga = (page, tipo, id) => page.locator(`[data-riga="${tipo}:${id}"]`)

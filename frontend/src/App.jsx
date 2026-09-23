@@ -3,7 +3,6 @@ import { BrowserRouter, Routes, Route, Navigate, NavLink, useLocation } from 're
 import Home from './pages/Home'
 import Gantt from './pages/Gantt'
 import Risorse from './pages/Risorse'
-import ConsuntivazioneUser from './pages/ConsuntivazioneUser'
 import ConsuntivazioneOre from './pages/ConsuntivazioneOre'
 import AnalisiInterventi from './pages/AnalisiInterventi'
 import Pipeline from './pages/Pipeline'
@@ -182,18 +181,20 @@ function MainLayout() {
         <Routes>
           {/* Pagine accessibili a TUTTI gli utenti loggati (user + manager) */}
           <Route path="/" element={<Home />} />
-          <Route path="/consuntivazione" element={<ConsuntivazioneUser />} />
-          {/* Consuntivazione a ore (passo 4): la griglia unità × giorni,
-              affiancata alla pagina a cursore fino al passo 5. Nessuna voce di
-              menu: ci si arriva dal pulsante «Griglia a ore» nella pagina qui
-              sopra. La voce «Consuntivazione» resta evidenziata (NavLink senza
-              `end` riconosce il prefisso). */}
-          <Route path="/consuntivazione/ore" element={<ConsuntivazioneOre />} />
-          {/* `-new` era un nome di cantiere, e l'URL è visibile quanto
-              l'etichetta: diventava una bugia nel momento in cui la pagina
-              restava una sola. Il redirect copre i preferiti di chi ha usato
-              la A′ in questi mesi — `replace` per non lasciare la vecchia
-              rotta nella cronologia, dove il tasto Indietro la ripescherebbe. */}
+          {/* LA CONSUNTIVAZIONE È UNA SOLA (passo 5.1, 23/09/2026): la griglia
+              a ore. La pagina a cursore ha smesso di essere raggiungibile qui —
+              il file c'è ancora e se ne va al passo 5.2, ma da questa riga in
+              poi non ha più una porta. */}
+          <Route path="/consuntivazione" element={<ConsuntivazioneOre />} />
+          {/* I DUE INDIRIZZI DI CANTIERE, tutti e due su /consuntivazione.
+              `/ore` era il posto della griglia finché conviveva con l'altra
+              pagina, `-new` un nome di lavorazione: sono stati in giro per mesi
+              e stanno nei preferiti e nelle chat di chi li ha usati. Un 404 al
+              loro posto direbbe «quella cosa non esiste più», che è falso: è
+              diventata la pagina principale.
+              `replace` per non lasciarli nella cronologia, dove il tasto
+              Indietro li ripescherebbe. */}
+          <Route path="/consuntivazione/ore" element={<Navigate to="/consuntivazione" replace />} />
           <Route path="/consuntivazione-new" element={<Navigate to="/consuntivazione" replace />} />
 
           {/* Pagine manager-only — wrapped in <RequireManager> */}
