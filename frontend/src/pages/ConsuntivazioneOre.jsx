@@ -35,6 +35,7 @@ import SelettoreSettimana from '../components/consuntivazione/SelettoreSettimana
 import PromemoriaNota from '../components/consuntivazione/PromemoriaNota'
 import BarraSalvataggio from '../components/consuntivazione/BarraSalvataggio'
 import AggiungiRiga from '../components/consuntivazione/AggiungiRiga'
+import BannerScoperti from '../components/consuntivazione/BannerScoperti'
 import { fmtOre, fmtGiorno } from '../components/consuntivazione/formato'
 import {
   SOGLIE, GIORNI_LAVORATIVI, monteGiornaliero, livelloGiorno, livelloSettimana, giornoCoperto,
@@ -351,6 +352,25 @@ export default function ConsuntivazioneOre() {
   // quella settimana (N21): uno stato o una nota da soli non bastano, e alla
   // prossima apertura la riga non ci sarebbe più. Il dato salvato resta in DB,
   // ma sparirebbe dalla vista senza che nessuno l'abbia detto.
+  //
+  // `senzaSpiegazione` (sotto-passo 6) non è né l'una né l'altra cosa: è un
+  // PROMEMORIA. Le righe che non hanno ore e non hanno stato — su cui cioè non
+  // si è detto proprio niente — finiscono nel banner in fondo, che invita a
+  // dire come stanno e non impedisce nulla.
+  //   · si chiama così e NON «scoperte» di proposito: «scoperto» in questa
+  //     pagina vuol già dire un'altra cosa — il GIORNO sotto il monte, nella
+  //     sintesi dei giorni coperti. Sono due domande diverse (le ore di una
+  //     giornata, la spiegazione di un'attività) e devono restare due parole
+  //     diverse, o fra un mese nessuno saprà più quale delle due si sta
+  //     leggendo;
+  //   · le righe in SOLA LETTURA non ci entrano (il `continue` qui sotto le ha
+  //     già tolte): un pezzo di un collega o un task chiuso non è roba di cui
+  //     questo dipendente debba rendere conto;
+  //   · nemmeno quelle AGGIUNTE a mano, che senza ore hanno già la loro
+  //     avvertenza accanto alla riga. Due messaggi sulla stessa riga per due
+  //     ragioni diverse si annullano a vicenda;
+  //   · lo stato è la risposta alla domanda «come sta». Una nota da sola non
+  //     toglie la riga dall'elenco: dice qualcosa, ma non dice a che punto è.
   const stato = useMemo(() => {
     if (!vista) return null
     const celle = {}
@@ -358,6 +378,7 @@ export default function ConsuntivazioneOre() {
     const cambi = {}
     const problemi = {}
     const avvertenze = {}
+    const senzaSpiegazione = []
     const modificate = []
     for (const r of vista.righe) {
       celle[r.chiave] = celleRiga(r, vista.giorni, modifiche[r.chiave], vista.metaMonteGiorno)
@@ -367,6 +388,11 @@ export default function ConsuntivazioneOre() {
       const blocchi = blocchiDaCelle(celle[r.chiave])
       if (r.aggiunta && blocchi.length === 0) {
         avvertenze[r.chiave] = 'senza ore questa riga non tornerà: alla prossima apertura questo task non è fra quelli della settimana'
+      }
+      // Ore della riga = celle + storico, come il totale che la riga mostra.
+      const senzaOre = blocchi.length === 0 && r.storico.length === 0
+      if (!r.aggiunta && senzaOre && !testa.stato) {
+        senzaSpiegazione.push({ chiave: r.chiave, nome: r.nome })
       }
       const celleCambiate = Boolean(modifiche[r.chiave]) && !stessiBlocchi(r.blocchi, blocchi)
       if (!(celleCambiate || testa.statoCambiato || testa.notaCambiata || testa.residuoCambiato)) continue
@@ -404,7 +430,7 @@ export default function ConsuntivazioneOre() {
     const giorniOltreTetto = vista.giorni.filter((g) => livelloPerGiorno[g.iso] === 'tetto')
 
     return {
-      celle, teste, cambi, problemi, avvertenze, modificate, totaleGiorno,
+      celle, teste, cambi, problemi, avvertenze, senzaSpiegazione, modificate, totaleGiorno,
       totaleSettimana: arrotonda2(totaleSettimana),
       monteGiorno, livelloPerGiorno, giorniCoperti, giorniOltreTetto,
       livelloSettimana: livelloSettimana(totaleSettimana, vista.monteSettimana),
@@ -446,6 +472,17 @@ export default function ConsuntivazioneOre() {
     setModificheTesta(scarta)
     setSalvataggio(null)
     setErroriSalvataggio([])
+  }
+
+  /* Dal banner alla riga. Il fuoco va sulla tendina dello stato, che è la
+   * domanda che il banner ha appena fatto: portarci e basta lascerebbe
+   * all'utente di ritrovare il punto con gli occhi in una tabella lunga.
+   * `preventScroll` perché lo scorrimento l'ha già fatto la riga. */
+  const vaiAllaRiga = (chiave) => {
+    const riga = document.querySelector(`[data-riga="${chiave}"]`)
+    if (!riga) return
+    riga.scrollIntoView({ block: 'center', behavior: 'smooth' })
+    riga.querySelector('select[aria-label^="Stato"]')?.focus({ preventScroll: true })
   }
 
   const cambiaTesta = (riga, campo, valore) => {
@@ -494,6 +531,15 @@ export default function ConsuntivazioneOre() {
     // riga non tornerà (N21 richiede i blocchi). L'avvertenza è già accanto
     // alla riga; qui si chiede conferma, perché dopo il salvataggio la riga
     // sparisce dalla griglia e non c'è modo di accorgersene.
+    //
+    // LE ATTIVITÀ SENZA SPIEGAZIONE NON HANNO UNA FINESTRA, ed è una scelta.
+    // Sarebbero il caso più frequente di tutti — quasi ogni settimana lascia
+    // indietro qualcosa — e una finestra che compare quasi sempre si impara a
+    // chiudere senza leggerla, portandosi via anche l'attenzione per quella
+    // sopra, che invece dice una cosa che non si può dedurre. Il promemoria lo
+    // fa il banner PRIMA (in fondo alla griglia) e la riga d'avviso DOPO (nella
+    // barra di salvataggio, che è sticky e si vede anche da chi salva senza
+    // essere mai sceso in fondo). Nessuno dei due ferma niente.
     const senzaOre = stato.modificate.filter((r) => stato.avvertenze[r.chiave])
     if (senzaOre.length) {
       const elenco = senzaOre.map((r) => `· ${r.nome}`).join('\n')
@@ -502,6 +548,9 @@ export default function ConsuntivazioneOre() {
         `${quante}:\n${elenco}\n\nStato e nota si salvano, ma senza ore la riga non tornerà alla prossima apertura della settimana. Salvare lo stesso?`
       )) return
     }
+    // Lo si calcola PRIMA di salvare, ma descrive il dopo: `senzaSpiegazione`
+    // tiene già conto delle modifiche in corso, che fra un istante saranno in DB.
+    const mute = stato.senzaSpiegazione
     const unita = stato.modificate.map((r) => {
       const testa = stato.teste[r.chiave]
       const { celleCambiate, blocchi } = stato.cambi[r.chiave]
@@ -518,7 +567,16 @@ export default function ConsuntivazioneOre() {
     setErroriSalvataggio([])
     try {
       const esito = await salvaBlocchi({ settimana: dati.settimana, unita })
-      carica(dati.settimana, esito)
+      // L'avviso delle attività mute viaggia insieme a quelli del backend, nella
+      // stessa lista: per chi legge sono tutt'e due «cose da sapere sul
+      // salvataggio appena fatto», e distinguerle vorrebbe dire spiegare al
+      // lettore da quale strato vengono, che non gli serve.
+      const nota = mute.length
+        ? [`${mute.length === 1 ? 'Un\u2019attività resta' : `${mute.length} attività restano`} senza ore e senza stato`
+           + ` (${mute.slice(0, 3).map((s) => s.nome).join(', ')}${mute.length > 3 ? `, e altre ${mute.length - 3}` : ''}).`
+           + ' Nessuno saprà perché sono ferme: basta lo stato, anche senza ore.']
+        : []
+      carica(dati.settimana, { ...esito, avvisi: [...nota, ...esito.avvisi] })
     } catch (e) {
       const errori = leggiErrori(e?.message || String(e), vista.righe)
       setErroriSalvataggio(errori)
@@ -703,6 +761,21 @@ export default function ConsuntivazioneOre() {
         Mattina e pomeriggio sono solo un aiuto per comporre la giornata: si salvano le ore del giorno.
         Le ore <span className="text-amber-300/80">storiche</span> vengono dai consuntivi settimanali precedenti e non si modificano.
       </p>
+
+      {/* «Di queste non hai detto niente»: l'invito a spiegare le attività
+          rimaste senza ore e senza stato. Non è la copertura — quella sta in
+          cima e guarda i giorni — e non ferma il salvataggio.
+
+          QUANDO COMPARE: solo se nella settimana c'è già qualcosa — ore
+          salvate, o modifiche in corso. Su una settimana ancora vergine ogni
+          riga è senza ore e senza stato, e aprire la pagina per trovarsi
+          «13 attività non hanno né ore né stato» non è un promemoria, è un
+          rimprovero per essersi presentati. Il promemoria ha senso quando si è
+          cominciato: allora quelle rimaste indietro si vedono per quello che
+          sono. */}
+      {!soloLettura && (haPendenti || stato.totaleSettimana > 0) && (
+        <BannerScoperti scoperti={stato.senzaSpiegazione} onVai={vaiAllaRiga} />
+      )}
 
       {/* Fuori programma: un task proprio che la settimana non propone. La
           selezione riceve già decise le due liste che la riguardano — cosa

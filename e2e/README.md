@@ -21,9 +21,11 @@ gira sul database di sviluppo, non su uno suo.
 
 ## I dati di prova
 
-`dati_prova.py` crea due task assegnati a Helena (D004) fuori dalla settimana
-corrente — è il caso che «Ho lavorato su altro» esiste per coprire — e li toglie
-insieme a tutto ciò che i test ci hanno scritto sopra. Lo chiamano da soli
+`dati_prova.py` crea quattro task assegnati a Helena (D004): due FUORI dalla
+settimana corrente — il caso che «Ho lavorato su altro» esiste per coprire — e
+due DENTRO, che la griglia carica già e su cui nessuno ha detto niente, per il
+banner delle attività senza spiegazione. Li toglie insieme a tutto ciò che i
+test ci hanno scritto sopra. Lo chiamano da soli
 `apparecchia.js` (prima) e `sparecchia.js` (dopo).
 
 Prima e dopo si stampa l'impronta md5 di `blocchi_ore` e `consuntivi` al netto
@@ -72,6 +74,13 @@ dichiarazione su un pezzo che sopravvive alla riapertura, C2, l'annullato-con-or
 visibile e non scrivibile, e le due facce di M9 — il task che torna compilabile
 quando nessun pezzo è più vivo (T952, T953) e quello che resta scomposto perché
 un pezzo vivo c'è ancora (T954).
+
+`banner-scoperti.spec.js` — il promemoria in fondo alla griglia (passo 4,
+sotto-passo 6): quando una riga ci entra e quando ne esce (spiegata con lo
+stato, oppure con le ore), il bottone che porta alla riga col fuoco sulla
+tendina, le righe in sola lettura che non ci entrano mai, il silenzio su una
+settimana ancora vuota, e il salvataggio che passa senza chiedere niente
+lasciando il promemoria nella barra.
 
 I selettori della matrice stanno in `griglia.js`, uno solo per tutti gli spec.
 

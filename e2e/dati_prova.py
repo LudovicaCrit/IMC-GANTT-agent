@@ -1,13 +1,14 @@
 #!/usr/bin/env python
 """
-dati_prova.py — i due task che servono alla verifica di «aggiungi riga».
+dati_prova.py — i task sintetici delle verifiche in browser.
 
-PERCHÉ DUE TASK INVENTATI e non quelli veri. Il caso da provare è «un task mio
-che la settimana NON propone»: nel DB di sviluppo ce n'è uno solo nell'orizzonte
-(T112), e su un progetto su cui Helena non lavora questa settimana. Con un solo
-candidato non si vede né il raggruppamento per progetto né l'ordinamento (prima
-i progetti già attivi), e scrivere ore su un task vero sporcherebbe dati che poi
-qualcun altro legge. Quindi:
+PERCHÉ TASK INVENTATI e non quelli veri. I casi da provare non esistono nel DB
+di sviluppo, e scrivere ore su un task vero sporcherebbe dati che poi qualcun
+altro legge. Sono quattro, tutti su progetti dove Helena (D004) lavora già, e
+tutti tolti da `--pulisci` insieme a ciò che le verifiche ci hanno scritto sopra.
+
+Per «aggiungi riga» — servono task FUORI dalla settimana, che la griglia non
+propone e che la selezione deve offrire:
 
   T900  su P002 — progetto su cui Helena STA GIÀ lavorando (ha T015 in griglia).
         Date dopo la settimana ma dentro l'orizzonte del mese. È il task su cui
@@ -16,9 +17,18 @@ qualcun altro legge. Quindi:
         all'ordinamento (dev'essere sotto P002) e al caso «solo stato, niente
         ore», che deve far comparire l'avvertenza.
 
-`--pulisci` rimuove i due task E tutto ciò che la verifica ha scritto su di loro
-(blocchi, consuntivi): il resto del database dev'essere byte per byte quello di
-prima, ed è ciò che l'impronta md5 in fondo al README controlla.
+Per il «banner attività senza spiegazione» — servono invece task DENTRO la
+settimana, cioè righe che la griglia carica già, su cui nessuno ha ancora detto
+niente. Non si possono usare quelli veri: la verifica ci scrive sopra, e le ore
+vere non si toccano. Sono due perché i modi di spiegare un'attività sono due, e
+vanno provati separatamente:
+
+  T902  lo si spiega con lo STATO (Bloccato + nota), senza ore.
+  T903  lo si spiega mettendoci le ORE.
+
+`--pulisci` rimuove i quattro task E tutto ciò che le verifiche hanno scritto su
+di loro (blocchi, consuntivi): il resto del database dev'essere byte per byte
+quello di prima, ed è ciò che l'impronta md5 in fondo al README controlla.
 
 Uso:
     python e2e/dati_prova.py --crea
@@ -29,7 +39,7 @@ import sys
 import os
 import argparse
 import hashlib
-from datetime import date
+from datetime import date, timedelta
 
 RADICE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(RADICE, "backend"))
@@ -43,10 +53,19 @@ from models import Task, BloccoOre, Consuntivo  # noqa: E402
 from scenario_sottotask import TASK as TASK_SCENARIO  # noqa: E402
 
 DIPENDENTE = "D004"          # Helena Ullah — l'utente `user` del seed
+
+# Le date dei due task «dentro la settimana» si calcolano da oggi, non sono
+# scritte: devono intersecare la settimana corrente qualunque giorno si lanci la
+# verifica, o la griglia non li caricherebbe affatto.
+_OGGI = date.today()
+_LUN = _OGGI - timedelta(days=_OGGI.weekday())
+
 TASK_PROVA = [
     # id     progetto  fase  nome                                   inizio      fine
     ("T900", "P002", 8, "[prova e2e] Ritocco integrazione fuori piano", date(2026, 10, 5), date(2026, 10, 12)),
     ("T901", "P011", 68, "[prova e2e] Sopralluogo non pianificato", date(2026, 10, 1), date(2026, 10, 9)),
+    ("T902", "P002", 8, "[prova e2e] Da spiegare con lo stato", _LUN - timedelta(days=7), _LUN + timedelta(days=13)),
+    ("T903", "P002", 8, "[prova e2e] Da spiegare con le ore", _LUN - timedelta(days=7), _LUN + timedelta(days=13)),
 ]
 
 
