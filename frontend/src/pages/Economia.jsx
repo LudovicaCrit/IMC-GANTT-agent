@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import { fetchMarginiEconomia, fetchProgetti } from '../api'
+import Gauge from '../components/_shared/Gauge'
 
 /* ── Helpers ──────────────────────────────────────────────────────── */
 const fmtEur = (n) =>
@@ -124,16 +125,28 @@ export default function Economia() {
     (a, b) => b.erosione_commerciale_pp - a.erosione_commerciale_pp
   )
 
-  // Dati avanzamento: progressi temporale / lavoro / budget
+  // ── Dati della scheda Avanzamento ──────────────────────────────────
+  // SOLO I COMMERCIALI, come la scheda Margini (`tipologia !== 'interna'`).
+  // Fino al 23/09/2026 questa scheda elencava tutti e 35 i progetti in
+  // esecuzione, interni compresi: 24 corsi e attività interne che non hanno un
+  // contratto e comparivano con «€0 · valore contratto». Due universi sotto lo
+  // stesso menu, e uno dei due popolato di zeri. Se un domani servirà
+  // l'avanzamento temporale degli interni, è una scheda sua: lì «venduto» e
+  // «margine» non vogliono dire niente.
   const oggi = new Date()
   const ecoData = progettiFull
-    .filter((p) => p.stato === 'In esecuzione')
+    .filter((p) => p.stato === 'In esecuzione' && p.tipologia !== 'interna')
     .map((p) => {
       const durata = (new Date(p.data_fine) - new Date(p.data_inizio)) / 86400000
       const trascorsi = (oggi - new Date(p.data_inizio)) / 86400000
       const progressoTempo = durata > 0 ? Math.min(100, Math.max(0, (trascorsi / durata) * 100)) : 0
+      // `progressoOre` è `ore_consuntivate / budget_ore`: budget SPESO, non
+      // lavoro fatto. Un tempo lo stesso numero usciva anche come
+      // `budgetUsato`, con due quadranti gemelli a soglie diverse (60/80 e
+      // 70/90): a 65% si coloravano in modo diverso pur essendo lo stesso
+      // valore. Adesso è uno solo, con un set di soglie solo.
       const progressoOre = p.budget_ore > 0 ? (p.ore_consuntivate / p.budget_ore) * 100 : 0
-      return { ...p, progressoTempo, progressoOre, budgetUsato: progressoOre }
+      return { ...p, progressoTempo, progressoOre }
     })
 
   return (
@@ -366,29 +379,24 @@ export default function Economia() {
       {tab === 'avanzamento' && (
         <div className="space-y-6">
           {ecoData.length === 0 && (
-            <p className="text-gray-500 text-sm">Nessun progetto in esecuzione.</p>
+            <p className="text-gray-500 text-sm">Nessun progetto commerciale in esecuzione.</p>
           )}
+          {/* QUI C'ERA UN «🤖 Agente» che non era un agente: tre `if` cablati
+              su `progressoTempo − progressoOre`, presentati come il parere di
+              qualcuno. Tolto col fix del 23/09/2026, perché diceva il falso al
+              contrario: chi aveva bruciato il 322% del budget finiva nel ramo
+              `else` e usciva VERDE con «il progetto procede in linea», mentre
+              chi consumava meno del tempo trascorso — spesso il caso migliore —
+              prendeva il rosso. Sui dati veri erano 31 progetti rossi su 35: un
+              colore che si accende quasi sempre non segnala più niente.
+              L'avanzamento vero — quello che confronta il lavoro fatto col
+              lavoro che resta, non il budget speso col calendario — arriva dal
+              fronte avanzamento-da-ore+residuo. Meglio niente che un semaforo
+              travestito da parere. */}
           {ecoData.map((p) => {
-            const deltaTL = p.progressoTempo - p.progressoOre
-            let agentMsg = 'Il progetto procede in linea con le tempistiche.'
-            let agentBg = 'bg-green-900/20 border-green-800'
-            if (deltaTL > 15) {
-              // NEUTRA, e non più un allarme. Diceva «il progetto è in
-              // ritardo: l'avanzamento temporale supera quello lavorativo» —
-              // ma `progressoOre` è budget SPESO, non lavoro svolto, quindi la
-              // frase accusava un ritardo da un dato che non lo sostiene.
-              // Spendere meno budget di quanto tempo è passato è spesso il
-              // caso MIGLIORE: si sta sotto-consumando. Il numero resta lo
-              // stesso, la lettura non è più cablata nella frase.
-              agentMsg = `Tempo trascorso ${p.progressoTempo.toFixed(0)}%, budget ore speso ${p.progressoOre.toFixed(0)}%: ${deltaTL.toFixed(0)} punti di scarto. Da guardare — può voler dire lavoro indietro oppure consumo sotto le attese.`
-              agentBg = 'bg-red-900/20 border-red-800'
-            } else if (deltaTL > 5) {
-              agentMsg = 'Lieve scarto tra tempo trascorso e budget ore speso. Monitorare.'
-              agentBg = 'bg-yellow-900/20 border-yellow-800'
-            }
-
             return (
-              <div key={p.id} className="bg-gray-900 rounded-xl border border-gray-800 p-6">
+              <div key={p.id} data-progetto={p.id}
+                   className="bg-gray-900 rounded-xl border border-gray-800 p-6">
                 <div className="flex justify-between items-start mb-4">
                   <div>
                     <h3 className="font-semibold text-lg">{p.nome}</h3>
@@ -400,37 +408,28 @@ export default function Economia() {
                   </div>
                 </div>
 
-                <div className="grid grid-cols-3 gap-6 mb-4">
-                  <Gauge value={p.progressoTempo} label="Avanzamento Temporale"
+                <div className="grid grid-cols-2 gap-6 mb-4 max-w-sm">
+                  <Gauge value={p.progressoTempo} label="Avanzamento temporale"
                     colorThresholds={{ yellow: 70, red: 90 }} />
-                  {/* `progressoOre` è `ore_consuntivate / budget_ore`: budget
-                      SPESO, non lavoro fatto. Denominatore diverso da quello
-                      della card «Venduto consumato» del Cantiere (là è
-                      `ore_vendute`) — nomi diversi apposta, o si ricrea da
-                      un'altra parte la confusione che si sta togliendo. */}
+                  {/* `progressoOre` è budget SPESO, non lavoro fatto — il nome
+                      lo dice. Denominatore `Progetto.budget_ore`, diverso da
+                      quello della card «venduto consumato» del Cantiere (là è
+                      `Σ Fase.ore_vendute`): due numeri diversi per «le ore
+                      vendute», che vanno riconciliati o nominati meglio. È il
+                      blocco B3, non questo. */}
                   <Gauge value={p.progressoOre} label="Budget ore consumato"
                     colorThresholds={{ yellow: 70, red: 90 }} />
-                  <Gauge value={p.budgetUsato} label="Budget Utilizzato"
-                    colorThresholds={{ yellow: 60, red: 80 }} />
                 </div>
 
-                <div className="grid grid-cols-3 gap-4 text-sm mb-4">
+                <div className="grid grid-cols-2 gap-4 text-sm max-w-sm">
                   <div>
                     <p className="text-gray-400">Ore consuntivate</p>
                     <p className="font-medium">{p.ore_consuntivate}h / {p.budget_ore}h</p>
                   </div>
                   <div>
-                    <p className="text-gray-400">Budget usato</p>
-                    <p className="font-medium">{p.budgetUsato.toFixed(0)}%</p>
-                  </div>
-                  <div>
                     <p className="text-gray-400">Task completati</p>
                     <p className="font-medium">{p.task_completati ?? '—'} / {p.task_totali ?? '—'}</p>
                   </div>
-                </div>
-
-                <div className={`p-3 rounded-lg border text-sm ${agentBg}`}>
-                  <span>🤖 <strong>Agente:</strong> {agentMsg}</span>
                 </div>
               </div>
             )

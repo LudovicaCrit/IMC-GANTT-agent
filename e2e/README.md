@@ -97,6 +97,14 @@ tendina, le righe in sola lettura che non ci entrano mai, il silenzio su una
 settimana ancora vuota, e il salvataggio che passa senza chiedere niente
 lasciando il promemoria nella barra.
 
+`economia-avanzamento.spec.js` — la scheda «Avanzamento» dell'Economia, che
+fino al 23/09/2026 mandava la pagina in schermata nera (`Gauge` usato e mai
+definito) perché **nessun test la apriva**. Il primo caso non verifica una
+regola di dominio: verifica che la pagina esista, raccogliendo ogni `pageerror`
+del rendering. Gli altri coprono i tre contenuti marci che ci stavano dentro
+invisibili — l'«agente» col segno invertito, il quadrante duplicato, i progetti
+interni a «€0 valore contratto» — e che la scheda Margini sia rimasta com'era.
+
 `letture-intatte.spec.js` — la rete del passo 5: un colpo secco su tutte le
 letture dell'applicazione (comprese GANTT, Economia e SAL) per accorgersi subito
 se una cancellazione ne ha spenta una, più il controllo opposto — che i campi
