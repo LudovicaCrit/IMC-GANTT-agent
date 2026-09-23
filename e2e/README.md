@@ -69,9 +69,9 @@ resti comunque la sua.
 `sottotask-griglia.spec.js` — il ramo scomposto, sopra lo scenario qui sopra:
 intestazione + righe-pezzo, le ore pre-scomposizione in sola lettura, una
 dichiarazione su un pezzo che sopravvive alla riapertura, C2, l'annullato-con-ore
-visibile e non scrivibile, il task-unità di M9. Porta un `test.fixme`: il caso
-T952, dove /me dice che il task è compilabile e la griglia non gli disegna la
-riga.
+visibile e non scrivibile, e le due facce di M9 — il task che torna compilabile
+quando nessun pezzo è più vivo (T952, T953) e quello che resta scomposto perché
+un pezzo vivo c'è ancora (T954).
 
 I selettori della matrice stanno in `griglia.js`, uno solo per tutti gli spec.
 

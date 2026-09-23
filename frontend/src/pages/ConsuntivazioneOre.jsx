@@ -111,12 +111,39 @@ export const dividiGiornata = (ore, metaMonteGiorno) => {
 const orePerGiorno = (blocchi) =>
   Object.fromEntries((blocchi ?? []).map((b) => [b.giorno, Number(b.ore)]))
 
+/* ── «Scomposto» vuol dire CHE HA PEZZI VIVI ──────────────────────────
+ * `Annullato` è lo stato con cui il PM toglie un pezzo dal PIANO: il pezzo
+ * resta in tabella — è la via che il Cantiere offre per cancellarlo
+ * conservando le dichiarazioni già fatte — ma non è più lavoro da fare. Un
+ * task i cui pezzi sono stati annullati tutti torna a essere un'unità di
+ * lavoro: è M9, e il backend lo applica in due punti
+ * (`tipo_unita_per_task` e `task_scomposti` in `task_settimana_dipendente`),
+ * tutti e due con questo identico confronto.
+ *
+ * LA STRINGA È LA STESSA DEL BACKEND, di proposito e senza modo di condividerla
+ * (il payload non porta un flag «scomposto»): se di là cambia, questa è la riga
+ * da cambiare. Decidere qui con un criterio diverso — per esempio «ha pezzi
+ * nella lista» — fa divergere la pagina dal salvataggio, ed è esattamente il
+ * bug che questa costante chiude: la lista dei pezzi contiene anche gli
+ * Annullati su cui ci sono ore (N21), quindi non è vuota, quindi il task veniva
+ * disegnato come scomposto e non aveva nessuna riga su cui dichiarare — mentre
+ * /salva-blocchi le ore le avrebbe accettate.
+ */
+const PEZZO_ANNULLATO = 'Annullato'
+const haPezziVivi = (pezzi) => pezzi.some((p) => p.stato !== PEZZO_ANNULLATO)
+
 /* ── Dalle righe di /me alle righe della matrice ──────────────────────
  * Una riga per UNITÀ: il task se non è scomposto, i pezzi se lo è. Un task
  * scomposto porta una riga-intestazione, e — se ha ore messe sul task prima
  * della scomposizione (M8) — una riga in sola lettura con quelle: stanno nei
  * totali, quindi devono stare anche nella matrice.
  * `modificabile` arriva da /me, che usa la stessa regola del salvataggio.
+ *
+ * Un task NON scomposto può comunque portarsi dietro dei pezzi: quelli
+ * annullati su cui ci sono ore, che N21 tiene visibili. Allora si disegnano
+ * tutt'e due — la riga del task, compilabile, e i pezzi accanto in sola
+ * lettura: le loro ore stanno nei totali e devono stare anche nella matrice,
+ * ma il posto dove dichiarare adesso è il task.
  *
  * `aggiunte` sono i task scelti a mano (sotto-passo 5). Entrano nel gruppo del
  * loro progetto se c'è già, altrimenti ne aprono uno — e allora `interna` resta
@@ -136,9 +163,24 @@ export function costruisciGruppi(taskSettimana, dipendenteId, aggiunte = []) {
     }
     const righe = gruppi.get(t.progetto_id).righe
     const pezzi = t.sottotask ?? []
-    const scomposto = pezzi.some((p) => p.stato !== 'Annullato')
 
-    if (!scomposto && pezzi.length === 0) {
+    const rigaPezzo = (p) => {
+      const diUnAltro = p.assegnatario_id && p.assegnatario_id !== dipendenteId
+      return {
+        chiave: `sott:${p.id}`, tipo: 'sottotask', id: p.id, nome: p.nome,
+        codice: `${t.task_id} · #${p.id}`, pezzo: true, modificabile: p.modificabile,
+        motivoSolaLettura: diUnAltro ? 'di un collega'
+          : p.stato === PEZZO_ANNULLATO ? 'annullato' : 'non più modificabile',
+        stato: p.stato_dichiarato, nota: p.nota, residuo: p.ore_stimate_residue,
+        presaVisione: p.presa_visione, notaEreditata: p.nota_ereditata,
+        notaEreditataDa: p.nota_ereditata_da,
+        blocchi: p.blocchi ?? [], storico: p.blocchi_storico ?? [],
+      }
+    }
+
+    // NON scomposto: il task è l'unità di lavoro, con i pezzi annullati-con-ore
+    // (se ce ne sono) accanto, in sola lettura.
+    if (!haPezziVivi(pezzi)) {
       righe.push({
         chiave: `task:${t.task_id}`, tipo: 'task', id: t.task_id, nome: t.task_nome,
         codice: t.task_id, previste: t.ore_pianificate_settimana, inRitardo: t.in_ritardo,
@@ -149,6 +191,7 @@ export function costruisciGruppi(taskSettimana, dipendenteId, aggiunte = []) {
         notaEreditataDa: t.nota_ereditata_da,
         blocchi: t.blocchi ?? [], storico: t.blocchi_storico ?? [],
       })
+      righe.push(...pezzi.map(rigaPezzo))
       continue
     }
 
@@ -161,18 +204,7 @@ export function costruisciGruppi(taskSettimana, dipendenteId, aggiunte = []) {
         blocchi: t.blocchi ?? [], storico: t.blocchi_storico ?? [], secondaria: true,
       })
     }
-    for (const p of pezzi) {
-      const diUnAltro = p.assegnatario_id && p.assegnatario_id !== dipendenteId
-      righe.push({
-        chiave: `sott:${p.id}`, tipo: 'sottotask', id: p.id, nome: p.nome,
-        codice: `${t.task_id} · #${p.id}`, pezzo: true, modificabile: p.modificabile,
-        motivoSolaLettura: diUnAltro ? 'di un collega' : p.stato === 'Annullato' ? 'annullato' : 'non più modificabile',
-        stato: p.stato_dichiarato, nota: p.nota, residuo: p.ore_stimate_residue,
-        presaVisione: p.presa_visione, notaEreditata: p.nota_ereditata,
-        notaEreditataDa: p.nota_ereditata_da,
-        blocchi: p.blocchi ?? [], storico: p.blocchi_storico ?? [],
-      })
-    }
+    righe.push(...pezzi.map(rigaPezzo))
   }
 
   for (const t of aggiunte) {

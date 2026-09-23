@@ -105,18 +105,57 @@ test.describe('il mondo scomposto, da Helena', () => {
     await expect(page.locator('tr', { hasText: 'Pezzo poi annullato, senza ore' })).toHaveCount(0)
   })
 
-  test.fixme('T952 · M9: col pezzo annullato-con-ore il task dovrebbe tornare compilabile', async ({ page }) => {
-    // BUCO NOTO, lato frontend (`costruisciGruppi`), trovato accendendo questo
-    // scenario. /me dice `modificabile: true` sul task T952 — per M9 un task i
-    // cui pezzi sono tutti Annullati torna a essere unità di lavoro — ma la
-    // pagina entra nel ramo scomposto per il solo fatto che `sottotask` non è
-    // vuoto (ci sta dentro l'annullato con ore, per N21) e non disegna nessuna
-    // riga compilabile per il task. Risultato: ore dichiarabili dal backend e
-    // non dichiarabili dalla griglia.
-    // Si toglie nel frontend, non qui: `scomposto` va deciso come lo decide il
-    // backend (pezzi NON annullati), non su `pezzi.length`.
+  test('T952 · M9: col pezzo annullato-con-ore il task torna compilabile', async ({ page }) => {
+    // Il caso che ha fatto scoprire il bug: la lista dei pezzi non è vuota —
+    // ci sta dentro l'annullato con ore, per N21 — ma nessuno di quei pezzi è
+    // vivo, quindi per M9 il task è di nuovo l'unità di lavoro. Prima la
+    // pagina lo disegnava scomposto e non offriva nessuna riga su cui
+    // dichiarare, mentre /salva-blocchi le ore le avrebbe accettate.
     await page.goto(GRIGLIA)
-    await expect(riga(page, 'task', 'T952')).toBeVisible()
+    await expect(page.locator('[data-sintesi]')).toBeVisible()
+
+    const t952 = riga(page, 'task', 'T952')
+    await expect(t952).toBeVisible()
+    // Niente intestazione: non è scomposto, è un task con una coda annullata.
+    await expect(page.locator('tr', { hasText: 'T952 · scomposto in pezzi' })).toHaveCount(0)
+
+    await t952.locator('select[aria-label^="Stato"]').selectOption('In corso')
+    await metti(page, 'task', 'T952', 2, 'pomeriggio', 1)
+    await salva(page)
+
+    await page.reload()
+    await expect(totaleRiga(page, 'task', 'T952')).toHaveText('1')
+    await expect(riga(page, 'task', 'T952').locator('select[aria-label^="Stato"]'))
+      .toHaveValue('In corso')
+    // E le ore del pezzo annullato non sono sparite: sta lì accanto, in sola
+    // lettura, con le sue 1,5h.
+    const annullato = pezzo(page, 'Pezzo poi annullato, con ore')
+    await expect(annullato).toContainText('sola lettura · annullato')
+    await expect(annullato.locator('[data-totale-riga]')).toHaveText('1,5')
+  })
+
+  test('T954 · N21 pura: con un pezzo ancora vivo il task resta scomposto', async ({ page }) => {
+    // Il controcanto di T952: stessa coda annullata-con-ore, ma un pezzo vivo
+    // c'è. Il task NON torna unità, e non deve esserci nessuna riga-task su cui
+    // dichiarare — le ore vanno sul pezzo vivo, come sempre.
+    await page.goto(GRIGLIA)
+    await expect(page.locator('[data-sintesi]')).toBeVisible()
+
+    await expect(page.locator('tr', { hasText: 'T954 · scomposto in pezzi' })).toHaveCount(1)
+    await expect(riga(page, 'task', 'T954')).toHaveCount(0)
+
+    const annullato = pezzo(page, 'Pezzo annullato ma con ore')
+    await expect(annullato).toContainText('sola lettura · annullato')
+    await expect(annullato.locator('[data-totale-riga]')).toHaveText('1')
+
+    const vivo = pezzo(page, 'Pezzo vivo accanto')
+    const id = (await vivo.getAttribute('data-riga')).split(':')[1]
+    await vivo.locator('select[aria-label^="Stato"]').selectOption('In corso')
+    await metti(page, 'sott', id, 0, 'pomeriggio', 0.5)
+    await salva(page)
+
+    await page.reload()
+    await expect(totaleRiga(page, 'sott', id)).toHaveText('0,5')
   })
 
   test('T953 · M9: tutti i pezzi annullati e niente ore → torna un task come gli altri', async ({ page }) => {

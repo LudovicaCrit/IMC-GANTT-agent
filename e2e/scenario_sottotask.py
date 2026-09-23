@@ -43,20 +43,29 @@ I QUATTRO CASI, scelti per coprire i rami e non per fare numero:
          le sue ore stanno nei totali, e una riga che non si vede
          contraddirebbe il totale. L'altro annullato, senza ore, non compare.
          E poiché nessun pezzo è più vivo, per M9 /me dichiara il task
-         `modificabile: true` — è tornato un'unità di lavoro.
-         ⚠ LA GRIGLIA OGGI NON LO MOSTRA COSÌ: `costruisciGruppi` entra nel ramo
-         scomposto per il solo fatto che la lista dei pezzi non è vuota (ci sta
-         dentro l'annullato-con-ore) e non disegna nessuna riga compilabile per
-         il task. Ore dichiarabili dal backend, non dichiarabili dalla pagina.
-         È il buco che accendere questo scenario ha fatto vedere; sta nel
-         frontend e il test che lo aspetta è `test.fixme` in
-         `sottotask-griglia.spec.js`.
+         `modificabile: true` — è tornato un'unità di lavoro, e la griglia gli
+         disegna la sua riga compilabile con l'annullato-con-ore accanto, in
+         sola lettura.
+         È IL CASO CHE HA FATTO TROVARE UN BUG: prima del 23/09/2026
+         `costruisciGruppi` entrava nel ramo scomposto per il solo fatto che la
+         lista dei pezzi non era vuota, e questo task non aveva nessuna riga su
+         cui dichiarare mentre /salva-blocchi le ore le avrebbe accettate. Lo
+         scenario è nato per guardare il mondo-scomposto e ha trovato il punto
+         in cui pagina e backend non erano d'accordo.
 
   T953 — TUTTI I PEZZI ANNULLATI, NIENTE ORE (M9 puro). Due pezzi annullati e
          nessuna ora da nessuna parte: il payload di /me non porta affatto la
          chiave `sottotask`, e il task si compila come un task qualunque.
          Differisce da T952 per UNA cosa sola — le ore sul pezzo annullato — ed
          è quella differenza a isolare il ramo N21.
+
+  T954 — N21 PURA: UN ANNULLATO-CON-ORE ACCANTO A PEZZI VIVI. Due pezzi, uno
+         vivo di Helena e uno annullato su cui aveva già messo delle ore.
+         Qui il task È scomposto — un pezzo vivo c'è — e deve restare tale:
+         intestazione, il pezzo vivo compilabile, l'annullato in sola lettura,
+         nessuna riga-task su cui dichiarare. È il controcanto di T952: prova
+         che la correzione di M9 non ha allargato la mano a chi i pezzi vivi ce
+         li ha ancora.
 
 LE ORE NON SI INSERISCONO A MANO. Si scrivono chiamando
 `salva_blocchi_settimana`, la stessa funzione che usa /salva-blocchi, così i
@@ -93,7 +102,7 @@ NOME_PROGETTO = "[PROVA] Scenario sottotask"
 IO = "D004"          # Helena Ullah — l'utente `user` del seed
 COLLEGA = "D002"     # Roberto Pezzuto — proprietario del task nel caso C2
 
-TASK = ("T950", "T951", "T952", "T953")
+TASK = ("T950", "T951", "T952", "T953", "T954")
 
 
 def _settimana():
@@ -143,8 +152,9 @@ def crea():
         task("T951", "[PROVA] 2 · Task di un collega con un pezzo mio (C2)", COLLEGA)
         task("T952", "[PROVA] 3 · Pezzo annullato con ore (N21)", IO)
         task("T953", "[PROVA] 4 · Tutti i pezzi annullati (M9)", IO)
+        task("T954", "[PROVA] 5 · Annullato con ore accanto a pezzi vivi (N21 pura)", IO)
         session.commit()
-        print(f"  {PROGETTO} + 4 task creati")
+        print(f"  {PROGETTO} + 5 task creati")
     finally:
         session.close()
 
@@ -189,14 +199,19 @@ def crea():
             pezzo("T953", "[PROVA] Pezzo annullato A", 1, ore=4),
             pezzo("T953", "[PROVA] Pezzo annullato B", 2, ore=4),
         ]
+        p_t954 = [
+            pezzo("T954", "[PROVA] Pezzo vivo accanto all'annullato", 1, ore=6),
+            pezzo("T954", "[PROVA] Pezzo annullato ma con ore", 2, ore=6),
+        ]
         session.commit()
         ids = {
             "t950": [p.id for p in p_t950],
             "t951": [p.id for p in p_t951],
             "t952": [p.id for p in p_t952],
             "t953": [p.id for p in p_t953],
+            "t954": [p.id for p in p_t954],
         }
-        print(f"  9 pezzi creati: {ids}")
+        print(f"  11 pezzi creati: {ids}")
     finally:
         session.close()
 
@@ -211,23 +226,27 @@ def crea():
     }])
     print("  T950/pezzo 2: 3,5h + stato + nota + resta")
 
-    # ── T952: le ore sul pezzo PRIMA che il PM lo annulli ────────────────
-    salva_blocchi_settimana(IO, lun, [{
-        "tipo": "sottotask", "id": ids["t952"][0],
-        "blocchi": [(giorno2, Decimal("1.5"))],
-        "tocca_stato": True, "stato": "In corso",
-        "tocca_nota": False, "nota": None,
-        "tocca_residuo": False, "residuo": None,
-        "presa_visione": None,
-    }])
+    # ── T952 e T954: le ore sul pezzo PRIMA che il PM lo annulli ─────────
+    for sid, ore in ((ids["t952"][0], "1.5"), (ids["t954"][1], "1.0")):
+        salva_blocchi_settimana(IO, lun, [{
+            "tipo": "sottotask", "id": sid,
+            "blocchi": [(giorno2, Decimal(ore))],
+            "tocca_stato": True, "stato": "In corso",
+            "tocca_nota": False, "nota": None,
+            "tocca_residuo": False, "residuo": None,
+            "presa_visione": None,
+        }])
 
     session = get_session()
     try:
-        for sid in ids["t952"] + ids["t953"]:
+        # Su T954 ne annulla UNO solo: l'altro resta vivo, e il task resta
+        # scomposto. È la differenza con T952, dove li annulla tutti e due.
+        for sid in ids["t952"] + ids["t953"] + [ids["t954"][1]]:
             session.query(Sottotask).filter(Sottotask.id == sid).update({"stato": "Annullato"})
         session.commit()
         print("  T952 e T953: tutti i pezzi passati ad Annullato "
               "(su T952 uno porta 1,5h già dichiarate)")
+        print("  T954: annullato il solo pezzo con 1h — l'altro resta vivo")
     finally:
         session.close()
 
