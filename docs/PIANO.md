@@ -12,7 +12,7 @@
 - ✅ Modello e migration allineati (migration b7c8d9e0f1a2)
 - ✅ PIANO.md e BACKLOG.md
 - ✅ Seed su gantt_test e spostamento in backend/tests/ dei test che scrivono sul DB
-- ☐ Ricostruire il DB di sviluppo gantt_db da migration e seed
+- ✅ Ricostruire il DB di sviluppo gantt_db da migration e seed
 - ☐ Pulizia requirements: via google-ai-generativelanguage, python-jose (resta PyJWT), passlib (resta argon2)
 
 **Chiusura**: Code lavora con regole scritte e una rete di test che non tocca il DB di sviluppo.
@@ -30,10 +30,13 @@
 - ☐ VistaManagement: nome del dipendente invece dell'id
 - ☐ Risorse: filtro per tipologia interna invece dell'id P010 cablato
 - ☐ Home: il clic su un progetto non porta al 403 per chi non è manager (si riapre in fase 3)
+- ☐ Porte dedicate e configurabili da env per backend e frontend, così il GANTT gira accanto agli altri progetti; e2e, proxy Vite e README allineati
+- ☐ docs/ARCHITETTURA.md: la mappa del codice, scritta quando il codice morto è stato rimosso
 
 **Chiusura**: un giro completo di tutte le pagine da manager senza 500, 403 o dati spariti; un test per ogni correzione.
 
 ## Fase 2 — Modello ore ed Economia onesta
+- ☐ Estrazione da data_db_impl.py dei domini economia e carico in moduli di servizio, a comportamento invariato
 - ☐ Via Progetto.budget_ore; il gauge si riaggancia a un denominatore vero. Chiude anche il 422 sulle bozze
 - ☐ Pianificate uguali alle stimate alla nascita, in tutti i punti di creazione dei task
 - ☐ Stimate in sola lettura dopo la creazione
@@ -62,6 +65,7 @@
 **Chiusura**: ogni ruolo vede e modifica esattamente ciò che la matrice prevede, verificato da e2e per ruolo.
 
 ## Fase 4 — Dal basso verso il piano
+- ☐ Estrazione da data_db_impl.py dei domini consuntivazione e sottotask in moduli di servizio, a comportamento invariato
 - ☐ Modello: origine, stato di ratifica e "richiesto da" sui pezzi; task "Emerso in corsa" per progetto
 - ☐ Appunto al volo in Home e nella griglia
 - ☐ Coda "da ratificare" del PM
@@ -83,6 +87,7 @@
 **Chiusura**: un dipendente segna due settimane di ferie, il PM approva, e in quel periodo l'app non gli chiede nulla; l'amministrazione vede presenze e rimborsi del mese e li esporta.
 
 ## Fase 6 — IA
+- ☐ Estrazione da data_db_impl.py dei domini semaforo, scenari e SAL in moduli di servizio, a comportamento invariato
 - ☐ Infrastruttura comune: streaming, timeout lungo la catena, output strutturato con schema, retry
 - ☐ Registro delle transizioni di stato
 - ☐ Sintesi per il management nel cruscotto
@@ -91,7 +96,7 @@
 - ☐ Archivio: SAL consolidati, scheda di valutazione, lezioni
 - ☐ Compila-consuntivazione con avatar vocale, anche come ingresso dell'appunto al volo
 
-**Chiusura**: ogni IA ha streaming, timeout, test con fixture e passa la domanda AI Act.
+**Chiusura**: ogni IA ha streaming, timeout, test con fixture e passa la domanda AI Act. data_db_impl.py non esiste più.
 
 ## Fase 7 — Notifiche e accesso da smartphone e PC
 - ☐ 🖐 Notifiche Teams: autorizzazione lato azienda (webhook o flusso Teams), poi notifica il giorno stesso in cui un task o un pezzo finisce, quando c'è qualcosa da ratificare o un periodo di assenza da approvare, e promemoria di consuntivazione che tacciono nei periodi di assenza approvati

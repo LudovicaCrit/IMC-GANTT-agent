@@ -597,7 +597,7 @@ def seed():
         Utente(
             email="roberto@imcgroup.it",
             password_hash=hash_password("admin123"),
-            ruolo_app="manager",
+            ruolo_app="pm",  # serve almeno un account PM per provare le viste PM
             dipendente_id="D002",
         ),
         Utente(

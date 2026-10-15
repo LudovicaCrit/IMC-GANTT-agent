@@ -3,6 +3,7 @@
 ## Dove guardare
 - docs/INVENTARIO.md: fotografia del codice al commit indicato in testa. Non si aggiorna: i passi successivi possono averla superata, e lo stato dei lavori sta in docs/PIANO.md. Se il codice la smentisce, dillo.
 - docs/DECISIONI.md: scelte fissate. Non si riaprono.
+- docs/ARCHITETTURA.md: la mappa del codice, quando esiste. Ogni passo che sposta una responsabilità la aggiorna nello stesso commit.
 - docs/PIANO.md: fasi e passi.
 - docs/BACKLOG.md: debito e idee.
 - Qualunque altro .md non versionato descrive intenzioni, non fatti.
@@ -31,6 +32,14 @@
 9. Test pytest in backend/tests/ per ogni regola di dominio, con il caso nullo nella matrice dei casi.
 10. Codice e migration nello stesso commit. Migration scritte a mano o riviste riga per riga, mai autogenerate accettate alla cieca. Ogni drop ha una guardia che conta prima di agire.
 11. Portabile su Windows Server: pathlib, encoding utf-8 esplicito, niente comandi solo Linux nel funzionamento.
+
+## Leggibilità
+- Il codice deve poterlo prendere in mano chi non ne conosce la storia.
+- Un modulo, una responsabilità. Un file che supera qualche centinaio di righe è un segnale da discutere, non da ignorare.
+- Nomi che dicono cosa fa la cosa, con le parole del dominio usate in DECISIONI.md.
+- I commenti spiegano il perché, mai il cosa. Se serve spiegare il cosa, il codice va riscritto.
+- Una funzione non fa due mestieri: chi calcola non scrive sul DB, chi scrive non calcola.
+- data_db_impl.py si smonta a strati: quando un passo lavora su un dominio, prima ne sposta le funzioni in un modulo di servizio dedicato a comportamento invariato, con i test che lo provano, poi lo modifica.
 
 ## Sicurezza
 - Ogni endpoint di scrittura verifica chi scrive e cosa può toccare. Nessun setattr su campi liberi: solo whitelist.
