@@ -1,0 +1,26 @@
+{
+  "progetto": {
+    "Bozza":         { "colore": "#9ca3af", "etichetta": "Bozza" },
+    "Da iniziare":   { "colore": "#9ca3af", "etichetta": "Da iniziare" },
+    "In esecuzione": { "colore": "#3b82f6", "etichetta": "In esecuzione" },
+    "Sospeso":       { "colore": "#d97706", "etichetta": "Sospeso" },
+    "Completato":    { "colore": "#22c55e", "etichetta": "Completato" },
+    "Annullato":     { "colore": "#6b7280", "etichetta": "Annullato" }
+  },
+  "fase": {
+    "Da iniziare": { "colore": "#9ca3af", "etichetta": "Da iniziare" },
+    "In corso":    { "colore": "#3b82f6", "etichetta": "In corso" },
+    "Completata":  { "colore": "#22c55e", "etichetta": "Completata" },
+    "Sospesa":     { "colore": "#d97706", "etichetta": "Sospesa" },
+    "Annullata":   { "colore": "#6b7280", "etichetta": "Annullata" }
+  },
+  "task": {
+    "Da iniziare": { "colore": "#9ca3af", "etichetta": "Da iniziare" },
+    "In corso":    { "colore": "#3b82f6", "etichetta": "In corso" },
+    "Completato":  { "colore": "#22c55e", "etichetta": "Completato" },
+    "Bloccato":    { "colore": "#ef4444", "etichetta": "Bloccato" },
+    "Sospeso":     { "colore": "#d97706", "etichetta": "Sospeso" },
+    "Annullato":   { "colore": "#6b7280", "etichetta": "Annullato" }
+  },
+  "ignoto": { "colore": "#9ca3af" }
+}

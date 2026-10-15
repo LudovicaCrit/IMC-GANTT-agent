@@ -12,7 +12,7 @@
 - Un passo alla volta, nel perimetro del prompt. Se trovi altro da sistemare, lo segnali, non lo fai.
 - Mai commit né push. git restore è ammesso se lo riferisci. Path espliciti, mai git add con il punto.
 - Il resoconto contiene sempre: diff, verifica fatta, cosa NON hai verificato.
-- Il database di sviluppo è interamente sintetico; solo i nomi dei dipendenti sono reali. Prima e dopo ogni scrittura sul DB calcola l'impronta md5 della tabella dipendenti: deve restare identica, salvo che il prompt chieda esplicitamente di modificarla, perché gli e2e e gli scenari di prova si appoggiano a quei dipendenti.
+- Il database di sviluppo è interamente sintetico; solo i nomi dei dipendenti sono reali. Prima e dopo ogni scrittura sul DB calcola l'impronta md5 della tabella dipendenti con il comando psql -At -c "SELECT md5(string_agg(d::text, '|' ORDER BY d.id)) FROM dipendenti d" sul database di sviluppo: deve restare identica, salvo che il prompt chieda esplicitamente di modificarla, perché gli e2e e gli scenari di prova si appoggiano a quei dipendenti.
 - Tutto il resto del database si può modificare e si rigenera dal seed. Le cancellazioni avvengono comunque per chiave esatta di ciò che hai creato, così ogni passo resta leggibile.
 - Prima di lanciare gli e2e, controlla che sulle porte del GANTT (GANTT_PORTA_BACKEND e GANTT_PORTA_FRONTEND in backend/.env) non giri un processo vecchio. Non fermare mai processi di altri progetti.
 

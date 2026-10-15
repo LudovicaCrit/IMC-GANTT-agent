@@ -33,9 +33,11 @@ export class ForbiddenError extends Error {
  *     Content-Type viene impostato automaticamente
  *   - skipAuthRedirect: se true, NON reindirizza al login su 401
  *     (riservato al solo getCurrentUser durante il bootstrap di AuthContext)
+ *   - comeBlob: se true, la risposta riuscita torna come Blob e non come
+ *     JSON (i file da scaricare, come l'Excel del GANTT)
  */
 export async function apiFetch(url, options = {}) {
-  const { body, skipAuthRedirect = false, ...rest } = options;
+  const { body, skipAuthRedirect = false, comeBlob = false, ...rest } = options;
 
   // Costruzione opzioni per fetch
   const fetchOptions = {
@@ -115,7 +117,7 @@ export async function apiFetch(url, options = {}) {
   // e continua a parsarsi come prima.
   if (res.status === 204 || res.status === 205) return null;
 
-  return res.json();
+  return comeBlob ? res.blob() : res.json();
 }
 
 // ═════════════════════════════════════════════════════════════════════════
@@ -219,6 +221,17 @@ export async function fetchGanttStrutturato({ stato = null, progettoId = null } 
   if (progettoId) params.set('progetto_id', progettoId);
   const qs = params.toString();
   return apiFetch(`${API_BASE}/gantt/strutturato${qs ? `?${qs}` : ''}`);
+}
+
+export async function fetchExcelGantt({ stato = null, progettoId = null, profilo = null } = {}) {
+  // L'Excel del GANTT con gli stessi filtri della pagina: stato e progetto
+  // come fetchGanttStrutturato, profilo sul profilo richiesto dal task.
+  const params = new URLSearchParams();
+  if (stato) params.set('stato', stato);
+  if (progettoId) params.set('progetto_id', progettoId);
+  if (profilo) params.set('profilo', profilo);
+  const qs = params.toString();
+  return apiFetch(`${API_BASE}/gantt/export-excel${qs ? `?${qs}` : ''}`, { comeBlob: true });
 }
 
 // ═════════════════════════════════════════════════════════════════════════

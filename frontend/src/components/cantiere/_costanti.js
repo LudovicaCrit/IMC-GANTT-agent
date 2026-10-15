@@ -18,6 +18,12 @@
  * da altri ambiti (Risorse, Home, ecc.), che hanno costanti proprie.
  */
 
+import {
+  STATI_PROGETTO as STATI_PROGETTO_COLORI,
+  STATI_FASE as STATI_FASE_COLORI,
+  STATI_TASK as STATI_TASK_COLORI,
+} from '../_shared/statiColori.js'
+
 export const STATI_FASE = ['Da iniziare', 'In corso', 'Completata', 'Sospesa', 'Annullata']
 
 // Step 2.7-pre (20/05/2026): aggiunti Sospeso e Annullato (formalizzati nel
@@ -37,27 +43,12 @@ export const STATI_TASK = ['Da iniziare', 'In corso', 'Completato', 'Bloccato', 
 // questi tre, così quell'errore non si incontra.
 export const STATI_PIANIFICAZIONE_SOTTOTASK = ['Da iniziare', 'Sospeso', 'Annullato']
 
-export const COLORI_STATO = {
-  // ── Fase ──────────────────────────────────────────────────────────
-  'Da iniziare': 'bg-gray-700 text-gray-300',
-  'In corso': 'bg-blue-700 text-blue-100',
-  'Completata': 'bg-green-700 text-green-100',
-  'Sospesa': 'bg-yellow-700 text-yellow-100',
-  'Annullata': 'bg-red-900 text-red-200',
-
-  // ── Task (alcuni stati coincidono con Fase, vedi 'Da iniziare') ──
-  'Completato': 'bg-green-700 text-green-100',
-  'Bloccato': 'bg-red-700 text-red-100',
-  // Soft-delete task: lo lascio come colore "fantasma" per retrocompatibilità
-  // ma NON è nella whitelist STATI_TASK (è un soft delete fuori dal flusso).
-  'Eliminato': 'bg-red-950 text-red-300',
-
-  // ── Progetto ──────────────────────────────────────────────────────
-  'Bozza': 'bg-amber-800 text-amber-100',
-  'In esecuzione': 'bg-blue-700 text-blue-100',
-  'Sospeso': 'bg-yellow-700 text-yellow-100',  // condiviso anche con Task.Sospeso
-  'Annullato': 'bg-red-900 text-red-200',      // condiviso anche con Task.Annullato
-  // Nota: "Da iniziare" Progetto eredita lo stesso colore di "Da iniziare" Fase/Task
-  // (è gray-700/gray-300, vedi prima entry). Questo è voluto: la semantica
-  // "non ancora partito" è la stessa.
-}
+// Colore ed etichetta dei badge di stato (StatoBadge), dalla stessa fonte delle
+// barre del GANTT: condiviso/stati.json, letto da statiColori.js. Il badge
+// riceve solo il nome dello stato e non il livello, quindi qui le tre mappe si
+// fondono in una: si può fare perché uno stesso nome ha lo stesso colore in
+// ogni livello («Sospeso» del progetto e del task sono entrambi ambra), e un
+// test (frontend/test/statiColori.test.js) controlla che resti così.
+// «Eliminato» non c'è: il soft-delete è fuori dal flusso e prende il colore
+// degli stati ignoti.
+export const COLORI_STATO = { ...STATI_PROGETTO_COLORI, ...STATI_FASE_COLORI, ...STATI_TASK_COLORI }

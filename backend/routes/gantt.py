@@ -38,12 +38,17 @@ DETTAGLIO ENDPOINT
      dependencies (predecessore), project, project_id, assignee, profile,
      status, estimated_hours, hours_done, predecessor_name.
 
-2. GET /api/gantt/export-excel?progetto_id=P00X
+2. GET /api/gantt/export-excel?stato=attivi&progetto_id=P00X&profilo=...
    - Manager-only.
+   - Gli stessi filtri della pagina GANTT, applicati come li applica lo
+     schermo: `stato` e `progetto_id` come /strutturato (_filtra_progetti),
+     `profilo` sul profilo richiesto dal task, come il filtro della pagina.
    - Genera un .xlsx con due fogli:
-     • "Dati GANTT": tabella con stati colorati per riga
+     • "Dati GANTT": tabella, con la cella dello stato colorata
      • "GANTT Visivo": rappresentazione a barre settimanali, raggruppate
        per progetto, con legenda stati
+   - I colori degli stati vengono da condiviso/stati.json (stati_colori.py),
+     gli stessi del GANTT a schermo.
    - Fallback CSV se openpyxl non è installato.
 
 PATTERN AUTH USATI
@@ -71,6 +76,7 @@ DIPENDENZE INTERNE
 - `models`: `Progetto`, `Fase`, `Task`, `OreSettimanali` (vista delle ore,
   al posto di `Consuntivo.ore_dichiarate`), `Dipendente`,
   `get_session`, `STATI_PROGETTO_ATTIVI`.
+- `stati_colori`: colori ed etichette degli stati (condiviso/stati.json).
 - `data_db_impl._to_dt`: normalizza `Date` SQL → `datetime` a mezzanotte
   (necessario per l'export Excel — vedi NOTE TECNICHE).
 - `deps`: `require_manager`.
@@ -168,6 +174,7 @@ def _predecessore_principale(task: Task) -> str:
     return scelta.task_predecessore_id or ""
 from data import get_dipendente, scostamento_stime_sottotask, semaforo_progetti
 from data_db_impl import _to_dt
+from stati_colori import carica_stati, colore_stato
 
 
 # ── Router ───────────────────────────────────────────────────────────────
@@ -260,6 +267,20 @@ def dati_gantt(
 # ═════════════════════════════════════════════════════════════════════════
 # 1.b GET /api/gantt/strutturato — gerarchia Progetto → Fase → Task
 # ═════════════════════════════════════════════════════════════════════════
+
+def _filtra_progetti(q, stato: Optional[str], progetto_id: Optional[str]):
+    """Il filtro sui progetti della pagina GANTT, uno solo per lo schermo
+    (/strutturato) e per l'export Excel. Con `progetto_id` vale solo quello;
+    altrimenti `stato`: "attivi" (anche se assente) = STATI_PROGETTO_ATTIVI,
+    "all" = nessun filtro, altro = quello stato, senza badare alle maiuscole."""
+    if progetto_id:
+        return q.filter(Progetto.id == progetto_id)
+    if stato is None or stato.lower() == "attivi":
+        return q.filter(Progetto.stato.in_(STATI_PROGETTO_ATTIVI))
+    if stato.lower() != "all":
+        return q.filter(func.lower(Progetto.stato) == stato.lower())
+    return q
+
 
 @router.get("/strutturato")
 def gantt_strutturato(
@@ -384,13 +405,7 @@ def gantt_strutturato(
             joinedload(Progetto.fasi).joinedload(Fase.task)
                 .selectinload(Task.dipendenze_entranti)
         )
-        if progetto_id:
-            q = q.filter(Progetto.id == progetto_id)
-        elif stato is None or stato.lower() == "attivi":
-            q = q.filter(Progetto.stato.in_(STATI_PROGETTO_ATTIVI))
-        elif stato.lower() != "all":
-            q = q.filter(func.lower(Progetto.stato) == stato.lower())
-        progetti = q.order_by(Progetto.id).all()
+        progetti = _filtra_progetti(q, stato, progetto_id).order_by(Progetto.id).all()
 
         # ── 2. Tutti i consuntivi in una query ────────────────────────
         # Aggrego per task_id per non fare N+1 nel loop sotto.
@@ -687,27 +702,28 @@ def gantt_strutturato(
 
 # ─────────────────────────────────────────────────────────────────────────
 # Helper privato: carica i task per l'export Excel da Postgres
-# e restituisce una lista di dict pronti all'uso. Centralizza il filtro
-# "progetti non Sospesi" e la pre-conversione delle date a datetime
-# (necessaria per il foglio "GANTT Visivo" — vedi NOTE TECNICHE).
+# e restituisce una lista di dict pronti all'uso. Applica i filtri della
+# pagina GANTT e pre-converte le date a datetime (necessario per il foglio
+# "GANTT Visivo" — vedi NOTE TECNICHE).
 # ─────────────────────────────────────────────────────────────────────────
 
-def _carica_task_export(progetto_id: Optional[str]) -> list[dict]:
-    """Carica i task dell'export Excel, senza gli «Eliminato».
-
-    Args:
-        progetto_id: filtro su singolo progetto. Se None, esclude i
-            progetti in stato 'Sospeso' (replica del comportamento DataFrame).
-    """
+def _carica_task_export(stato: Optional[str], progetto_id: Optional[str],
+                        profilo: Optional[str]) -> list[dict]:
+    """Carica i task dell'export Excel, senza gli «Eliminato», con i filtri
+    della pagina GANTT: i progetti come /strutturato (`_filtra_progetti`), i
+    task sul profilo richiesto, come il filtro profilo della pagina."""
     session = get_session()
-    q = session.query(Task).options(joinedload(Task.progetto), joinedload(Task.fase_rel))
-    if progetto_id:
-        q = q.filter(Task.progetto_id == progetto_id)
-    else:
-        q = q.filter(Task.progetto.has(Progetto.stato != "Sospeso"))
-    q = q.filter(Task.stato != "Eliminato")
-    tasks = q.all()
-    session.close()
+    try:
+        progetti = _filtra_progetti(session.query(Progetto.id), stato, progetto_id)
+        q = (session.query(Task)
+             .options(joinedload(Task.progetto), joinedload(Task.fase_rel))
+             .filter(Task.progetto_id.in_(progetti.scalar_subquery()))
+             .filter(Task.stato != "Eliminato"))
+        if profilo:
+            q = q.filter(Task.profilo_richiesto == profilo)
+        tasks = q.all()
+    finally:
+        session.close()
 
     records = []
     for t in tasks:
@@ -715,6 +731,7 @@ def _carica_task_export(progetto_id: Optional[str]) -> list[dict]:
             "id": t.id,
             "nome": t.nome,
             "stato": t.stato,
+            "profilo_richiesto": t.profilo_richiesto or "",
             "ore_stimate": int(t.ore_stimate or 0),
             # Pre-converto a datetime per coerenza con lo storico pandas.Timestamp:
             # i confronti e i `hasattr(x, "date")` del foglio GANTT Visivo
@@ -724,6 +741,7 @@ def _carica_task_export(progetto_id: Optional[str]) -> list[dict]:
             "dipendente_id": t.dipendente_id or "",
             "progetto_id": t.progetto_id,
             "progetto_nome": t.progetto.nome if t.progetto else "?",
+            "progetto_stato": t.progetto.stato if t.progetto else "",
             "fase": t.fase_rel.nome if t.fase_rel else "",
         })
     return records
@@ -735,14 +753,22 @@ def _carica_task_export(progetto_id: Optional[str]) -> list[dict]:
 
 @router.get("/export-excel")
 def export_gantt_excel(
+    stato: Optional[str] = None,
     progetto_id: Optional[str] = None,
+    profilo: Optional[str] = None,
     _: Utente = Depends(require_manager),
 ):
     """Genera e scarica un file Excel con i dati GANTT + foglio visivo."""
     import io
     import pandas as pd
 
-    records = _carica_task_export(progetto_id)
+    records = _carica_task_export(stato, progetto_id, profilo)
+    stati = carica_stati()
+    # openpyxl vuole il colore senza «#»
+    def colore_task(nome_stato):
+        return colore_stato(stati, "task", nome_stato).lstrip("#")
+    # Testo scuro sul colore pieno dello stato, come i badge del frontend.
+    TESTO_SU_STATO = "111827"
 
     # Costruisci dati per il foglio "Dati GANTT"
     export_data = []
@@ -753,7 +779,7 @@ def export_gantt_excel(
             "Task": r["nome"],
             "Fase": r["fase"],
             "Assegnato a": dip["nome"],
-            "Profilo": dip["profilo"],
+            "Profilo": r["profilo_richiesto"],
             "Ore stimate": r["ore_stimate"],
             # Datetime: hasattr(.,"strftime") sempre True. Equivalente a passare il valore.
             "Data inizio": r["data_inizio"],
@@ -761,7 +787,11 @@ def export_gantt_excel(
             "Stato": r["stato"],
         })
 
-    df = pd.DataFrame(export_data)
+    # Le colonne esplicite servono quando i filtri non lasciano task: senza,
+    # un DataFrame vuoto non ha colonne e l'ordinamento fallisce.
+    headers = ["Progetto", "Task", "Fase", "Assegnato a", "Profilo",
+               "Ore stimate", "Data inizio", "Data fine", "Stato"]
+    df = pd.DataFrame(export_data, columns=headers)
     df = df.sort_values(["Progetto", "Data inizio"])
 
     buffer = io.BytesIO()
@@ -776,8 +806,6 @@ def export_gantt_excel(
         ws_data = wb.active
         ws_data.title = "Dati GANTT"
 
-        headers = ["Progetto", "Task", "Fase", "Assegnato a", "Profilo",
-                   "Ore stimate", "Data inizio", "Data fine", "Stato"]
         header_fill = PatternFill(start_color="1a365d", end_color="1a365d", fill_type="solid")
         header_font = Font(color="FFFFFF", bold=True, size=10)
 
@@ -787,7 +815,7 @@ def export_gantt_excel(
             cell.font = header_font
             cell.alignment = Alignment(horizontal="center")
 
-        # Dati con colore per stato
+        # Dati, con la cella dello stato nel colore dello stato
         for row_idx, (_, row) in enumerate(df.iterrows(), 2):
             for col_idx, h in enumerate(headers, 1):
                 val = row[h]
@@ -799,10 +827,10 @@ def export_gantt_excel(
                 cell = ws_data.cell(row=row_idx, column=col_idx, value=val)
                 cell.alignment = Alignment(horizontal="left")
 
-                if row["Stato"] == "Completato":
-                    cell.fill = PatternFill(start_color="d4edda", end_color="d4edda", fill_type="solid")
-                elif row["Stato"] == "Da iniziare":
-                    cell.fill = PatternFill(start_color="e2e8f0", end_color="e2e8f0", fill_type="solid")
+                if h == "Stato":
+                    colore = colore_task(val)
+                    cell.fill = PatternFill(start_color=colore, end_color=colore, fill_type="solid")
+                    cell.font = Font(color=TESTO_SU_STATO)
 
         # Auto-width
         for col in range(1, len(headers) + 1):
@@ -834,25 +862,6 @@ def export_gantt_excel(
                 current += td(days=7)
 
             n_sett = len(settimane)
-
-            # Colori per progetto (mantenuti per coerenza con vista frontend)
-            colori_progetto = {
-                "Adeguamento DORA": "4472C4",
-                "Framework Compliance 262": "ED7D31",
-                "Digitalizzazione Corpo Normativo": "70AD47",
-                "Risk Assessment Operativo": "FFC000",
-                "ProcessBook Aziendale": "9B59B6",
-                "Attività Interne": "95A5A6",
-            }
-            colore_default = "5B9BD5"
-
-            # Colori per stato
-            colori_stato = {
-                "Completato": "27ae60",
-                "In corso": "3498db",
-                "Da iniziare": "95a5a6",
-                "Sospeso": "e67e22",
-            }
 
             # Header
             ws_gantt.cell(row=1, column=1, value="Task").font = Font(bold=True, size=9)
@@ -895,8 +904,10 @@ def export_gantt_excel(
                 if proj_nome != current_project:
                     current_project = proj_nome
                     sep_cell = ws_gantt.cell(row=row, column=1, value=proj_nome.upper())
-                    sep_cell.font = Font(bold=True, size=9, color="FFFFFF")
-                    proj_color = colori_progetto.get(proj_nome, colore_default)
+                    sep_cell.font = Font(bold=True, size=9, color=TESTO_SU_STATO)
+                    # La riga del progetto prende il colore del suo stato:
+                    # un criterio che vale per ogni cliente, senza nomi.
+                    proj_color = colore_stato(stati, "progetto", r["progetto_stato"]).lstrip("#")
                     for col in range(1, 5 + n_sett):
                         ws_gantt.cell(row=row, column=col).fill = PatternFill(
                             start_color=proj_color, end_color=proj_color, fill_type="solid"
@@ -910,16 +921,16 @@ def export_gantt_excel(
                 ws_gantt.cell(row=row, column=4, value=r["stato"]).font = Font(size=8)
 
                 # Colore stato nella cella stato
-                stato_color = colori_stato.get(r["stato"], "95a5a6")
+                stato_color = colore_task(r["stato"])
                 ws_gantt.cell(row=row, column=4).fill = PatternFill(
                     start_color=stato_color, end_color=stato_color, fill_type="solid"
                 )
-                ws_gantt.cell(row=row, column=4).font = Font(size=8, color="FFFFFF")
+                ws_gantt.cell(row=row, column=4).font = Font(size=8, color=TESTO_SU_STATO)
 
                 # Barre GANTT — confronto datetime vs datetime (date pre-convertite)
                 task_start = r["data_inizio"]
                 task_end = r["data_fine"]
-                bar_color = colori_stato.get(r["stato"], colore_default)
+                bar_color = stato_color
 
                 # Se manca anche una sola delle due date, nessuna barra:
                 # la riga task compare comunque (info + stato colorato),
@@ -934,16 +945,28 @@ def export_gantt_excel(
 
                 row += 1
 
-            # Legenda in fondo
+            # Legenda in fondo: i soli stati presenti, nell'ordine del file
+            # degli stati, e gli ignoti in coda col colore neutro, come la
+            # legenda della pagina (statiColori.vociLegenda).
             row += 2
             ws_gantt.cell(row=row, column=1, value="Legenda:").font = Font(bold=True, size=9)
             row += 1
-            for stato, colore in colori_stato.items():
-                ws_gantt.cell(row=row, column=1, value=stato).font = Font(size=9)
-                ws_gantt.cell(row=row, column=2).fill = PatternFill(
-                    start_color=colore, end_color=colore, fill_type="solid"
-                )
+            for livello, gruppo, chiave in (("progetto", "Progetti", "progetto_stato"),
+                                            ("task", "Task", "stato")):
+                presenti = {r[chiave] for r in records if r[chiave]}
+                noti = [s for s in stati[livello] if s in presenti]
+                ignoti = sorted(presenti - set(stati[livello]))
+                ws_gantt.cell(row=row, column=1, value=f"{gruppo}:").font = Font(bold=True, size=9)
                 row += 1
+                for nome_stato in noti + ignoti:
+                    voce = stati[livello].get(nome_stato)
+                    etichetta = voce["etichetta"] if voce else nome_stato
+                    colore = colore_stato(stati, livello, nome_stato).lstrip("#")
+                    ws_gantt.cell(row=row, column=1, value=etichetta).font = Font(size=9)
+                    ws_gantt.cell(row=row, column=2).fill = PatternFill(
+                        start_color=colore, end_color=colore, fill_type="solid"
+                    )
+                    row += 1
 
         wb.save(buffer)
         media_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -966,7 +989,8 @@ def export_gantt_excel(
         ext = "csv"
 
     buffer.seek(0)
-    filename = f"gantt_{progetto_id or 'tutti'}_{datetime.now().strftime('%Y%m%d')}.{ext}"
+    # Lo schema dei nomi del PDF e del PNG (esportaGantt.nomeBaseFile).
+    filename = f"gantt_{progetto_id or 'portafoglio'}_{datetime.now().date().isoformat()}.{ext}"
     return Response(
         content=buffer.getvalue(),
         media_type=media_type,

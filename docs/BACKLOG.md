@@ -27,6 +27,8 @@
 - add_p010.py obsoleto; README con istruzioni solo Linux e riferimenti a SQLite
 - La data di oggi va letta solo da utils.get_oggi(): oggi molti punti chiamano date.today() o datetime.now() per conto loro (elenco nel resoconto del passo 5 bis). Si sistema insieme al fuso orario della fase 8
 - In test_solidita.sh resta un test su /task/anteprima-impatto, che non esiste più. Lo script non è chiamato da nessuno: valutare se toglierlo del tutto
+- Il payload delle fasi trasforma ore_pianificate NULL in 0, quindi l'export mostra 0 h dove il dato manca. Da correggere nella fase 2
+- npm audit segnala vulnerabilità alte su vite, react-router, postcss, picomatch e nanoid: aggiornare le dipendenze del frontend in un passo dedicato
 
 ## Test
 - Nessun e2e su Cantiere, Wizard, GANTT, Risorse, Configurazione, SAL, export

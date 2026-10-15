@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { fetchGanttStrutturato, fetchProgetti, fetchDipendenti } from '../api'
+import { fetchGanttStrutturato, fetchProgetti, fetchDipendenti, fetchExcelGantt } from '../api'
 import GanttChartFasi from '../components/_shared/GanttChartFasi'
 import { vociLegenda } from '../components/_shared/statiColori'
 import { disegnaGantt, titoloGantt } from '../components/_shared/ganttSvg'
@@ -112,14 +112,20 @@ export default function GanttPage() {
   }, [ganttStrutturato, filtroProfilo])
 
   // L'export disegna ciò che la pagina ha filtrato (stato, progetto, profilo),
-  // con tutte le fasi aperte. Le librerie PDF arrivano solo al primo clic.
+  // con tutte le fasi aperte. Le librerie PDF e ZIP arrivano solo al primo
+  // clic. L'Excel lo fa il server, con gli stessi tre filtri.
   async function esporta(formato) {
     setEsportando(true)
     try {
       const modulo = await import('../components/_shared/esportaGantt')
+      const nomeBase = modulo.nomeBaseFile(filtroProgetto)
+      if (formato === 'excel') {
+        const excel = await fetchExcelGantt({ stato: filtroStato, progettoId: filtroProgetto, profilo: filtroProfilo })
+        modulo.scaricaBlob(excel, `${nomeBase}.xlsx`)
+        return
+      }
       const nomeProgetto = filtroProgetto ? ganttFiltrato.find(p => p.id === filtroProgetto)?.nome : null
       const pagine = disegnaGantt(ganttFiltrato, { titolo: titoloGantt(nomeProgetto) })
-      const nomeBase = modulo.nomeBaseFile(filtroProgetto)
       if (formato === 'pdf') await modulo.esportaPdf(pagine, nomeBase)
       else await modulo.esportaPng(pagine, nomeBase)
     } catch (e) {
@@ -179,23 +185,8 @@ export default function GanttPage() {
                 className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm transition-colors disabled:opacity-50">
                 🖼️ PNG
               </button>
-              <button onClick={() => {
-                const params = filtroProgetto ? `?progetto_id=${filtroProgetto}` : '';
-                fetch(`/api/gantt/export-excel${params}`)
-                  .then(res => res.blob())
-                  .then(blob => {
-                    const url = URL.createObjectURL(blob);
-                    const a = document.createElement('a');
-                    a.href = url;
-                    a.download = `gantt_${filtroProgetto || 'tutti'}_${new Date().toISOString().slice(0,10)}.xlsx`;
-                    document.body.appendChild(a);
-                    a.click();
-                    document.body.removeChild(a);
-                    URL.revokeObjectURL(url);
-                  })
-                  .catch(() => alert('Errore nella generazione Excel'))
-              }}
-                className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm transition-colors">
+              <button onClick={() => esporta('excel')} disabled={esportando}
+                className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm transition-colors disabled:opacity-50">
                 📊 Excel
               </button>
             </div>

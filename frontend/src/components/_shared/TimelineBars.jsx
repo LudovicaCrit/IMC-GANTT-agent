@@ -43,6 +43,7 @@
 import React, { useMemo } from 'react'
 import { buildTimeline, barXW } from './timelineScale'
 import { coloreStato } from './statiColori'
+import { isoLocale } from './ganttSvg'
 
 /* ── Marcatura del CAMBIAMENTO (opzionale) ─────────────────────────────
  * Se una barra porta `diff`, il componente entra in «modalità evidenziato».
@@ -126,7 +127,9 @@ export default function TimelineBars({
   // Le due linee verticali: stessa aritmetica delle barre (`barXW` su un
   // istante puntuale ⇒ la sua `x`), non una formula riderivata a mano.
   const xDi = (iso) => (iso ? barXW(timeline, iso, iso).x : null)
-  const oggiX = xDi(new Date().toISOString().slice(0, 10))
+  // Il giorno locale, come la linea di oggi dell'export: toISOString darebbe
+  // quello UTC, che fra mezzanotte e le 2 in Italia è ancora ieri.
+  const oggiX = xDi(isoLocale(new Date()))
   const scattoX = xDi(dataScatto)
   const dentro = (x) => x != null && x >= 0 && x <= totalWidth
 
