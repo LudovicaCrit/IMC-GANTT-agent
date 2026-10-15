@@ -249,7 +249,7 @@ CAMPI_SOTTOTASK = {
 }
 
 
-def test_sottotask_annidati():
+def test_sottotask_annidati(oggi_del_seed):
     """8. I sottotask compaiono annidati nel task, con anagrafica e colore.
 
     Stampo di `test_semaforo_aggregazione.py::test_fixture_sottotask_eredita_
@@ -257,12 +257,14 @@ def test_sottotask_annidati():
     route. Due padri (uno verde, uno rosso) per verificare che il colore del
     pezzo segua la data EREDITATA dal task, più un pezzo «Annullato» che non
     deve comparire.
+
+    I padri si scelgono con la stessa data con cui la route colora: quella del
+    seed, che la route legge da `get_oggi()` (sostituita dalla fixture).
     """
-    from datetime import date
     from models import get_session, Task, Sottotask
     from data_db_impl import colore_unita
 
-    oggi = date.today()
+    oggi = oggi_del_seed
     s = get_session()
     creati, ids_creati = [], []
     try:

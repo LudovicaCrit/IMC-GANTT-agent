@@ -12,6 +12,7 @@ from models import (
     Competenza, DipendentiCompetenze,
     OreSettimanali,
 )
+from utils import get_oggi
 
 # ══════════════════════════════════════════════════════════════════════
 # UTILITY DI CONVERSIONE
@@ -803,10 +804,12 @@ def semaforo_progetti(progetti_ids, oggi=None):
 
     `oggi` INIETTABILE. `colore_unita` è pura e non conosce l'orologio; questa
     funzione è il confine dove il tempo entra nel calcolo, UNA volta, e resta
-    un parametro perché i test possano fissarlo. Il default `date.today()` è
+    un parametro perché i test possano fissarlo. Il default `get_oggi()` è
     letto qui e passato a tutte le unità: senza questo, una richiesta a cavallo
     di mezzanotte potrebbe valutare due rami dello stesso albero in due giorni
-    diversi.
+    diversi. `oggi` si riduce sempre a `date`, anche se arriva un datetime
+    (get_oggi ne restituisce uno): `colore_unita` confronta date, e in Python
+    un confronto fra date e datetime solleva TypeError.
 
     OUTPUT — dict annidato, chiave = id dell'unità a ogni livello:
 
@@ -863,7 +866,10 @@ def semaforo_progetti(progetti_ids, oggi=None):
     if not progetti_ids:
         return {}
 
-    oggi = oggi or date.today()
+    if oggi is None:
+        oggi = get_oggi()
+    if isinstance(oggi, datetime):
+        oggi = oggi.date()
 
     session = get_session()
     try:
