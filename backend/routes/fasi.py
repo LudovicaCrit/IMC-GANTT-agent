@@ -9,7 +9,6 @@ Espone gli endpoint di lettura/scrittura sulle Fasi di progetto.
 
 Nel sistema attuale (R1) le fasi sono ancora un livello sottoutilizzato:
 - la pagina GANTT mostra task piatti, non raggruppati per fase
-- la pagina Pipeline non orchestra le fasi nel modo voluto da Vincenzo/Francesco
 - il consuntivo si fa per task, non per fase
 
 📌 Questa è la situazione di partenza per il **Blocco 2 — Macchina delle Fasi**
@@ -77,7 +76,7 @@ esplicita: principio "esplicito è meglio di implicito".
 Questo router crescerà significativamente. Endpoint da aggiungere:
   - PATCH /api/fasi/{fase_id} (rinomina, sposta date, cambia ordine)
   - DELETE /api/fasi/{fase_id} (con check task agganciati)
-  - GET /api/fasi/progetti/{progetto_id}/aggregato (vista per Pipeline:
+  - GET /api/fasi/progetti/{progetto_id}/aggregato (vista aggregata:
     progetto → fasi → task tutti annidati)
   - POST /api/fasi/da-template (crea fasi da FaseStandard template,
     es. per i Bandi: 3 fasi standard Monitoraggio/Proposal/PM)
@@ -98,7 +97,7 @@ register_router, helpers che andranno in moduli condivisi).
 
 Dopo questo router, il refactoring degli endpoint è chiuso. Resta:
 - pulizia DTO orfani in main.py (commit dedicato)
-- estrazione helper condivisi in utils.py / contesto.py
+- estrazione helper condivisi in utils.py
 - fix bug audit_permessi.py (auth_routes.py)
 ═══════════════════════════════════════════════════════════════════════════
 """

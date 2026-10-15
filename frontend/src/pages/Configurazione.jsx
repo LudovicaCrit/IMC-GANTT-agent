@@ -174,7 +174,7 @@ function TabFasi() {
   return (
     <div>
       <p className="text-sm text-gray-400 mb-4">
-        Le fasi qui censite saranno disponibili come opzioni quando crei un nuovo progetto in Pipeline.
+        Catalogo delle fasi standard, da usare come modelli. Oggi il Wizard del Cantiere non le propone ancora.
       </p>
       <div className="flex gap-3 mb-4">
         <input value={nome} onChange={e => setNome(e.target.value)}
@@ -414,7 +414,7 @@ export default function Configurazione() {
     <div>
       <h1 className="text-3xl font-bold mb-2">⚙️ Configurazione</h1>
       <p className="text-sm text-gray-400 mb-6">
-        Gestisci anagrafica dipendenti, ruoli, competenze e fasi. I dati qui inseriti alimentano Pipeline, Tavolo di Lavoro e Consuntivazione.
+        Gestisci anagrafica dipendenti, ruoli, competenze e fasi. I dati qui inseriti alimentano Cantiere, Risorse e Consuntivazione.
       </p>
 
       <div className="flex gap-2 mb-6">

@@ -6,7 +6,7 @@ backend/routes/gantt.py — Router per endpoint /api/gantt
 SCOPO
 ─────
 Espone gli endpoint per la pagina GANTT del frontend:
-  - Lettura dati GANTT in JSON (per rendering frappe-gantt nel frontend)
+  - Lettura dati GANTT in JSON, formato piatto (oggi senza chiamanti nel frontend)
   - Esportazione GANTT in formato PDF, PNG e Excel (download file)
 Tutti gli endpoint sono manager-only (vista d'insieme aziendale).
 
@@ -34,7 +34,7 @@ DETTAGLIO ENDPOINT
    - Manager-only.
    - Parametro opzionale: filtra per progetto.
    - Esclude task con stato "Eliminato" (soft delete).
-   - Restituisce JSON formattato per la libreria frappe-gantt:
+   - Restituisce JSON in formato piatto:
      id, name, start, end, progress (calcolato da ore_consuntivate/ore_stimate),
      dependencies (predecessore), project, project_id, assignee, profile,
      status, estimated_hours, hours_done, predecessor_name.
@@ -256,8 +256,7 @@ def dati_gantt(
             "id": t.id,
             "name": t.nome,
             # Date opzionali: un task senza data compare comunque nel GANTT
-            # con stringa vuota (frappe-gantt lo ignora visivamente, ma il
-            # task resta nel payload — niente 500).
+            # con stringa vuota: il task resta nel payload, niente 500.
             "start": t.data_inizio.strftime("%Y-%m-%d") if t.data_inizio else "",
             "end": t.data_fine.strftime("%Y-%m-%d") if t.data_fine else "",
             "progress": progress,

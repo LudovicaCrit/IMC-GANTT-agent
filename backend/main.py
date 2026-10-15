@@ -8,7 +8,6 @@ import os
 from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
 from auth_routes import router as auth_router
 from routes.dipendenti import router as dipendenti_router
 from routes.progetti import router as progetti_router
@@ -16,14 +15,11 @@ from routes.economia import router as economia_router
 from routes.risorse import router as risorse_router
 from routes.gantt import router as gantt_router
 from routes.segnalazioni import router as segnalazioni_router
-from routes.pianificazione import router as pianificazione_router
 from routes.consuntivi import router as consuntivi_router
 from routes.tasks import router as tasks_router
 from routes.sottotask import router as sottotask_router
 from routes.attivita_interne import router as attivita_interne_router
 from routes.configurazione import router as configurazione_router
-from routes.agent import router as agent_router
-from routes.scenario import router as scenario_router
 from routes.fasi import router as fasi_router
 from routes.home import router as home_router
 from routes.sal import router as sal_router
@@ -70,14 +66,11 @@ app.include_router(economia_router)
 app.include_router(risorse_router)
 app.include_router(gantt_router)
 app.include_router(segnalazioni_router)
-app.include_router(pianificazione_router)
 app.include_router(consuntivi_router)
 app.include_router(tasks_router)
 app.include_router(sottotask_router)
 app.include_router(attivita_interne_router)
 app.include_router(configurazione_router)
-app.include_router(agent_router)
-app.include_router(scenario_router)
 app.include_router(fasi_router)
 app.include_router(home_router)
 app.include_router(sal_router)
@@ -100,34 +93,6 @@ def salute():
     Non tocca il database di proposito: dice che il server è vivo, non che
     tutto funziona."""
     return {"stato": "ok"}
-
-
-# ══════════════════════════════════════════════════════════════════════
-# STORE FALLBACK PER MODALITÀ NON-DB (LEGACY)
-# 📌 TODO: rimuovere quando PostgreSQL sarà fonte di verità unica
-# ══════════════════════════════════════════════════════════════════════
-
-SEGNALAZIONI_STORE = []
-_segn_counter = 0
-
-
-def _next_segn_id():
-    global _segn_counter
-    _segn_counter += 1
-    return f"S{_segn_counter:03d}"
-
-
-# ══════════════════════════════════════════════════════════════════════
-# CLASSE DA ANALIZZARE INSIEME (vedi handoff v13 sezione F.1)
-# 📌 SimulaRiassegnaRequest — funzionalità incompleta o futura.
-#    Probabilmente per Tavolo di Lavoro: riassegnare un task a un
-#    altro dipendente per simulare l'impatto. Da analizzare prima
-#    di rimuovere o spostare.
-# ══════════════════════════════════════════════════════════════════════
-
-class SimulaRiassegnaRequest(BaseModel):
-    task_id: str
-    nuovo_dipendente_id: str
 
 
 # ══════════════════════════════════════════════════════════════════════

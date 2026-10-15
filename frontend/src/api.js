@@ -162,21 +162,12 @@ export async function fetchRuoli() {
   return apiFetch(`${API_BASE}/config/ruoli`);
 }
 
-export async function fetchDipendente(id) {
-  return apiFetch(`${API_BASE}/dipendenti/${id}`);
-}
-
 export async function fetchProgetti(stato = null) {
   // stato opzionale: "attivi" (default backend), "bozza", "all", "in esecuzione", ecc.
   const params = new URLSearchParams();
   if (stato) params.set('stato', stato);
   const qs = params.toString();
   return apiFetch(`${API_BASE}/progetti${qs ? `?${qs}` : ''}`);
-}
-
-export async function createProgetto(data) {
-  // Crea progetto (bozza di default). Body: {nome, cliente?, stato?, ...}.
-  return apiFetch(`${API_BASE}/progetti`, { method: 'POST', body: data });
 }
 
 export async function createProgettoCompleto(data) {
@@ -215,10 +206,6 @@ export async function updateProgetto(progettoId, data) {
 export async function deleteProgetto(progettoId) {
   // Elimina progetto (SOLO se stato='Bozza').
   return apiFetch(`${API_BASE}/progetti/${progettoId}`, { method: 'DELETE' });
-}
-
-export async function fetchBilanciamento() {
-  return apiFetch(`${API_BASE}/risorse/suggerisci-bilanciamento`);
 }
 
 export async function fetchTasks(progettoId = null, profilo = null) {
@@ -393,63 +380,11 @@ export async function fetchCaricoRisorse(settimane = 12) {
 }
 
 // ═════════════════════════════════════════════════════════════════════════
-//  AGENT / IA
-// ═════════════════════════════════════════════════════════════════════════
-
-export async function fetchAgentStatus() {
-  return apiFetch(`${API_BASE}/agent/status`);
-}
-
-export async function sendChatMessage(data) {
-  return apiFetch(`${API_BASE}/agent/chat`, { method: 'POST', body: data });
-}
-
-export async function richiediAnalisiGantt(data) {
-  return apiFetch(`${API_BASE}/agent/analisi-gantt`, { method: 'POST', body: data });
-}
-
-export async function verificaPianificazione(data) {
-  return apiFetch(`${API_BASE}/agent/verifica-pianificazione`, { method: 'POST', body: data });
-}
-
-export async function suggerisciTask(data) {
-  return apiFetch(`${API_BASE}/agent/suggerisci-task`, { method: 'POST', body: data });
-}
-
-// ═════════════════════════════════════════════════════════════════════════
-//  SEGNALAZIONI / ANTEPRIMA IMPATTO / APPLICA MODIFICHE
+//  SEGNALAZIONI
 // ═════════════════════════════════════════════════════════════════════════
 
 export async function fetchSegnalazioni() {
   return apiFetch(`${API_BASE}/segnalazioni`);
-}
-
-export async function applicaModifiche(data) {
-  return apiFetch(`${API_BASE}/tasks/applica`, { method: 'POST', body: data });
-}
-
-// ═════════════════════════════════════════════════════════════════════════
-//  BOZZE PIANIFICAZIONE — DEPRECATE (Step 2.0, 13 mag 2026)
-//
-//  Le bozze sono ora progetti con stato='Bozza' (vedi createProgetto sopra).
-//  Pipeline.jsx e AnalisiInterventi.jsx mantengono il pulsante "Salva bozza"
-//  disabilitato fino a quando non verranno cancellate (Step 2.7).
-// ═════════════════════════════════════════════════════════════════════════
-
-export async function salvaBozza(_progettoId, _datiJson) {
-  throw new Error(
-    "salvaBozza deprecata dal 13 mag 2026 (Step 2.0). " +
-    "Le bozze ora sono progetti con stato='Bozza'. " +
-    "Usa createProgetto({ stato: 'Bozza', ... })."
-  );
-}
-
-export async function caricaBozza(_progettoId) {
-  throw new Error(
-    "caricaBozza deprecata dal 13 mag 2026 (Step 2.0). " +
-    "Le bozze ora sono progetti con stato='Bozza'. " +
-    "Usa fetchProgetti('bozza') o fetchProgetto(id)."
-  );
 }
 
 // ═════════════════════════════════════════════════════════════════════════
@@ -586,31 +521,6 @@ export async function exportGanttPdf(progettoId = null) {
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
-}
-
-// ═════════════════════════════════════════════════════════════════════════
-//  SCENARIO: Tavolo di Lavoro
-// ═════════════════════════════════════════════════════════════════════════
-
-export async function interpretaScenario(testo, contesto_extra = '') {
-  return apiFetch(`${API_BASE}/agent/interpreta-scenario`, {
-    method: 'POST',
-    body: { testo, contesto_extra },
-  });
-}
-
-export async function simulaScenario(modifiche) {
-  return apiFetch(`${API_BASE}/scenario/simula`, {
-    method: 'POST',
-    body: { modifiche },
-  });
-}
-
-export async function confermaScenario(modifiche) {
-  return apiFetch(`${API_BASE}/scenario/conferma`, {
-    method: 'POST',
-    body: { modifiche },
-  });
 }
 
 // ═════════════════════════════════════════════════════════════════════════

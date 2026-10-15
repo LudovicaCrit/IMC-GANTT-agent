@@ -4,8 +4,6 @@ import Home from './pages/Home'
 import Gantt from './pages/Gantt'
 import Risorse from './pages/Risorse'
 import ConsuntivazioneOre from './pages/ConsuntivazioneOre'
-import AnalisiInterventi from './pages/AnalisiInterventi'
-import Pipeline from './pages/Pipeline'
 import Economia from './pages/Economia'
 import AttivitaInterne from './pages/AttivitaInterne'
 import Configurazione from './pages/Configurazione'
@@ -14,7 +12,6 @@ import CantiereDettaglio from './pages/CantiereDettaglio'
 import ElencoDettaglio from './pages/ElencoDettaglio'
 import Archivio from './pages/Archivio'
 import Login from './pages/Login'
-import Forbidden from './pages/Forbidden'
 import NotFound from './pages/NotFound'
 import RequireAuth from './components/RequireAuth'
 import RequireManager from './components/RequireManager'
@@ -28,7 +25,6 @@ const navItems = [
   { to: '/', label: 'Home', icon: '📊', end: true, requiresManager: false },
   { to: '/gantt', label: 'GANTT', icon: '📅', requiresManager: true },
   { to: '/cantiere', label: 'Cantiere', icon: '🔨', requiresManager: true },
-  { to: '/analisi', label: 'Tavolo di Lavoro', icon: '🔬', requiresManager: true },
   { to: '/risorse', label: 'Risorse', icon: '👥', requiresManager: true },
   // UNA voce sola dal 07/09/2026. Erano due — la pagina storica e la «(A′)»
   // che la stava rimpiazzando — e restavano entrambe in menu, visibili a tutti,
@@ -36,7 +32,6 @@ const navItems = [
   // «Accedi come» si popola da un endpoint manager-only). La pagina superstite
   // è role-aware da sé: dipendente, PM e manager entrano dalla stessa porta.
   { to: '/consuntivazione', label: 'Consuntivazione', icon: '⏱️', requiresManager: false },
-  { to: '/pipeline', label: 'Pipeline', icon: '📋', requiresManager: true },
   { to: '/economia', label: 'Economia', icon: '💰', requiresManager: true },
   { to: '/attivita-interne', label: 'Attività Interne', icon: '🏢', requiresManager: true },
   { to: '/archivio', label: 'Archivio', icon: '📦', requiresManager: true },
@@ -93,10 +88,10 @@ function MainLayout() {
             `min-h-0` è ciò che permette a `overflow-y-auto` di entrare in
             funzione: senza, non ci sarebbe mai eccedenza da far scorrere.
 
-            Si vedeva solo sui profili MANAGEMENT: `navItems` ha 12 voci, di cui
-            9 con `requiresManager`. Un dipendente ne vede 3 e non sfora su
-            nessuno schermo; un manager ne vede 12, ~500px di sole voci, e su un
-            portatile perdeva la coda della lista e il footer.
+            Si vedeva solo sui profili MANAGEMENT: `navItems` ha 9 voci, di cui
+            7 con `requiresManager`. Un dipendente ne vede 2 e non sfora su
+            nessuno schermo; un manager le vede tutte e 9, e su un portatile
+            piccolo poteva perdere la coda della lista e il footer.
 
             `auto` e non `scroll`: la barra compare solo quando serve, quindi per
             chi oggi ci sta comodo non cambia niente. */}
@@ -201,14 +196,8 @@ function MainLayout() {
           <Route path="/gantt" element={
             <RequireManager><Gantt /></RequireManager>
           } />
-          <Route path="/analisi" element={
-            <RequireManager><AnalisiInterventi /></RequireManager>
-          } />
           <Route path="/risorse" element={
             <RequireManager><Risorse /></RequireManager>
-          } />
-          <Route path="/pipeline" element={
-            <RequireManager><Pipeline /></RequireManager>
           } />
           <Route path="/economia" element={
             <RequireManager><Economia /></RequireManager>

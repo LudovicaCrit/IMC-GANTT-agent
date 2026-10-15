@@ -1,7 +1,7 @@
 // ─────────────────────────────────────────────────────────────────────────
 //  RequireManager.jsx — Wrapper che richiede ruolo manager
 //
-//  Avvolge le pagine manager-only (GANTT, Pipeline, Economia, ecc.).
+//  Avvolge le pagine manager-only (GANTT, Cantiere, Economia, ecc.).
 //
 //  Comportamento:
 //    • loading       → spinner full-screen

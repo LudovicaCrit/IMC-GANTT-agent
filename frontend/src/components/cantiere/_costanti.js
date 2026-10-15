@@ -25,18 +25,6 @@ export const STATI_FASE = ['Da iniziare', 'In corso', 'Completata', 'Sospesa', '
 // scriveva già a runtime, ora sono ammessi anche dal DB.
 export const STATI_TASK = ['Da iniziare', 'In corso', 'Completato', 'Bloccato', 'Sospeso', 'Annullato']
 
-// Step 2.7-pre (20/05/2026): aggiunto "Da iniziare" — progetto approvato dal
-// cliente con fasi pianificate ma non ancora partito (data_inizio futura).
-// Transizione "Da iniziare → In esecuzione" è MANUALE (decisione PM, vedi
-// handoff §3.5 "controllo non automazione").
-export const STATI_PROGETTO = ['Bozza', 'Da iniziare', 'In esecuzione', 'Sospeso', 'Completato', 'Annullato']
-
-// Sottoinsieme "attivi": progetti visibili in GANTT (In esecuzione + Sospeso).
-// "Da iniziare" NON è qui — il progetto Da iniziare è in attesa di partire,
-// la sua visualizzazione in GANTT sarà gestita con un alert in Home quando
-// data_inizio <= oggi (Blocco 3).
-export const STATI_PROGETTO_ATTIVI = ['In esecuzione', 'Sospeso']
-
 // Stati di PIANIFICAZIONE del sottotask — quelli che il PM governa sulla
 // DEFINIZIONE del pezzo dal Cantiere. CHECK a livello DB:
 // ck_sottotask_stato_pianificazione (migration a3b4c5d6e7f8).

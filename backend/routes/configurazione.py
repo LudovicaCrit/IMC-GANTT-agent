@@ -112,8 +112,7 @@ commit dedicato post-refactoring.
 STORIA
 ──────
 Estratto da main.py il 6 maggio 2026 nell'ambito del refactoring strangler.
-È il quinto e penultimo blocco da migrare (restano agent.py, scenario.py,
-fasi.py per chiudere il refactoring).
+È il quinto blocco estratto da main.py.
 ═══════════════════════════════════════════════════════════════════════════
 """
 

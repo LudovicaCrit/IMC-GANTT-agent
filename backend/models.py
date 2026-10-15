@@ -407,7 +407,8 @@ class DipendentiRuoliAggiuntivi(Base):
 
 
 class FaseStandard(Base):
-    """Template di fasi per tipo progetto. Usato per precompilare i GANTT in Pipeline."""
+    """Template di fasi per tipo progetto, gestiti in Configurazione. Oggi nessuna
+    pagina li usa per precompilare un GANTT."""
     __tablename__ = "fasi_standard"
 
     id = Column(Integer, primary_key=True, autoincrement=True)

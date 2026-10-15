@@ -54,15 +54,9 @@ Diagramma temporale di tutti i progetti, raggruppati per fase. Sola lettura.
 È il "cruscotto della pianificazione corrente". Il manager vede a colpo d'occhio
 chi sta facendo cosa, in quale fase, e se ci sono ritardi.
 
-### Pipeline — creazione di nuovi progetti
-Form di creazione di un nuovo progetto, con divisione bando vs ordinario.
-Per i bandi: 3 fasi standard fisse (Monitoraggio, Proposal, Project Management),
-di cui solo PM ha ore vendute. Per gli ordinari: fasi libere create dal PM.
-
-### Tavolo di Lavoro — evoluzione dinamica
-Spazio dove il manager modifica progetti in corso, riassegna task, simula impatti
-di ritardi o anticipi tramite l'assistente IA. È il "punto di adattamento":
-quando la realtà cambia, qui si aggiorna il sistema.
+Le pagine Pipeline e Tavolo di Lavoro sono state rimosse; ciò che contenevano
+di recuperabile è archiviato in `docs/EMBRIONI_IA.md`. Creazione e modifica dei
+progetti stanno nel Cantiere.
 
 
 ## Filosofia: la settimana intera, non solo i progetti
@@ -129,12 +123,12 @@ compila i propri consuntivi della settimana appena trascorsa.
 
 ### Segnalazione
 Tipo, priorità, dipendente, progetto, dettaglio testuale.
-Generate automaticamente dal chatbot quando un dipendente dichiara un blocco
-("task X non procede perché Y") o uno sforamento, oppure inserite a mano dal manager.
+Oggi nessun percorso dell'applicazione le scrive: le righe presenti vengono dal
+seed. Il chatbot che le generava è archiviato in `docs/EMBRIONI_IA.md`.
 
 ### Cataloghi (Configurazione)
-Ruoli aziendali (9 voci), competenze (33 voci), fasi standard (template usati
-dalla Pipeline). Gestiti tramite la pagina Configurazione, accessibile solo ai manager.
+Ruoli aziendali (9 voci), competenze (33 voci), fasi standard (modelli di
+fase). Gestiti tramite la pagina Configurazione, accessibile solo ai manager.
 
 
 ## Architettura — Stack e moduli
@@ -147,7 +141,7 @@ dalla Pipeline). Gestiti tramite la pagina Configurazione, accessibile solo ai m
 | ORM | SQLAlchemy | 2.x | Modelli dichiarativi |
 | Database | PostgreSQL | 16.13 | Migrato da SQLite il 6 mag 2026 |
 | Migration | Alembic | 1.18.4 | Schema tracciato, niente drop & recreate |
-| IA | Gemini (Google) | 2.5 Flash | Assistente di pianificazione e analisi |
+| IA | Gemini (Google) | da `GEMINI_MODEL` | Infrastruttura per le IA della fase 6 (`gemini_client.py`) |
 | Frontend | React + Vite | 19 + 6 | Tailwind + react-router-dom 7 |
 | Auth | JWT + cookie httpOnly | - | Secure, SameSite=Lax, scadenza 8h |
 
@@ -164,17 +158,14 @@ main.py (98 r)
      ├── dipendenti.py            # CRUD dipendenti
      ├── progetti.py              # lista progetti
      ├── economia.py              # marginalità
-     ├── risorse.py               # carico, suggerisci bilanciamento
+     ├── risorse.py               # carico e saturazione
      ├── gantt.py                 # vista GANTT + 3 export (PDF/PNG/Excel)
      ├── segnalazioni.py          # lista segnalazioni
-     ├── pianificazione.py        # bozze
      ├── consuntivi.py            # consuntivazione (settimana, me, salva)
      ├── tasks.py                 # CRUD task con simulazione impatto
      ├── simulazione.py           # ritardo singolo + cascate
      ├── attivita_interne.py      # P010 contenitore attività non-progetto
      ├── configurazione.py        # CRUD admin (17 endpoint)
-     ├── agent.py                 # 6 endpoint IA (chat, analisi, suggerisci, ecc.)
-     ├── scenario.py              # motore deterministico simulazioni
      └── fasi.py                  # gestione fasi (in espansione, Blocco 2)
 ```
 
@@ -208,10 +199,9 @@ obbligatorio e un database irraggiungibile ferma l'avvio con un errore parlante.
 │   ├── seed.py                       # Setup script
 │   ├── auth.py + auth_routes.py      # Auth JWT
 │   ├── deps.py                       # Dependency: get_current_user, require_manager
-│   ├── scenario_engine.py            # Motore deterministico simulazioni
-│   ├── agent.py                      # Wrapper Gemini
+│   ├── gemini_client.py              # Client Gemini (infrastruttura IA)
 │   ├── gantt_pdf.py                  # Rendering PDF GANTT
-│   ├── utils.py + contesto.py        # Helper condivisi
+│   ├── utils.py                      # Helper condivisi
 │   ├── alembic/                      # Migration tracciate
 │   │   ├── env.py
 │   │   └── versions/
@@ -233,12 +223,9 @@ obbligatorio e un database irraggiungibile ferma l'avvio con un errore parlante.
             ├── Login.jsx + Forbidden.jsx
             ├── Home.jsx
             ├── Gantt.jsx
-            ├── Pipeline.jsx
-            ├── Tavolo di lavoro       # (in sviluppo)
             ├── Consuntivazione.jsx
             ├── Risorse.jsx
             ├── Economia.jsx
-            ├── AnalisiInterventi.jsx
             ├── AttivitaInterne.jsx
             └── Configurazione.jsx
 ```
@@ -295,13 +282,9 @@ ABAC (Attribute-Based Access Control) in R2 senza ristrutturare i ruoli.
 
 ### Perché Gemini e non OpenAI o modelli locali?
 
-Gemini 2.5 Flash offre un buon compromesso tra latenza, costo e qualità per i casi
-d'uso del progetto: chat di assistenza, analisi GANTT, suggerimento task, verifica
-pianificazione, interpretazione scenari. È stato scelto in fase di prototipo per
-costi contenuti e API stabili.
-
-In R1 il modello è `google.generativeai` (legacy SDK). Migrazione a `google.genai`
-(SDK moderno) prevista in fase di hardening, prima della consegna del 17 giugno.
+Gemini offre un buon compromesso tra latenza, costo e qualità. È stato scelto in
+fase di prototipo per costi contenuti e API stabili. Il backend usa l'SDK
+`google-genai`; il modello si sceglie con la variabile `GEMINI_MODEL`.
 
 ### Perché un assistente IA e non solo regole deterministiche?
 
@@ -309,15 +292,12 @@ L'IA è **un supporto**, non il core. Le decisioni operative (chi fa cosa, ore,
 fasi, budget) sono determinate dal manager — l'IA può proporre, simulare,
 analizzare, ma non decidere autonomamente.
 
-Casi d'uso attuali:
-- Chat con il dipendente in fase di consuntivazione (raccoglie segnalazioni)
-- Analisi del GANTT corrente con commento sulle criticità
-- Suggerimento di task simili a uno dato
-- Verifica di una pianificazione proposta
-- Interpretazione di uno scenario simulato in linguaggio naturale
+Oggi nessuna IA è attiva nell'applicazione. I primi embrioni (chat di
+consuntivazione, analisi del GANTT, suggerimento dei task, verifica della
+pianificazione, interpretazione degli scenari) sono stati rimossi e archiviati in
+`docs/EMBRIONI_IA.md`; le IA previste sono nella fase 6 di `docs/PIANO.md`.
 
-Tutto il resto (calcolo marginalità, simulazione cascate, redistribuzione carichi)
-è implementato in **motori deterministici** (`scenario_engine.py`).
+I numeri (marginalità, carichi, saturazioni) li calcola il codice deterministico.
 
 
 ## Setup e utilizzo
@@ -423,7 +403,7 @@ Atteso: 54 endpoint totali, 0 missing, RBAC duale + Pattern Y intatti.
 | `progetti` | Anagrafica progetti | 10 |
 | `utenti` | Account login (email + password_hash + ruolo_app) | 4 |
 | `fasi` | Fasi per progetto (auto-create dai task in seed) | 36 |
-| `fasi_standard` | Template fasi riutilizzabili in Pipeline | 18 |
+| `fasi_standard` | Template fasi riutilizzabili (modelli) | 18 |
 | `task` | Unità di esecuzione | 70 |
 | `assegnazioni` | Mapping N:M task↔dipendenti coinvolti | (variabile) |
 | `consuntivi` | Ore dichiarate per task per settimana | 1282 |
@@ -457,7 +437,7 @@ Implementato con due dependency FastAPI:
 Distribuzione attuale dei 54 endpoint:
 - **MANAGER (admin only)**: 43 endpoint (tutto ciò che è amministrativo)
 - **AUTH+FILTRO**: 6 endpoint (l'utente vede ma con filtro: solo le proprie cose)
-- **AUTH-ONLY**: 3 endpoint (`/api/consuntivi/me`, `/api/agent/status`, `/api/auth/me`)
+- **AUTH-ONLY**: 2 endpoint (`/api/consuntivi/me`, `/api/auth/me`)
 - **PUBLIC+RL**: 1 endpoint (`/api/auth/login`, rate-limited)
 - **PUBLIC**: 1 endpoint (`/api/auth/logout`)
 
@@ -467,7 +447,7 @@ Per le scritture (POST/PATCH/DELETE), il body può contenere `dipendente_id`.
 Il backend non si fida del body: verifica che, se l'utente è user (non manager),
 il `dipendente_id` nel body coincide con `current_user.dipendente_id`. Altrimenti 403.
 
-Esempi: salvataggio consuntivo, creazione attività interna, chat con l'agent.
+Esempi: salvataggio consuntivo, eliminazione di un'attività interna.
 
 
 ## Stato del progetto e roadmap
@@ -578,7 +558,7 @@ viva che cresce con il file.
 1. **Macchina delle Fasi (Blocco 2)** — Fase diventa entità centrale, GANTT
    raggruppato per fasi, endpoint nuovi su `routes/fasi.py`
 2. **Esperienza utente (Blocco 3)** — Vista Helena + Consuntivazione ridisegnata
-3. **Ciclo vita progetto (Blocco 4)** — Pipeline bando/ordinario + Tavolo di Lavoro
+3. **Ciclo vita progetto (Blocco 4)** — Cantiere (Pipeline e Tavolo di Lavoro rimossi: vedi `docs/EMBRIONI_IA.md`)
 4. **Sistema decisionale (Blocco 5)** — Marginalità + Risorse heatmap
 5. **Hardening (Blocco 6)** — Test, performance, demo prep, migrazione `google.genai`
 

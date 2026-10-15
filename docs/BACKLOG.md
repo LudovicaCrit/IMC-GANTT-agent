@@ -22,7 +22,7 @@
 - Soglie incoerenti tra pagine (85 contro 90), tutte cablate
 - Date del frontend da toISOString(), quindi UTC
 - Configurazione: fetch senza gestione di 401, 403 e res.ok; Risorse: Promise.all senza catch
-- Due istanze di Limiter; SEGNALAZIONI_STORE in memoria; segnalazioni scritte solo dal seed
+- Due istanze di Limiter; segnalazioni scritte solo dal seed
 - Commenti e docstring stantii (elenco nel paragrafo 4 dell'inventario)
 - add_p010.py obsoleto; README con istruzioni solo Linux e riferimenti a SQLite
 - La data di oggi va letta solo da utils.get_oggi(): oggi molti punti chiamano date.today() o datetime.now() per conto loro (elenco nel resoconto del passo 5 bis). Si sistema insieme al fuso orario della fase 8

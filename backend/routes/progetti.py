@@ -57,22 +57,11 @@ PATTERN AUTH USATI
 
 TODO R2 (ABAC): PATCH e DELETE potranno diventare PM-only sul progetto specifico.
 
-NOTE TECNICHE
-─────────────
-Le 6 chiamate a `_reload()` post-commit restano intenzionalmente in piedi:
-servono ai consumatori dei DataFrame in cache (gantt.py, scenario.py,
-simulazione.py, gemini_client.costruisci_contesto, le funzioni-trappola
-§4) che oggi leggono ancora `DIPENDENTI/PROGETTI/TASKS`. Rimuoverle ora
-genererebbe il bug silenzioso descritto in §1 dell'handoff (DB aggiornato
-ma viste GANTT/Tavolo di Lavoro ferme allo stato vecchio finché il
-backend non viene riavviato). Verranno eliminate al passo finale della
-migrazione, quando nessun lettore DataFrame sarà più attivo.
-
 DIPENDENZE
 ──────────
 - `data`: `ore_consuntivate_progetto`, `tasso_compilazione_progetto`.
 - `data_db_impl`: `_next_progetto_id`, `genera_id_task_multipli`,
-  `_reload` (vedi sopra), `_to_dt` (per format ISO datetime).
+  `_to_dt` (per format ISO datetime).
 - `models`: `get_session`, `Utente`, `Progetto`, `Fase`, `Task`,
   `DipendenzaTask`, `STATI_PROGETTO`, `STATI_PROGETTO_ATTIVI`.
 - `deps`: `require_manager`.
@@ -81,10 +70,10 @@ STORIA
 ──────
 - 5 mag 2026: estratto da main.py (refactoring strangler). Solo GET.
 - 13 mag 2026: aggiunti POST/PATCH/DELETE + filtro stato nel quadro di
-  Step 2.0 (handoff v15). Sostituisce in pratica routes/pianificazione.py
-  per il caso d'uso "bozze di progetto".
+  Step 2.0 (handoff v15). Le bozze di progetto diventano progetti in stato
+  'Bozza' (prima erano tenute in memoria da un router a parte).
 - 21 mag 2026: GET migrato da DataFrame a Postgres diretto (handoff
-  migrazione §6-ter). Le 6 `_reload()` post-commit restano (vedi NOTE).
+  migrazione §6-ter).
 ═══════════════════════════════════════════════════════════════════════════
 """
 

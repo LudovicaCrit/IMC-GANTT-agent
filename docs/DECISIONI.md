@@ -73,8 +73,8 @@ Saturazione: si mostra sia sul piano sia sulle ore vere, affiancate; lo scarto �
 
 ## 8. Pagine
 - Home a tre raggi: management, PM, dipendente.
-- GANTT: dettaglio con le schede Design, Scenari e Storia (il SAL). Le viste portafoglio e per-dipendente sono lenti selezionabili nella stessa pagina, non pagine nuove.
-- Cantiere: creazione e gestione del progetto.
+- GANTT: dettaglio in sola lettura con le schede Design, Criticità e Storia (il SAL). Le viste portafoglio e per-dipendente sono lenti selezionabili nella stessa pagina, non pagine nuove.
+- Cantiere: l'unico posto dove il piano si scrive, dalla nascita alla vita del progetto. Due ingressi, un solo editor: il Wizard stende la bozza, con l'IA che attinge dallo storico dell'Archivio, e la bozza si apre nello stesso editor in cui poi si ripianifica. Nel dettaglio di un progetto il PM ripianifica e valuta scenari sui suoi progetti; nella vista d'insieme del Cantiere il management sposta priorità e persone tra progetti, perché quelle decisioni toccano più progetti insieme. Ogni modifica, a mano o proposta da un'IA, passa dalle stesse funzioni di servizio: l'IA propone una differenza prima/dopo, il PM o il management la conferma. La pagina è costruita a componenti con una responsabilità ciascuno.
 - Risorse, Attività interne.
 - Economia: margini, avanzamento, cruscotto con le quattro ore affiancate, delta, testata anagrafica, lente sul costo della dispersione delle persone su troppi progetti.
 - Consuntivazione.

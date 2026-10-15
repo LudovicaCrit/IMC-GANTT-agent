@@ -6,9 +6,10 @@ backend/routes/risorse.py — Router per endpoint /api/risorse
 SCOPO
 ─────
 Espone gli endpoint relativi alla gestione delle risorse umane dal punto
-di vista del carico di lavoro: heatmap di saturazione (carico) e
-suggerimenti di redistribuzione task (bilanciamento). Alimenta la pagina
-Risorse del frontend (vista manager).
+di vista del carico di lavoro: heatmap di saturazione (carico) e saturazione
+su un periodo. Alimenta la pagina Risorse e il Cantiere (vista manager).
+Il vecchio suggerimento di bilanciamento, col suo match per ruolo, è archiviato
+in docs/EMBRIONI_IA.md §3.
 
 ENDPOINT ESPOSTI
 ────────────────
@@ -16,7 +17,6 @@ ENDPOINT ESPOSTI
 │ Path                                      │ Metodo   │ Auth                │
 ├───────────────────────────────────────────┼──────────┼─────────────────────┤
 │ /api/risorse/carico                       │ GET      │ require_manager     │
-│ /api/risorse/suggerisci-bilanciamento     │ GET      │ require_manager     │
 └───────────────────────────────────────────┴──────────┴─────────────────────┘
 
 DETTAGLIO ENDPOINT
@@ -28,74 +28,21 @@ DETTAGLIO ENDPOINT
      settimana per settimana, per le prossime N settimane.
    - Saturazione cappata a 125% per evitare scale visive distorte.
 
-2. GET /api/risorse/suggerisci-bilanciamento
-   - Manager-only.
-   - Analizza saturazioni correnti e propone redistribuzioni.
-   - Logica:
-     • Identifica sovraccarichi (saturazione > 100%) e sottoutilizzati
-       (saturazione < 90%)
-     • Per ogni task del sovraccarico, cerca candidati il cui RUOLO coincide
-       col `profilo_richiesto` del task — l'INQUADRAMENTO oppure uno dei
-       RUOLI FUNZIONALI ricoperti in aggiunta (es. 'PM') — e con spazio
-       disponibile (almeno 50% delle ore_sett). Il match è per ruolo: le
-       competenze non entrano nella scelta — vedi NOTE DI DOMINIO.
-     • Ordina i candidati preferendo chi resterebbe vicino al 100% post-spostamento
-   - Output: lista proposte ordinate per priorità (alta se saturazione > 125%).
-
 PATTERN AUTH USATI
 ──────────────────
 - `require_manager`: dato strategico aziendale.
-
-NOTE DI DOMINIO
-───────────────
-La logica di suggerimento bilanciamento è il punto di partenza per la
-"logica di redistribuzione compiti" che Ludovica ha sottolineato come
-funzionalità prodotto importante. La versione attuale è basica: RUOLO
-(`profilo_richiesto` del task == inquadramento del candidato OPPURE uno dei suoi
-ruoli funzionali) + spazio disponibile.
-
-I RUOLI FUNZIONALI (08/09/2026, passo G del multiruolo). Una persona ricopre un
-inquadramento — uno solo, `Dipendente.ruolo_id` — e zero o più ruoli in aggiunta,
-nella M2M `dipendenti_ruoli_aggiuntivi`. Oggi l'unico funzionale è 'PM', che
-7 persone ricoprono: i task che chiedono `profilo_richiesto='PM'` trovano loro,
-mentre col solo inquadramento non trovavano NESSUNO (nessuno è inquadrato come
-PM: sono Senior Consultant e un Manager IT). Il confronto resta fra ruoli e
-ruoli, entrambi i lati ancorati alla tabella `ruoli`.
-
-IL MATCH PER COMPETENZE NON C'È, e non è una svista. C'era un secondo ramo
-che confrontava `profilo_richiesto` con le competenze del dipendente, ma sono
-due vocabolari diversi — un RUOLO ("Senior Consultant") contro un CATALOGO di
-abilità ("ARIS", "python") — e l'unico valore che riusciva a far scattare era
-'PM', presente in entrambi per omonimia. È stato tolto (08/09/2026): meglio
-l'assenza dichiarata di una capacità che una che funziona una volta su sette
-per caso. Il match vero richiede che siano i TASK a dire quali competenze
-servono (una `task_competenze`, che oggi non esiste); solo allora ci sarà
-qualcosa da confrontare col catalogo `Competenza`, e sarà un confronto fra
-insiemi dello stesso vocabolario.
-
-Evoluzioni possibili:
-- Considerare la durata residua del task vs disponibilità futura
-- Considerare le preferenze/storico dei dipendenti
-- Considerare i progetti su cui sono già impegnati (ridurre context-switch)
-
-Sono evoluzioni R2.
 
 DIPENDENZE
 ──────────
 - `data` (modulo): `carico_settimanale_dipendente` (trappola §4 della
   migrazione DataFrame→Postgres, lasciata intatta).
-- `models`: `Dipendente`, `Task`, `Progetto`, `get_session` (lettura
+- `models`: `Dipendente`, `Task`, `get_session` (lettura
   diretta Postgres).
 - `data_db_impl._to_dt`: normalizza `Date` SQL → `datetime` a mezzanotte
   per i confronti con `lun_w_dt + timedelta(...)` (storicamente i task
   erano `pandas.Timestamp` a 00:00).
 - `deps`: `require_manager`.
 - `models`: classe `Utente` per type hint.
-
-NOTE TECNICHE
-─────────────
-P010 (Attività Interne) escluso dal calcolo task attivi del bilanciamento:
-non ha senso "redistribuire" la formazione interna.
 
 STORIA
 ──────
@@ -107,13 +54,10 @@ Letture migrate da DataFrame in cache a Postgres diretto il 21 maggio 2026
 
 from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import joinedload, selectinload
+from sqlalchemy.orm import joinedload
 
 from deps import require_manager
-from models import (
-    Utente, Dipendente, Task, get_session,
-    DipendentiRuoliAggiuntivi,
-)
+from models import Utente, Dipendente, Task, get_session
 from data import carico_settimanale_dipendente
 from data_db_impl import _to_dt
 from utils import get_oggi
@@ -307,177 +251,3 @@ def saturazione_periodo(
         "settimane_dettaglio": settimane_dettaglio,
     }
 
-
-@router.get("/suggerisci-bilanciamento")
-def suggerisci_bilanciamento(_: Utente = Depends(require_manager)):
-    """Analizza le saturazioni e propone redistribuzioni per bilanciare il carico."""
-    oggi = datetime.now()
-
-    session = get_session()
-    # Inquadramento E ruoli aggiuntivi caricati in anticipo: il match qui sotto
-    # guarda entrambi, e `session.close()` arriva PRIMA del ciclo — un accesso
-    # lazy lì non sarebbe un N+1, sarebbe un DetachedInstanceError a ogni
-    # richiesta. `selectinload` per la collezione (una seconda query per tutti)
-    # invece di `joinedload`, che moltiplicherebbe le righe del dipendente.
-    dipendenti = (
-        session.query(Dipendente)
-        .options(
-            joinedload(Dipendente.ruolo_rel),
-            selectinload(Dipendente.ruoli_aggiuntivi).joinedload(DipendentiRuoliAggiuntivi.ruolo),
-        )
-        .filter(Dipendente.attivo == True)
-        .all()
-    )
-    # Pre-fetch dei task attivi (escluso P010) con joinedload sul progetto per
-    # evitare N+1 query nel lookup del nome progetto. Una sola query SQL.
-    tasks_rows = session.query(Task).options(joinedload(Task.progetto)).filter(
-        Task.stato.in_(["In corso", "Da iniziare"]),
-        Task.progetto_id != "P010",
-    ).all()
-    session.close()
-
-    # Raggruppa i task per dipendente_id
-    tasks_per_dip = {}
-    for t in tasks_rows:
-        if t.dipendente_id:
-            tasks_per_dip.setdefault(t.dipendente_id, []).append(t)
-
-    # Calcola saturazione per tutti
-    persone = []
-    for d in dipendenti:
-        carico = carico_settimanale_dipendente(d.id, oggi)
-        sat = round(carico / d.ore_sett * 100)
-
-        task_list = []
-        for t in tasks_per_dip.get(d.id, []):
-            # Calcola ore settimanali per questo task
-            t_inizio = _to_dt(t.data_inizio)
-            t_fine = _to_dt(t.data_fine)
-            ore_stimate = t.ore_stimate or 0            # display (stima storica, gruppo B)
-            ore_pianificate = t.ore_pianificate or 0    # piano corrente (carico, #2)
-            # Task senza date: non distribuibile sulla settimana, ore_sett=0.
-            # Resta visibile in task_list ma non contribuisce alla saturazione
-            # né alle proposte di redistribuzione (sort by ore_sett a valle).
-            if t_inizio is not None and t_fine is not None:
-                durata_giorni = max(1, (t_fine - t_inizio).days)
-                durata_sett = max(1, durata_giorni / 7)
-                ore_sett_task = round(ore_pianificate / durata_sett, 1)
-            else:
-                ore_sett_task = 0
-
-            proj_nome = t.progetto.nome if t.progetto else "?"
-
-            task_list.append({
-                "task_id": t.id,
-                "task_nome": t.nome,
-                "progetto_id": t.progetto_id,
-                "progetto_nome": proj_nome,
-                "profilo_richiesto": t.profilo_richiesto or "",
-                "ore_stimate": int(ore_stimate),
-                "ore_sett": ore_sett_task,
-                "stato": t.stato,
-            })
-
-        persone.append({
-            "id": d.id,
-            "nome": d.nome,
-            "profilo": d.ruolo_rel.nome if d.ruolo_rel else "",
-            # I RUOLI CHE LA PERSONA RICOPRE IN AGGIUNTA all'inquadramento
-            # (oggi solo 'PM'). Campo interno al calcolo, non esce nel payload —
-            # come `profilo`, serve al match qui sotto.
-            "ruoli_aggiuntivi": [a.ruolo.nome for a in d.ruoli_aggiuntivi],
-            "ore_sett": int(d.ore_sett),
-            "carico": float(carico),
-            "saturazione": sat,
-            "task_attivi": task_list,
-        })
-
-    # Trova sovraccarichi e sottoutilizzati
-    sovraccarichi = [p for p in persone if p["saturazione"] > 100]
-    sottoutilizzati = [p for p in persone if p["saturazione"] < 90]
-
-    # Genera proposte
-    proposte = []
-
-    for sov in sorted(sovraccarichi, key=lambda x: -x["saturazione"]):
-        for task in sorted(sov["task_attivi"], key=lambda t: t["ore_sett"]):
-            profilo = task["profilo_richiesto"]
-
-            candidati = []
-            for sotto in sottoutilizzati:
-                if sotto["id"] == sov["id"]:
-                    continue
-                # MATCH PER RUOLO — inquadramento OPPURE ruolo funzionale.
-                #
-                # `profilo_richiesto` è un RUOLO, e una persona ne ricopre più
-                # d'uno: l'INQUADRAMENTO ("Senior Consultant") più i ruoli
-                # FUNZIONALI che ha in aggiunta ("PM"). Un task che chiede 'PM'
-                # non cerca chi è inquadrato come PM — nessuno lo è — ma chi il
-                # PM lo fa. Entrambi i lati del confronto pescano ora dalla
-                # stessa tabella `ruoli`, per chiave.
-                #
-                # NON È IL RITORNO DEL VECCHIO RAMO-B. Quello confrontava il
-                # `profilo_richiesto` con le COMPETENZE della persona — un
-                # RUOLO contro un catalogo di abilità ("ARIS", "python") — e
-                # l'unico valore che riuscisse a far scattare era 'PM', per
-                # omonimia fra due vocabolari che non si parlavano. Sembrava un
-                # match per competenze e funzionava una volta su sette, per
-                # caso. Qui il confronto è fra ruoli e ruoli, e 'PM' matcha
-                # perché quelle persone HANNO il ruolo PM: una FK dichiarata in
-                # `dipendenti_ruoli_aggiuntivi`, non una stringa che coincide.
-                #
-                # Il match per COMPETENZE continua a non esistere, ed è giusto:
-                # richiede che siano i task a dire quali competenze servono
-                # (`task_competenze`), che oggi non c'è.
-                if profilo == sotto["profilo"] or profilo in sotto["ruoli_aggiuntivi"]:
-                    spazio_disponibile = sotto["ore_sett"] - sotto["carico"]
-                    if spazio_disponibile >= task["ore_sett"] * 0.5:  # almeno metà ore
-                        nuova_sat_sotto = round(
-                            (sotto["carico"] + task["ore_sett"]) / sotto["ore_sett"] * 100
-                        )
-
-                        candidati.append({
-                            "candidato_id": sotto["id"],
-                            "candidato_nome": sotto["nome"],
-                            "candidato_profilo": sotto["profilo"],
-                            "candidato_saturazione_attuale": sotto["saturazione"],
-                            "candidato_saturazione_dopo": nuova_sat_sotto,
-                            "spazio_disponibile_h": round(spazio_disponibile, 1),
-                        })
-
-            if candidati:
-                # Preferisci chi arriva più vicino al 100% post-spostamento
-                candidati.sort(key=lambda c: abs(c["candidato_saturazione_dopo"] - 100))
-                migliore = candidati[0]
-
-                proposte.append({
-                    "tipo": "riassegnazione",
-                    "priorita": "alta" if sov["saturazione"] > 125 else "media",
-                    "da_persona": sov["nome"],
-                    "da_persona_id": sov["id"],
-                    "da_saturazione": sov["saturazione"],
-                    "da_saturazione_dopo": round(
-                        (sov["carico"] - task["ore_sett"]) / sov["ore_sett"] * 100
-                    ),
-                    "task_id": task["task_id"],
-                    "task_nome": task["task_nome"],
-                    "progetto": task["progetto_nome"],
-                    "ore_sett_task": task["ore_sett"],
-                    "profilo_richiesto": profilo,
-                    "candidato_migliore": migliore,
-                    "altri_candidati": candidati[1:3],  # max 2 alternative
-                })
-
-    # Ordina: alta priorità prima, poi per eccesso saturazione
-    proposte.sort(key=lambda p: (0 if p["priorita"] == "alta" else 1, -p["da_saturazione"]))
-
-    return {
-        "n_sovraccarichi": len(sovraccarichi),
-        "n_sottoutilizzati": len(sottoutilizzati),
-        "proposte": proposte,
-        "riepilogo": [
-            {"nome": p["nome"], "profilo": p["profilo"], "saturazione": p["saturazione"]}
-            for p in sorted(persone, key=lambda x: -x["saturazione"])
-            if p["saturazione"] > 0
-        ],
-    }

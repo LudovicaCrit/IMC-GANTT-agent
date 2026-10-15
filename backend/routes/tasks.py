@@ -5,12 +5,9 @@ backend/routes/tasks.py — Router per endpoint /api/tasks
 
 SCOPO
 ─────
-Espone gli endpoint per la lettura e modifica di task. È usato da
-molteplici pagine del frontend:
-  - GANTT (lettura)
-  - Tavolo di Lavoro (applica modifiche)
-  - Pipeline (applica per "Conferma e avvia progetto")
-  - Analisi e Interventi (applica)
+Espone gli endpoint per la lettura e la modifica dei task, usati dal
+Cantiere (creazione, modifica, dipendenze, eliminazione) e in lettura dalla
+Consuntivazione e da Risorse.
 
 ENDPOINT ESPOSTI
 ────────────────
@@ -18,7 +15,6 @@ ENDPOINT ESPOSTI
 │ Path                                      │ Metodo   │ Auth                │
 ├───────────────────────────────────────────┼──────────┼─────────────────────┤
 │ /api/tasks                                │ GET      │ AUTH+FILTRO (Sc B)  │
-│ /api/tasks/applica                        │ POST     │ require_manager     │
 │ /api/tasks/{task_id}/elimina              │ PATCH    │ require_manager     │
 └───────────────────────────────────────────┴──────────┴─────────────────────┘
 
@@ -31,16 +27,7 @@ DETTAGLIO ENDPOINT
    - Filtri opzionali: progetto_id, profilo.
    - Restituisce lista task con dati anagrafici (dipendente, progetto, fase).
 
-2. POST /api/tasks/applica
-   - Manager-only.
-   - Body: {modifiche, nuovi_task, progetto_id, cambia_stato_progetto}
-   - APPLICA le modifiche ai dati reali (modifica task, crea task, cambia
-     stato progetto se richiesto).
-   - Restituisce: risultati per ogni operazione, nuovi task ids, stato
-     progetto cambiato.
-   - Usato dai bottoni "Applica" / "Conferma e avvia progetto".
-
-3. PATCH /api/tasks/{task_id}/elimina
+2. PATCH /api/tasks/{task_id}/elimina
    - Manager-only.
    - Soft delete: cambia lo stato a "Eliminato" (non rimuove la riga).
    - 404 se task non esiste.
@@ -50,23 +37,13 @@ DETTAGLIO ENDPOINT
 PATTERN AUTH USATI
 ──────────────────
 - `get_current_user` + filter manuale: per /tasks (Scenario B in lettura).
-- `require_manager`: per applica, elimina (mutazioni
-  che impattano l'intero progetto/azienda).
-
-NOTA STORICA — UNIFICAZIONE PREFISSO TASK
-─────────────────────────────────────────
-Fino al 5 maggio 2026 esistevano DUE prefissi divergenti:
-  /api/task/*  (singolare): anteprima-impatto, applica
-  /api/tasks/* (plurale):   lista, elimina
-Eredità di scrittura non uniforme di main.py originale, senza ragione
-tecnica. Il commit di refactoring del 5 maggio 2026 ha rinominato
-tutti gli endpoint singolari al plurale, allineando frontend api.js.
-Ora tutti i 4 endpoint vivono coerentemente sotto /api/tasks/*.
+- `require_manager`: per le mutazioni (creazione, modifica, dipendenze,
+  eliminazione).
 
 DIPENDENZE
 ──────────
 - `data` (modulo): `get_dipendente`, `aggiungi_task`, `modifica_task`,
-  `cambia_stato_progetto`.
+  `sostituisci_dipendenze`.
 - `models`: `Task`, `get_session` (lettura diretta Postgres).
 - `data_db_impl._to_dt`: normalizza `Date` SQL → `datetime` a mezzanotte
   per preservare il formato ISO `YYYY-MM-DDT00:00:00` storicamente esposto
@@ -78,7 +55,7 @@ NOTE TECNICHE
 ─────────────
 📌 TODO Blocco 2 roadmap (Macchina delle Fasi):
    `GET /api/tasks` andrà adattato per restituire i task strutturati per
-   fase. Anche le modifiche/applica dovranno coerentemente operare nel
+   fase. Anche le modifiche dovranno coerentemente operare nel
    contesto della fase (un task appartiene a una fase, non solo a un
    progetto).
 
@@ -101,7 +78,7 @@ from deps import get_current_user, require_manager
 from models import Utente, Task, get_session
 from data import (
     get_dipendente,
-    aggiungi_task, modifica_task, cambia_stato_progetto,
+    aggiungi_task, modifica_task,
     sostituisci_dipendenze,
 )
 from data_db_impl import _to_dt
@@ -109,12 +86,6 @@ from utils import get_oggi
 
 
 # ── DTO ──────────────────────────────────────────────────────────────────
-class AzioneModifica(BaseModel):
-    task_id: str
-    campo: str           # "data_fine", "data_inizio", "dipendente_id", "ore_stimate", "stato"
-    nuovo_valore: str    # tutto come stringa, il backend converte
-
-
 class DipendenzaInput(BaseModel):
     """Step 3.1 (25/05/2026): una dipendenza in input — sostituisce il vecchio
     campo `predecessore` stringa singola. Vedi alembic e5f6a7b8c9d0.
@@ -124,29 +95,6 @@ class DipendenzaInput(BaseModel):
     """
     task_predecessore_id: str
     tipo_dipendenza: str = "FS"
-
-
-class NuovoTask(BaseModel):
-    nome: str
-    fase: str = ""
-    ore_stimate: int = 0
-    data_inizio: str = ""        # ISO format
-    data_fine: str = ""          # ISO format
-    profilo_richiesto: str = ""
-    dipendente_id: str = ""
-    # Step 3.1 (25/05/2026): era `predecessore: str` (singolo, implicitamente
-    # FS). Ora lista tipizzata che andrà in `dipendenza_task`. Vedi alembic
-    # e5f6a7b8c9d0.
-    dipendenze: list[DipendenzaInput] = []
-    stato: str = "Da iniziare"
-
-
-class ApplicaRequest(BaseModel):
-    """Richiesta di applicazione reale — modifica i dati."""
-    modifiche: list[AzioneModifica] = []
-    nuovi_task: list[NuovoTask] = []
-    progetto_id: str = ""
-    cambia_stato_progetto: str = ""
 
 
 # ── Router ───────────────────────────────────────────────────────────────
@@ -212,12 +160,10 @@ def lista_tasks(
 # CRUD task singolo (Step 2.4 Cantiere — handoff v15 §2.4)
 # ═════════════════════════════════════════════════════════════════════════
 # Endpoint POST/PATCH dedicati al Cantiere: il PM aggiunge un task a una fase
-# esistente o modifica un task esistente. Questo è diverso dal pattern del
-# Tavolo di Lavoro (`/applica`) che applica MODIFICHE BATCH simulate.
+# esistente o modifica un task esistente.
 #
 # Risoluzione fase: il body accetta sia `fase_id` (FK diretto, preferito)
-# sia `fase` come stringa (nome fase risolta server-side, retrocompatibile
-# con l'IA `/agent/suggerisci-task` che produce stringhe). Step 2.1 D1.
+# sia `fase` come stringa (nome fase risolta server-side). Step 2.1 D1.
 
 class NuovoTaskSingolo(BaseModel):
     """Body per POST /api/tasks (Cantiere)."""
@@ -544,181 +490,6 @@ def modifica_task_singolo(
     if not ok:
         raise HTTPException(status_code=404, detail=f"Task '{task_id}' non trovato")
     return {"id": task_id, "aggiornato": True}
-
-
-@router.post("/applica")
-def applica_modifiche(req: ApplicaRequest, _: Utente = Depends(require_manager)):
-    """Applica le modifiche ai dati reali.
-
-    Usato sia da Analisi e Interventi (bottone Applica)
-    sia da Pipeline (Conferma e avvia progetto).
-    """
-    risultati = []
-
-    # ── Guardia: nessun task in lavorazione senza assegnatario ────────────
-    # Step 4 sottotask (06/08/2026). Stessa regola della PATCH sul singolo
-    # task, adattata alla forma di questo endpoint: qui le modifiche arrivano
-    # UNA PER CAMPO, quindi `stato` e `dipendente_id` dello stesso task sono
-    # due item distinti della lista. Valutarli isolatamente rifiuterebbe un
-    # avvio-con-assegnazione perfettamente valido, che è esattamente ciò che
-    # il frontend manda: Analisi&Interventi emette `dipendente_id` e `stato`
-    # come due voci separate (AnalisiInterventi.jsx:494-495).
-    #
-    # Perciò si pre-scansiona il batch e si calcola, per ogni task toccato, la
-    # coppia FINALE (stato, assegnatario) = valore nel batch se presente,
-    # altrimenti valore a DB. Non ci si appoggia all'ORDINE degli item: oggi
-    # il frontend manda `dipendente_id` prima di `stato`, ma è un dettaglio di
-    # quel componente — le voci suggerite dall'IA vengono accodate a parte
-    # (riga 470 dello stesso file) e l'ordine non è garantito da nessuno.
-    stato_nel_batch = {m.task_id: m.nuovo_valore
-                       for m in req.modifiche if m.campo == "stato"}
-    dip_nel_batch = {m.task_id: m.nuovo_valore
-                     for m in req.modifiche if m.campo == "dipendente_id"}
-    # Un solo SELECT per tutti i task toccati sui due campi, invece di una
-    # query dentro il ciclo.
-    ids_da_controllare = set(stato_nel_batch) | set(dip_nel_batch)
-    stato_a_db = {}
-    if ids_da_controllare:
-        session = get_session()
-        try:
-            stato_a_db = {
-                r.id: (r.stato, r.dipendente_id)
-                for r in session.query(Task).filter(
-                    Task.id.in_(ids_da_controllare)
-                ).all()
-            }
-        finally:
-            session.close()
-
-    def _motivo_violazione(task_id):
-        """Perché il batch lascerebbe `task_id` "In corso" senza assegnatario.
-
-        Ritorna None se non c'è violazione. Due modi di romperlo, due motivi:
-        dire «aggiungi un assegnatario per avviarlo» a chi sta invece
-        DISASSEGNANDO un task già in corso manderebbe il PM a cercare una
-        transizione che non ha chiesto.
-
-        Task assente a DB → None: non è compito di questa guardia segnalarlo,
-        ci pensa `modifica_task` ritornando False (un solo posto per quel caso).
-        """
-        corrente = stato_a_db.get(task_id)
-        if corrente is None:
-            return None
-        stato_corrente, dip_corrente = corrente
-        stato_finale = stato_nel_batch.get(task_id, stato_corrente)
-        dip_finale = dip_nel_batch.get(task_id, dip_corrente)
-        if stato_finale != "In corso" or dip_finale:
-            return None
-        if stato_corrente != "In corso":
-            return ("Un task non entra in lavorazione senza assegnatario. "
-                    "Aggiungi una modifica 'dipendente_id' per questo task "
-                    "nello stesso invio, oppure non avviarlo.")
-        return ("Il task è 'In corso': non puoi rimuoverne l'assegnatario "
-                "senza indicarne un altro nello stesso invio.")
-
-    # 1) Applica modifiche a task esistenti
-    for mod in req.modifiche:
-        # Step 3.1 (25/05/2026): predecessore non è più un campo del task —
-        # le dipendenze vivono in `dipendenza_task`. Senza questo check
-        # esplicito, `modifica_task` ignorerebbe il campo via hasattr-guard
-        # ma risponderebbe ok=True → silent failure ingannevole. Rifiuto
-        # esplicito con motivo. La modifica delle dipendenze richiede
-        # endpoint dedicato (futuro, design Cantiere).
-        if mod.campo == "predecessore":
-            risultati.append({
-                "task_id": mod.task_id,
-                "campo": mod.campo,
-                "applicato": False,
-                "motivo": "Il campo 'predecessore' non esiste più (Step 3.1). "
-                          "Le dipendenze si modificano via endpoint dedicato.",
-            })
-            continue
-
-        # Guardia assegnatario (vedi pre-scan sopra). Si rifiuta il SINGOLO
-        # item, non l'intero batch: questo endpoint non è transazionale —
-        # `modifica_task` committa una modifica alla volta — quindi una
-        # HTTPException a metà lascerebbe applicate le precedenti e nessun
-        # modo per il client di sapere quali. Stesso trattamento riservato
-        # sopra al campo `predecessore`: applicato=False + motivo, e si tira
-        # dritto con le altre.
-        if mod.campo in ("stato", "dipendente_id"):
-            motivo = _motivo_violazione(mod.task_id)
-            if motivo:
-                risultati.append({
-                    "task_id": mod.task_id,
-                    "campo": mod.campo,
-                    "applicato": False,
-                    "motivo": motivo,
-                })
-                continue
-
-        valore = mod.nuovo_valore
-        if mod.campo in ("data_inizio", "data_fine"):
-            valore = datetime.fromisoformat(valore)
-        elif mod.campo == "ore_stimate":
-            valore = int(valore)
-
-        ok = modifica_task(mod.task_id, **{mod.campo: valore})
-        risultati.append({
-            "task_id": mod.task_id,
-            "campo": mod.campo,
-            "applicato": ok,
-        })
-
-    # 2) Crea nuovi task
-    nuovi_ids = []
-    for nt in req.nuovi_task:
-        try:
-            new_id = aggiungi_task(
-                progetto_id=req.progetto_id,
-                nome=nt.nome,
-                fase=nt.fase,
-                ore_stimate=nt.ore_stimate,
-                data_inizio=datetime.fromisoformat(nt.data_inizio) if nt.data_inizio else get_oggi(),
-                data_fine=datetime.fromisoformat(nt.data_fine) if nt.data_fine else get_oggi(),
-                stato=nt.stato,
-                profilo_richiesto=nt.profilo_richiesto,
-                # `or None` come negli altri quattro punti di creazione
-                # (crea_task_singolo qui sopra e i tre wizard in
-                # routes/progetti.py): Postgres rifiuta `''` come valore di una
-                # FK, quindi la stringa vuota non diventava «nessun
-                # assegnatario» ma un IntegrityError — un 500 opaco al posto di
-                # un task legittimamente non assegnato.
-                #
-                # Mordeva più di quanto sembri: `NuovoTask.dipendente_id` ha
-                # DEFAULT `""`, quindi non serviva mandarlo vuoto — bastava
-                # OMETTERLO. Ogni task creato da /applica senza assegnatario
-                # falliva, ed è il caso normale quando si abbozza un piano
-                # prima di sapere chi ci lavorerà.
-                dipendente_id=nt.dipendente_id or None,
-                # Step 3.1 (25/05/2026): era `predecessore=nt.predecessore`.
-                # Vedi DipendenzaInput in cima al file.
-                dipendenze=[d.model_dump() for d in nt.dipendenze],
-            )
-        except ValueError as e:
-            # Step 2.1 D1: aggiungi_task lancia ValueError se la stringa fase
-            # non corrisponde a nessuna Fase del progetto.
-            # Step 3.1: aggiungi_task lancia ValueError anche per dipendenze
-            # invalide (predecessori inesistenti, self-loop, duplicati,
-            # tipo non ammesso). Stesso 422 al chiamante.
-            raise HTTPException(status_code=422, detail=str(e))
-        nuovi_ids.append(new_id)
-        risultati.append({
-            "task_id": new_id,
-            "campo": "creato",
-            "applicato": True,
-        })
-
-    # 3) Cambia stato progetto se richiesto
-    stato_cambiato = False
-    if req.cambia_stato_progetto and req.progetto_id:
-        stato_cambiato = cambia_stato_progetto(req.progetto_id, req.cambia_stato_progetto)
-
-    return {
-        "risultati": risultati,
-        "nuovi_task_ids": nuovi_ids,
-        "stato_progetto_cambiato": stato_cambiato,
-    }
 
 
 @router.patch("/{task_id}/elimina")

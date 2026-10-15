@@ -444,20 +444,7 @@ def get_dipendente(did):
     session.close()
     return out
 
-def get_progetto(pid):
-    if not pid or pid == "":
-        return {"id": "", "nome": "Sconosciuto", "cliente": "", "stato": ""}
-    session = get_session()
-    r = session.query(Progetto).filter(Progetto.id == pid).first()
-    session.close()
-    if r is None:
-        return {"id": pid, "nome": f"Sconosciuto ({pid})", "cliente": "", "stato": ""}
-    return {
-        "id": r.id, "nome": r.nome, "cliente": r.cliente, "stato": r.stato,
-        "data_inizio": _to_dt(r.data_inizio), "data_fine": _to_dt(r.data_fine),
-        "budget_ore": r.budget_ore or 0, "valore_contratto": r.valore_contratto or 0,
-        "descrizione": r.descrizione or "", "fase_corrente": r.fase_corrente or "",
-    }
+
 def ore_consuntivate_progetto(pid):
     from sqlalchemy import func
     session = get_session()
@@ -2212,7 +2199,7 @@ def aggiungi_task(progetto_id, nome, fase, ore_stimate, data_inizio, data_fine,
         )
 
     # Step 4 sottotask (06/08/2026): un task NON entra in lavorazione senza
-    # assegnatario. `stato` è client-settable (NuovoTask.stato, DTO dei router),
+    # assegnatario. `stato` è client-settable (NuovoTaskSingolo.stato, DTO del router),
     # quindi un task può NASCERE "In corso" saltando del tutto `modifica_task`:
     # senza questo check la regola avrebbe una porta di servizio aperta.
     #
@@ -2225,7 +2212,7 @@ def aggiungi_task(progetto_id, nome, fase, ore_stimate, data_inizio, data_fine,
     #
     # `not dipendente_id` copre insieme None e "" — il default del parametro è
     # la stringa vuota e i router passano `nt.dipendente_id` grezzo (DTO
-    # `NuovoTask.dipendente_id: str = ""`): un `is None` mancherebbe il caso
+    # `NuovoTaskSingolo.dipendente_id: str = ""`): un `is None` mancherebbe il caso
     # che si verifica davvero.
     if stato == "In corso" and not dipendente_id:
         session.close()
@@ -2463,18 +2450,6 @@ def modifica_task(task_id, **kwargs):
     return True
 
 
-def cambia_stato_progetto(progetto_id, nuovo_stato):
-    session = get_session()
-    proj = session.query(Progetto).filter(Progetto.id == progetto_id).first()
-    if not proj:
-        session.close()
-        return False
-    proj.stato = nuovo_stato
-    session.commit()
-    session.close()
-    return True
-
-
 # ══════════════════════════════════════════════════════════════════════
 # SEGNALAZIONI PERSISTENTI
 # ══════════════════════════════════════════════════════════════════════
@@ -2499,26 +2474,6 @@ def get_segnalazioni():
         })
     session.close()
     return result
-
-
-def aggiungi_segnalazione(tipo, priorita, dipendente_id, dettaglio):
-    session = get_session()
-    # Leggi MAX id dal database
-    from sqlalchemy import func
-    max_id = session.query(func.max(Segnalazione.id)).scalar()
-    if max_id and max_id.startswith("S") and max_id[1:].isdigit():
-        next_num = int(max_id[1:]) + 1
-    else:
-        next_num = 1
-    new_id = f"S{next_num:03d}"
-    session.add(Segnalazione(
-        id=new_id, tipo=tipo, priorita=priorita,
-        dipendente_id=dipendente_id, dettaglio=dettaglio,
-        fonte="chatbot", stato="aperta",
-    ))
-    session.commit()
-    session.close()
-    return new_id
 
 
 # ══════════════════════════════════════════════════════════════════════

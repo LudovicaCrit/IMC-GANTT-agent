@@ -19,7 +19,7 @@
 
 ## Fase 1 — Ciò che l'utente tocca non si rompe
 - ✅ Modello Gemini da variabile d'ambiente
-- ☐ Pipeline e Tavolo di Lavoro fuori dal menu e dal codice, con i loro endpoint orfani (/api/tasks/applica, /api/agent/* non usati, /api/pianificazione/*), le funzioni morte di api.js e la dipendenza frappe-gantt. Prima si archiviano gli embrioni IA da recuperare. Attenzione: il webServer degli e2e usa /api/agent/status come healthcheck, va sostituito nello stesso passo.
+- ✅ Pipeline e Tavolo di Lavoro fuori dal menu e dal codice, con i loro endpoint orfani (/api/tasks/applica, /api/agent/* non usati, /api/pianificazione/*), le funzioni morte di api.js e la dipendenza frappe-gantt. Prima si archiviano gli embrioni IA da recuperare. Attenzione: il webServer degli e2e usa /api/agent/status come healthcheck, va sostituito nello stesso passo.
 - ☐ Export GANTT: PDF funzionante (dipendenza mancante), PNG senza pdftoppm
 - ☐ Progetti "Da iniziare" visibili in Cantiere e GANTT
 - ☐ PUT /api/progetti/{id}/completo non azzera i campi che il Wizard non manda

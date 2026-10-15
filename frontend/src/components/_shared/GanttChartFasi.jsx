@@ -3,16 +3,14 @@
 // GANTT gerarchico fase→task per la vista Timeline di /gantt.
 // Creato per Step 2.3-bis sotto-passo 4b-1.
 //
-// NON sostituisce GanttChart legacy in Gantt.jsx (che resta in vita per
-// AnalisiInterventi finché Step 2.7 non la elimina). È un componente nuovo,
-// affiancato, che lavora sulla gerarchia restituita da /api/gantt/strutturato.
+// Lavora sulla gerarchia restituita da /api/gantt/strutturato.
 //
 // Convenzioni:
-// - Riusa buildTimeline() esportato da pages/Gantt.jsx per il calcolo
-//   dell'asse temporale (settimane, mesi, oggiX).
+// - Usa buildTimeline() di _shared/timelineScale per il calcolo dell'asse
+//   temporale (settimane, mesi, oggiX).
 // - Stato espansione = Set<faseId>. Default: tutte le fasi "In corso" aperte.
 // - Click su barra-fase → toggle espansione (mostra/nasconde task figli).
-// - Click su barra-task → callback onTaskClick(task) come il legacy.
+// - Click su barra-task → callback onTaskClick(task).
 // - Nessuna logica di edit: questo è il GANTT "lente di lettura" (§3.2).
 //
 import React, { useState, useMemo, useRef, useEffect } from 'react'
@@ -20,8 +18,8 @@ import React, { useState, useMemo, useRef, useEffect } from 'react'
 // contrario: un componente condiviso non deve trascinare una pagina).
 import { buildTimeline, barXW as barXWScala } from './timelineScale'
 
-// ── Colori per stato (allineati al legacy GanttChart) ────────────────
-// I task usano gli stessi 4 stati colorati del legacy. Le fasi hanno 5
+// ── Colori per stato ─────────────────────────────────────────────────
+// I task hanno 4 stati colorati. Le fasi hanno 5
 // stati: aggiungiamo 'Completata', 'Sospesa', 'Annullata' (suffisso al
 // femminile come da §5.1).
 const COLORI_FASE = {
