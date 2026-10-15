@@ -30,7 +30,7 @@
 - ☐ VistaManagement: nome del dipendente invece dell'id
 - ☐ Risorse: filtro per tipologia interna invece dell'id P010 cablato
 - ☐ Home: il clic su un progetto non porta al 403 per chi non è manager (si riapre in fase 3)
-- ☐ Porte dedicate e configurabili da env per backend e frontend, così il GANTT gira accanto agli altri progetti; e2e, proxy Vite e README allineati
+- ✅ Porte dedicate e configurabili da env per backend e frontend, così il GANTT gira accanto agli altri progetti; e2e, proxy Vite e README allineati
 - ☐ docs/ARCHITETTURA.md: la mappa del codice, scritta quando il codice morto è stato rimosso
 
 **Chiusura**: un giro completo di tutte le pagine da manager senza 500, 403 o dati spariti; un test per ogni correzione.

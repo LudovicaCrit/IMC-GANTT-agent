@@ -3,6 +3,9 @@ IMC-Group GANTT Agent — Backend API (FastAPI)
 Espone endpoint REST per il frontend React.
 """
 
+import os
+
+from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -28,6 +31,29 @@ from routes.bollettino import router as bollettino_router
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
+
+
+# ── Porte e origini ──────────────────────────────────────────────────────
+# Si scelgono in backend/.env (GANTT_PORTA_BACKEND, GANTT_PORTA_FRONTEND), che
+# leggono anche vite.config.js e gli e2e: un posto solo per tutti e tre. I
+# default valgono quando la variabile manca, e sono una coppia che non collide
+# con gli altri progetti della macchina di sviluppo.
+load_dotenv()
+PORTA_BACKEND = int(os.getenv("GANTT_PORTA_BACKEND", "8100"))
+PORTA_FRONTEND = int(os.getenv("GANTT_PORTA_FRONTEND", "3100"))
+
+
+def _origini_cors():
+    """Origini ammesse dal CORS: GANTT_ORIGINI_CORS, separate da virgola.
+
+    Senza la variabile vale l'origine del frontend in sviluppo. Con la variabile
+    vuota non è ammessa nessuna origine: è il caso di produzione, dove frontend
+    e /api stanno sotto lo stesso dominio dietro IIS e il CORS non serve.
+    """
+    valore = os.getenv("GANTT_ORIGINI_CORS")
+    if valore is None:
+        return [f"http://localhost:{PORTA_FRONTEND}"]
+    return [o.strip() for o in valore.split(",") if o.strip()]
 
 
 app = FastAPI(title="IMC-Group GANTT Agent", version="0.1.0")
@@ -60,11 +86,20 @@ app.include_router(bollettino_router)
 # CORS per permettere al frontend React di chiamare il backend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:5173"],
+    allow_origins=_origini_cors(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.get("/api/salute")
+def salute():
+    """Il processo risponde. Pubblico e senza dati: serve a chi deve sapere se
+    il backend è in piedi (healthcheck degli e2e, monitoraggio del servizio).
+    Non tocca il database di proposito: dice che il server è vivo, non che
+    tutto funziona."""
+    return {"stato": "ok"}
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -101,4 +136,4 @@ class SimulaRiassegnaRequest(BaseModel):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=PORTA_BACKEND)

@@ -340,9 +340,9 @@ git clone https://github.com/LudovicaCrit/IMC-GANTT-agent.git
 cd IMC-GANTT-agent
 
 # 2. Setup ambiente Python
-python3 -m venv .venvu
-source .venvu/bin/activate
-pip install -r requirements.txt
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r backend/requirements.txt
 
 # 3. Avvia PostgreSQL (in WSL non parte automaticamente)
 sudo service postgresql start
@@ -351,9 +351,13 @@ sudo service postgresql start
 sudo -u postgres psql -c "CREATE USER gantt_user WITH PASSWORD 'gantt_dev_2026';"
 sudo -u postgres psql -c "CREATE DATABASE gantt_db OWNER gantt_user;"
 
-# 5. Configura .env nel backend (NON committato)
+# 5. Configura .env nel backend (NON committato). L'elenco completo delle voci
+#    è in backend/.env.example. Le due porte sono l'unico posto in cui si
+#    scelgono: le leggono il backend, Vite (porta e proxy /api) e gli e2e.
 cat > backend/.env << EOF
 DATABASE_URL=postgresql://gantt_user:gantt_dev_2026@localhost:5432/gantt_db
+GANTT_PORTA_BACKEND=8100
+GANTT_PORTA_FRONTEND=3100
 JWT_SECRET=<chiave-segreta-da-generare>
 JWT_ALGORITHM=HS256
 JWT_EXPIRE_HOURS=8
@@ -370,27 +374,28 @@ alembic upgrade head
 # 7. Popola il db con dati di esempio
 python seed.py
 
-# 8. Avvia il backend
-python3 -m uvicorn main:app --reload --port 8000
+# 8. Avvia il backend, sulla porta di GANTT_PORTA_BACKEND
+python3 -m uvicorn main:app --reload --port 8100
 
-# 9. In altro terminal, avvia il frontend
+# 9. In altro terminal, avvia il frontend: porta e proxy /api vengono da
+#    backend/.env; se la porta è occupata Vite si ferma invece di cambiarla
 cd frontend
 npm install
 npm run dev
-# Apre su http://localhost:3000
+# Apre su http://localhost:3100
 ```
 
 ### Avvio quotidiano (dopo il primo setup)
 
 ```bash
-# Terminal 1 — backend
-cd ~/Azienda/Use_Case_3_GANTT/backend
+# Terminal 1 — backend (porta di GANTT_PORTA_BACKEND)
+cd IMC-GANTT-agent/backend
 sudo service postgresql start
-source ../.venvu/bin/activate
-python3 -m uvicorn main:app --reload --port 8000
+source ../.venv/bin/activate
+python3 -m uvicorn main:app --reload --port 8100
 
-# Terminal 2 — frontend
-cd ~/Azienda/Use_Case_3_GANTT/frontend
+# Terminal 2 — frontend (porta di GANTT_PORTA_FRONTEND)
+cd IMC-GANTT-agent/frontend
 npm run dev
 ```
 

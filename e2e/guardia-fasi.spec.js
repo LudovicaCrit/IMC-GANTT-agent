@@ -17,6 +17,7 @@
  */
 import { test, expect } from '@playwright/test'
 import { UTENTI, statoAuth } from './utenti.js'
+import { URL_FRONTEND } from './indirizzi.js'
 
 test.describe.configure({ mode: 'serial' })
 
@@ -93,7 +94,7 @@ test.describe('il ritorno a «Da iniziare»', () => {
     // Le ore le scrive HELENA, dalla sua porta: /salva-blocchi è self-only e
     // non ha deroghe per il manager. Serve una seconda sessione.
     const comeHelena = await playwright.request.newContext({
-      baseURL: 'http://localhost:3000',
+      baseURL: URL_FRONTEND,
       storageState: statoAuth(UTENTI.helena),
     })
     const me = await (await comeHelena.get('/api/consuntivi/me')).json()

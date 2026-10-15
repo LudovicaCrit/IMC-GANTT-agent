@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url'
 import { request } from '@playwright/test'
 import { esegui, scenario, scenarioFasi } from './dati_prova.js'
 import { UTENTI, statoAuth, CARTELLA_AUTH } from './utenti.js'
+import { URL_FRONTEND } from './indirizzi.js'
 
 const QUI = path.dirname(fileURLToPath(import.meta.url))
 
@@ -27,7 +28,7 @@ export default async function apparecchia() {
 
   fs.mkdirSync(CARTELLA_AUTH, { recursive: true })
   for (const u of Object.values(UTENTI)) {
-    const ctx = await request.newContext({ baseURL: 'http://localhost:3000' })
+    const ctx = await request.newContext({ baseURL: URL_FRONTEND })
     const r = await ctx.post('/api/auth/login', { data: { email: u.email, password: u.password } })
     if (!r.ok()) throw new Error(`login ${u.email}: ${r.status()} ${await r.text()}`)
     await ctx.storageState({ path: statoAuth(u) })
