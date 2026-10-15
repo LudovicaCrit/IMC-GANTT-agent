@@ -1,9 +1,9 @@
-# Da spostare in tests/ quando esiste il database di test separato: oggi scrive sul Postgres di sviluppo.
 """
 Test dell'AGGREGAZIONE del semaforo (`semaforo_progetti`) — sotto-edit 2.
 
-A DIFFERENZA di `test_semaforo.py`, questi test RICHIEDONO Postgres attivo:
-l'aggregazione cammina la gerarchia vera. La suite pura degli helper
+A DIFFERENZA di `test_semaforo.py`, questi test RICHIEDONO il database: girano
+su gantt_test, ricostruito da migration e seed dalla fixture `db_test` (vedi
+conftest.py), e camminano la gerarchia che il seed crea. La suite pura degli helper
 (`colore_unita`, `peggio_semaforo`, `_nodo_semaforo`) resta là e continua a
 girare senza database — i due file sono separati per non perdere quella
 proprietà.
@@ -19,15 +19,19 @@ valori esatti che aveva letto prima, e cancella per chiave primaria le righe che
 ha creato. Nessuna fixture lascia traccia.
 """
 
-from datetime import date, timedelta
+from datetime import timedelta
 
+import pytest
 from sqlalchemy import event, text
 
 from data_db_impl import semaforo_progetti, colore_unita
 from models import get_session, engine, Progetto, Fase, Task, Sottotask
 
+pytestmark = pytest.mark.usefixtures("db_test")
 
-OGGI = date.today()
+
+# «Oggi» è la data del seed, dalla fixture `oggi_del_seed`: le date del seed
+# sono assolute, e contro l'orologio vero i colori cambierebbero col calendario.
 
 
 # ── conta-query, per la verifica «niente N+1» ────────────────────────────
@@ -72,16 +76,16 @@ def _conta_colori(alberi, livello):
 # 1. I CONTEGGI, contro una query SQL indipendente
 # ══════════════════════════════════════════════════════════════════════
 
-def test_conteggi_contro_sql_indipendente():
+def test_conteggi_contro_sql_indipendente(oggi_del_seed):
     """1. Colori aggregati == quelli che l'SQL calcola per conto suo.
 
     L'SQL qui sotto NON usa il codice applicativo: replica la regola a mano
-    (stati chiusi espliciti, `data_fine < CURRENT_DATE` stretto) e fa il
+    (stati chiusi espliciti, `data_fine < :oggi` stretto) e fa il
     peggio-dei-figli con un EXISTS. Se i due divergono, il test fallisce senza
     dire chi ha ragione — ed è il punto: due strade indipendenti allo stesso
     numero.
     """
-    alberi = semaforo_progetti(_tutti_i_progetti(), oggi=OGGI)
+    alberi = semaforo_progetti(_tutti_i_progetti(), oggi=oggi_del_seed)
 
     chiusi = "('Completato','Completata','Sospeso','Sospesa','Annullato','Annullata','Eliminato')"
     s = get_session()
@@ -89,26 +93,26 @@ def test_conteggi_contro_sql_indipendente():
         # task rossi = vivi con la finestra chiusa
         sql_task_rossi = s.execute(text(
             f"SELECT count(*) FROM task WHERE stato NOT IN {chiusi} "
-            f"AND data_fine < CURRENT_DATE"
-        )).scalar()
+            f"AND data_fine < :oggi"
+        ), {"oggi": oggi_del_seed}).scalar()
 
         # fase rossa = rossa di suo OPPURE con almeno un task rosso
         sql_fasi_rosse = s.execute(text(
             f"SELECT count(*) FROM fasi f WHERE "
-            f"  (f.stato NOT IN {chiusi} AND f.data_fine < CURRENT_DATE) "
+            f"  (f.stato NOT IN {chiusi} AND f.data_fine < :oggi) "
             f"  OR EXISTS (SELECT 1 FROM task t WHERE t.fase_id = f.id "
-            f"             AND t.stato NOT IN {chiusi} AND t.data_fine < CURRENT_DATE)"
-        )).scalar()
+            f"             AND t.stato NOT IN {chiusi} AND t.data_fine < :oggi)"
+        ), {"oggi": oggi_del_seed}).scalar()
 
         # progetto rosso = rosso di suo OPPURE con almeno una fase rossa
         sql_prog_rossi = s.execute(text(
             f"SELECT count(*) FROM progetti p WHERE "
-            f"  (p.stato NOT IN {chiusi} AND p.data_fine < CURRENT_DATE) "
+            f"  (p.stato NOT IN {chiusi} AND p.data_fine < :oggi) "
             f"  OR EXISTS (SELECT 1 FROM fasi f WHERE f.progetto_id = p.id AND ("
-            f"     (f.stato NOT IN {chiusi} AND f.data_fine < CURRENT_DATE) "
+            f"     (f.stato NOT IN {chiusi} AND f.data_fine < :oggi) "
             f"     OR EXISTS (SELECT 1 FROM task t WHERE t.fase_id = f.id "
-            f"                AND t.stato NOT IN {chiusi} AND t.data_fine < CURRENT_DATE)))"
-        )).scalar()
+            f"                AND t.stato NOT IN {chiusi} AND t.data_fine < :oggi)))"
+        ), {"oggi": oggi_del_seed}).scalar()
     finally:
         s.close()
 
@@ -120,16 +124,12 @@ def test_conteggi_contro_sql_indipendente():
     assert c_fase.get("rosso", 0) == sql_fasi_rosse, (c_fase, sql_fasi_rosse)
     assert c_prog.get("rosso", 0) == sql_prog_rossi, (c_prog, sql_prog_rossi)
 
-    print(f"✅ 1. conteggi == SQL indipendente — "
-          f"task {c_task} | fasi {c_fase} | progetti {c_prog}")
-    return c_prog, c_fase
-
 
 # ══════════════════════════════════════════════════════════════════════
 # 2. LA PROVENIENZA
 # ══════════════════════════════════════════════════════════════════════
 
-def test_provenienza():
+def test_provenienza(oggi_del_seed):
     """2. origine="figli" dove il calendario proprio regge; "propria"/"entrambe"
     dove il progetto è scaduto di suo.
 
@@ -138,7 +138,7 @@ def test_provenienza():
     cambiano.
     """
     ids = _tutti_i_progetti()
-    alberi = semaforo_progetti(ids, oggi=OGGI)
+    alberi = semaforo_progetti(ids, oggi=oggi_del_seed)
 
     s = get_session()
     try:
@@ -152,7 +152,7 @@ def test_provenienza():
             assert nodo["origine"] is None or nodo["semaforo"] == "grigio"
             continue
         p = progetti[pid]
-        proprio = colore_unita(p.data_fine, p.stato, OGGI)
+        proprio = colore_unita(p.data_fine, p.stato, oggi_del_seed)
         da_figli = any(f["semaforo"] == "rosso" for f in nodo["fasi"].values())
 
         atteso = ("entrambe" if proprio == "rosso" and da_figli
@@ -172,13 +172,11 @@ def test_provenienza():
         assert sum(f["figli_rossi"] for f in nodo["fasi"].values()) == task_rossi
 
     assert visti["figli"], "atteso almeno un progetto rosso per colpa dei figli"
-    print(f"✅ 2. provenienza — figli={visti['figli']} "
-          f"propria={visti['propria']} entrambe={visti['entrambe']}")
 
 
-def test_progetto_verde_non_ha_origine():
+def test_progetto_verde_non_ha_origine(oggi_del_seed):
     """3. Progetto verde con tutti i figli verdi → origine None, figli_rossi 0."""
-    alberi = semaforo_progetti(_tutti_i_progetti(), oggi=OGGI)
+    alberi = semaforo_progetti(_tutti_i_progetti(), oggi=oggi_del_seed)
     verdi = [(pid, n) for pid, n in alberi.items() if n["semaforo"] == "verde"]
     assert verdi, "atteso almeno un progetto verde"
     for pid, n in verdi:
@@ -186,18 +184,17 @@ def test_progetto_verde_non_ha_origine():
         assert n["figli_rossi"] == 0, pid
         for f in n["fasi"].values():
             assert f["semaforo"] == "verde" and f["origine"] is None, pid
-    print(f"✅ 3. {len(verdi)} progetti verdi: origine None, figli_rossi 0")
 
 
 # ══════════════════════════════════════════════════════════════════════
 # 4. FIXTURE GRIGIO — 0 casi reali, va costruito
 # ══════════════════════════════════════════════════════════════════════
 
-def test_fixture_grigio():
+def test_fixture_grigio(oggi_del_seed):
     """4. Task vivo senza data → grigio; ingrigisce la fase; ma un fratello
     rosso vince (rosso > grigio).
 
-    Scrive su due task veri, verifica, e ripristina i valori esatti letti prima.
+    Scrive su due task del seed, verifica, e ripristina i valori esatti letti prima.
     """
     s = get_session()
     # cerca una fase VERDE con almeno 2 task vivi e verdi: così il grigio e il
@@ -205,9 +202,9 @@ def test_fixture_grigio():
     fase = None
     for f in s.query(Fase).all():
         vivi = [t for t in f.task
-                if colore_unita(t.data_fine, t.stato, OGGI) == "verde"
+                if colore_unita(t.data_fine, t.stato, oggi_del_seed) == "verde"
                 and t.stato not in ("Completato", "Sospeso", "Annullato", "Eliminato")]
-        if colore_unita(f.data_fine, f.stato, OGGI) == "verde" and len(vivi) >= 2:
+        if colore_unita(f.data_fine, f.stato, oggi_del_seed) == "verde" and len(vivi) >= 2:
             fase, t_grigio, t_rosso = f, vivi[0], vivi[1]
             break
     assert fase is not None, "nessuna fase verde con 2 task vivi verdi"
@@ -222,7 +219,7 @@ def test_fixture_grigio():
         t_grigio.data_fine = None
         s.commit()
 
-        albero = semaforo_progetti([pid], oggi=OGGI)
+        albero = semaforo_progetti([pid], oggi=oggi_del_seed)
         nodo_fase = albero[pid]["fasi"][fid]
         assert nodo_fase["task"][id_grigio]["semaforo"] == "grigio"
         assert nodo_fase["semaforo"] == "grigio", nodo_fase
@@ -231,10 +228,10 @@ def test_fixture_grigio():
         assert albero[pid]["semaforo"] in ("grigio", "rosso")
 
         # ── (b) un fratello ROSSO vince sul grigio (rosso > grigio)
-        t_rosso.data_fine = OGGI - timedelta(days=10)
+        t_rosso.data_fine = oggi_del_seed - timedelta(days=10)
         s.commit()
 
-        albero = semaforo_progetti([pid], oggi=OGGI)
+        albero = semaforo_progetti([pid], oggi=oggi_del_seed)
         nodo_fase = albero[pid]["fasi"][fid]
         assert nodo_fase["task"][id_grigio]["semaforo"] == "grigio"
         assert nodo_fase["task"][id_rosso]["semaforo"] == "rosso"
@@ -242,8 +239,6 @@ def test_fixture_grigio():
         assert nodo_fase["origine"] == "figli"
         assert nodo_fase["figli_rossi"] == 1, "il grigio non deve contare"
 
-        print(f"✅ 4. fixture grigio su fase {fid} (task {id_grigio}/{id_rosso}): "
-              f"grigio sale, rosso vince sul grigio OK")
     finally:
         t_grigio.data_fine = orig_grigio
         t_rosso.data_fine = orig_rosso
@@ -258,7 +253,7 @@ def test_fixture_grigio():
 # 5. FIXTURE SOTTOTASK — l'eredità della data del padre
 # ══════════════════════════════════════════════════════════════════════
 
-def test_fixture_sottotask_eredita_la_data_del_padre():
+def test_fixture_sottotask_eredita_la_data_del_padre(oggi_del_seed):
     """5. I sottotask ereditano `data_fine` dal task padre, non None.
 
     È la mina: senza eredità ogni sottotask vivo sarebbe grigio, e ogni task
@@ -271,13 +266,13 @@ def test_fixture_sottotask_eredita_la_data_del_padre():
         # (a) padre VERDE (data futura) → i pezzi devono essere VERDI, non grigi
         t_verde = next(
             t for t in s.query(Task).all()
-            if colore_unita(t.data_fine, t.stato, OGGI) == "verde"
+            if colore_unita(t.data_fine, t.stato, oggi_del_seed) == "verde"
             and t.stato not in ("Completato", "Sospeso", "Annullato", "Eliminato")
         )
         # (b) padre ROSSO (data passata) → i pezzi vivi ereditano il rosso
         t_rosso = next(
             t for t in s.query(Task).all()
-            if colore_unita(t.data_fine, t.stato, OGGI) == "rosso"
+            if colore_unita(t.data_fine, t.stato, oggi_del_seed) == "rosso"
         )
 
         for padre, nomi in ((t_verde, ["pezzo A", "pezzo B"]),
@@ -293,7 +288,7 @@ def test_fixture_sottotask_eredita_la_data_del_padre():
         fid_v, pid_v = t_verde.fase_id, t_verde.progetto_id
         fid_r, pid_r = t_rosso.fase_id, t_rosso.progetto_id
 
-        alberi = semaforo_progetti(list({pid_v, pid_r}), oggi=OGGI)
+        alberi = semaforo_progetti(list({pid_v, pid_r}), oggi=oggi_del_seed)
 
         # ── padre verde: i pezzi NON sono grigi, e il task resta verde
         nodo_v = alberi[pid_v]["fasi"][fid_v]["task"][t_verde.id]
@@ -320,7 +315,7 @@ def test_fixture_sottotask_eredita_la_data_del_padre():
         # caso P006). Non conta fra i rossi, e non nasconde il fratello rosso.
         creati[2].stato = "Sospeso"   # pezzo C, sotto il padre rosso
         s.commit()
-        alberi = semaforo_progetti([pid_r], oggi=OGGI)
+        alberi = semaforo_progetti([pid_r], oggi=oggi_del_seed)
         nodo_r = alberi[pid_r]["fasi"][fid_r]["task"][t_rosso.id]
         assert nodo_r["sottotask"][creati[2].id]["semaforo"] == "grigio"
         assert nodo_r["figli_rossi"] == 1
@@ -334,8 +329,6 @@ def test_fixture_sottotask_eredita_la_data_del_padre():
         for tid, n in altri:
             assert "sottotask" not in n, tid
 
-        print(f"✅ 5. fixture sottotask su {t_verde.id} (verde) e {t_rosso.id} "
-              f"(rosso): eredità della data del padre OK")
     finally:
         for st in creati:
             s.delete(st)
@@ -352,7 +345,7 @@ def test_fixture_sottotask_eredita_la_data_del_padre():
 # 6. NIENTE N+1
 # ══════════════════════════════════════════════════════════════════════
 
-def test_fixture_sospeso_in_aggregazione():
+def test_fixture_sospeso_in_aggregazione(oggi_del_seed):
     """4-bis. Un figlio SOSPESO (grigio) nel peggio-dei-figli.
 
     Due proprietà, e sono opposte fra loro — è il senso di mettere il grigio in
@@ -361,15 +354,15 @@ def test_fixture_sospeso_in_aggregazione():
         lavoro è ferma, la fase non può dire «tutto a posto»;
       - ma NON nasconde un fratello rosso: un dubbio non copre una certezza.
     In DB non ci sono task né fasi sospese (0 su 114, 0 su 71), quindi il caso
-    va costruito. Scrive su due task veri e ripristina i valori letti prima.
+    va costruito. Scrive su due task del seed e ripristina i valori letti prima.
     """
     s = get_session()
     fase = None
     for f in s.query(Fase).all():
         vivi = [t for t in f.task
-                if colore_unita(t.data_fine, t.stato, OGGI) == "verde"
+                if colore_unita(t.data_fine, t.stato, oggi_del_seed) == "verde"
                 and t.stato not in ("Completato", "Sospeso", "Annullato", "Eliminato")]
-        if colore_unita(f.data_fine, f.stato, OGGI) == "verde" and len(vivi) >= 2:
+        if colore_unita(f.data_fine, f.stato, oggi_del_seed) == "verde" and len(vivi) >= 2:
             fase, t_sosp, t_rosso = f, vivi[0], vivi[1]
             break
     assert fase is not None, "nessuna fase verde con 2 task vivi verdi"
@@ -387,7 +380,7 @@ def test_fixture_sospeso_in_aggregazione():
         t_sosp.stato = "Sospeso"
         s.commit()
 
-        albero = semaforo_progetti([pid], oggi=OGGI)
+        albero = semaforo_progetti([pid], oggi=oggi_del_seed)
         nodo_fase = albero[pid]["fasi"][fid]
         assert nodo_fase["task"][id_sosp]["semaforo"] == "grigio"
         assert nodo_fase["semaforo"] == "grigio", nodo_fase
@@ -395,10 +388,10 @@ def test_fixture_sospeso_in_aggregazione():
         assert nodo_fase["figli_rossi"] == 0
 
         # ── (b) un fratello ROSSO vince sul grigio-sospeso
-        t_rosso.data_fine = OGGI - timedelta(days=10)
+        t_rosso.data_fine = oggi_del_seed - timedelta(days=10)
         s.commit()
 
-        albero = semaforo_progetti([pid], oggi=OGGI)
+        albero = semaforo_progetti([pid], oggi=oggi_del_seed)
         nodo_fase = albero[pid]["fasi"][fid]
         assert nodo_fase["task"][id_sosp]["semaforo"] == "grigio"
         assert nodo_fase["task"][id_rosso]["semaforo"] == "rosso"
@@ -406,14 +399,12 @@ def test_fixture_sospeso_in_aggregazione():
         assert nodo_fase["figli_rossi"] == 1, "il sospeso non deve contare"
 
         # ── (c) il sospeso resta grigio anche quando è LUI a essere scaduto
-        t_sosp.data_fine = OGGI - timedelta(days=200)
+        t_sosp.data_fine = oggi_del_seed - timedelta(days=200)
         s.commit()
-        albero = semaforo_progetti([pid], oggi=OGGI)
+        albero = semaforo_progetti([pid], oggi=oggi_del_seed)
         assert albero[pid]["fasi"][fid]["task"][id_sosp]["semaforo"] == "grigio", (
             "un sospeso scaduto NON è rosso — è il caso P006")
 
-        print(f"✅ 4-bis. sospeso in aggregazione su fase {fid} "
-              f"({id_sosp} sospeso, {id_rosso} rosso): ingrigisce, non nasconde")
     finally:
         t_sosp.stato = orig_sosp_stato
         t_sosp.data_fine = orig_sosp_fine
@@ -425,42 +416,25 @@ def test_fixture_sospeso_in_aggregazione():
         s.close()
 
 
-def test_niente_n_piu_uno():
+def test_niente_n_piu_uno(oggi_del_seed):
     """6. Le query sono costanti: non crescono col numero di unità."""
     ids = _tutti_i_progetti()
 
     with ContaQuery() as c1:
-        semaforo_progetti(ids[:1], oggi=OGGI)
+        semaforo_progetti(ids[:1], oggi=oggi_del_seed)
     with ContaQuery() as c2:
-        alberi = semaforo_progetti(ids, oggi=OGGI)
+        alberi = semaforo_progetti(ids, oggi=oggi_del_seed)
 
     unita = sum(1 + len(p["fasi"]) + sum(len(f["task"]) for f in p["fasi"].values())
                 for p in alberi.values())
     assert c2.n == c1.n, f"{c1.n} query su 1 progetto, {c2.n} su {len(ids)}"
     assert c2.n <= 3, f"{c2.n} query per {unita} unità: attese 2 (gerarchia + pezzi)"
-    print(f"✅ 6. {c2.n} query per {len(ids)} progetti / {unita} unità "
-          f"(uguale a {c1.n} su un solo progetto)")
 
 
-def test_guardia_input_vuoto():
+def test_guardia_input_vuoto(oggi_del_seed):
     """Extra: lista vuota → {} senza toccare il database."""
     with ContaQuery() as c:
         assert semaforo_progetti([]) == {}
         assert semaforo_progetti(None) == {}
     assert c.n == 0, "la guardia deve precedere qualunque query"
-    assert semaforo_progetti(["P-non-esiste"], oggi=OGGI) == {}
-    print("✅ 7. guardia input vuoto: {} senza query; id inesistente → {}")
-
-
-if __name__ == "__main__":
-    test_conteggi_contro_sql_indipendente()
-    test_provenienza()
-    test_progetto_verde_non_ha_origine()
-    test_fixture_grigio()
-    test_fixture_sospeso_in_aggregazione()
-    test_fixture_sottotask_eredita_la_data_del_padre()
-    test_niente_n_piu_uno()
-    test_guardia_input_vuoto()
-    print()
-    print("=" * 60)
-    print("TUTTI I TEST PASSATI ✅")
+    assert semaforo_progetti(["P-non-esiste"], oggi=oggi_del_seed) == {}

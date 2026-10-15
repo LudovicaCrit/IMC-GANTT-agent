@@ -11,6 +11,7 @@
 - Orari misti: datetime.utcnow nei default dei modelli, datetime.now() altrove
 - Calcolo del lunedì e della fine settimana in più copie, con fine settimana diversa (venerdì o domenica)
 - Naming convention sul MetaData di SQLAlchemy, per dare nomi prevedibili a tutti i vincoli futuri
+- Le migration che inseriscono dati e il seed devono restare compatibili: il seed cerca prima di creare
 
 ## Codice
 - PATCH di progetti e fasi fanno setattr dal DTO: passare a whitelist esplicita
@@ -24,6 +25,7 @@
 - Due istanze di Limiter; SEGNALAZIONI_STORE in memoria; segnalazioni scritte solo dal seed
 - Commenti e docstring stantii (elenco nel paragrafo 4 dell'inventario)
 - add_p010.py obsoleto; README con istruzioni solo Linux e riferimenti a SQLite
+- La data di oggi va letta solo da utils.get_oggi(): oggi molti punti chiamano date.today() o datetime.now() per conto loro (elenco nel resoconto del passo 5 bis). Si sistema insieme al fuso orario della fase 8
 
 ## Test
 - Nessun e2e su Cantiere, Wizard, GANTT, Risorse, Configurazione, SAL, export

@@ -1,9 +1,9 @@
-# Da spostare in tests/ quando esiste il database di test separato: oggi scrive sul Postgres di sviluppo.
 """
 Test dell'INNESTO del semaforo su `GET /api/gantt/strutturato` — sotto-edit 3.
 
-Richiede Postgres attivo (come `test_semaforo_aggregazione.py`; la suite pura
-degli helper resta in `test_semaforo.py` e gira senza database).
+Richiede il database, come `test_semaforo_aggregazione.py`: gira su gantt_test,
+ricostruito da migration e seed dalla fixture `db_test` (vedi conftest.py). La
+suite pura degli helper resta in `test_semaforo.py` e gira senza database.
 
 Cosa presidia, in ordine di importanza:
   - NON-REGRESSIONE: l'innesto è ADDITIVO. Il payload deve avere esattamente i
@@ -19,11 +19,14 @@ Cosa presidia, in ordine di importanza:
   - NIENTE N+1: le query restano costanti al crescere dei progetti.
 """
 
+import pytest
 from sqlalchemy import event
 
 from data_db_impl import semaforo_progetti
 from models import engine
 from routes.gantt import gantt_strutturato
+
+pytestmark = pytest.mark.usefixtures("db_test")
 
 
 # ── Il contratto del payload, campo per campo ────────────────────────────
@@ -115,8 +118,6 @@ def test_payload_additivo():
         assert not mancanti, f"{livello} {uid}: campi PERSI {mancanti}"
         assert not extra, f"{livello} {uid}: campi INATTESI {extra}"
 
-    print(f"✅ 1. payload additivo — {n['progetto']} progetti, {n['fase']} fasi, "
-          f"{n['task']} task: 0 campi persi, 0 inattesi")
 
 
 def test_forma_del_semaforo():
@@ -135,8 +136,6 @@ def test_forma_del_semaforo():
         # Verde ⇔ nessuna origine da spiegare.
         assert (sem["colore"] == "verde") == (sem["origine"] is None), (uid, sem)
 
-    print("✅ 2. forma del semaforo: 3 chiavi, vocabolario rispettato, "
-          "verde ⇔ origine null")
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -176,7 +175,6 @@ def test_payload_coerente_col_calcolo():
         fasi_rosse = sum(1 for f in p["fasi"] if f["semaforo"]["colore"] == "rosso")
         assert p["semaforo"]["figli_rossi"] == fasi_rosse, p["id"]
 
-    print(f"✅ 3. {n} unità: colore/origine/figli_rossi identici al calcolo diretto")
 
 
 def test_copertura_totale():
@@ -190,7 +188,6 @@ def test_copertura_totale():
     buchi = [(liv, uid) for liv, uid, nodo in _unita(_payload())
              if nodo["semaforo"] is None]
     assert not buchi, f"unità senza semaforo: {buchi[:10]}"
-    print("✅ 4. copertura totale: 0 unità con semaforo null")
 
 
 def test_rossi_e_provenienza_nel_payload():
@@ -217,7 +214,6 @@ def test_rossi_e_provenienza_nel_payload():
     per_origine = {}
     for pid, sem in rossi.items():
         per_origine.setdefault(sem["origine"], []).append(pid)
-    print(f"✅ 5. {len(rossi)} progetti rossi nel payload: {per_origine}")
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -241,9 +237,6 @@ def test_query_costanti():
 
     unita = sum(1 for _ in _unita(tutti))
     assert c1.n == cN.n, f"{c1.n} query su 1 progetto, {cN.n} su {len(tutti)}"
-    print(f"✅ 6. {cN.n} query per {len(tutti)} progetti / {unita} unità "
-          f"(uguali alle {c1.n} di un solo progetto) — 5 dell'endpoint, "
-          f"2 del semaforo, 1 delle righe sottotask")
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -356,9 +349,6 @@ def test_sottotask_annidati():
                          if liv == "task" and "sottotask" not in n]
         assert len(non_scomposti) >= 100, "attesi molti task senza pezzi"
 
-        print(f"✅ 8. sottotask annidati — {t_verde.id} (2 verdi, ordinati) e "
-              f"{t_rosso.id} (1 rosso ereditato + 1 sospeso, annullato escluso); "
-              f"{len(non_scomposti)} task senza chiave `sottotask`")
     finally:
         for st in creati:
             s.delete(st)
@@ -385,18 +375,3 @@ def test_endpoint_risponde_200():
         assert body[0]["fasi"][0]["semaforo"]["colore"] in COLORI
     finally:
         main.app.dependency_overrides.pop(require_manager, None)
-    print(f"✅ 7. GET /api/gantt/strutturato → 200, {len(body)} progetti col semaforo")
-
-
-if __name__ == "__main__":
-    test_payload_additivo()
-    test_forma_del_semaforo()
-    test_payload_coerente_col_calcolo()
-    test_copertura_totale()
-    test_rossi_e_provenienza_nel_payload()
-    test_query_costanti()
-    test_sottotask_annidati()
-    test_endpoint_risponde_200()
-    print()
-    print("=" * 60)
-    print("TUTTI I TEST PASSATI ✅")

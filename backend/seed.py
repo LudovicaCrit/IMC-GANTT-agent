@@ -120,10 +120,25 @@ def seed():
         session.flush()
         ruoli_base_obj[nome] = r
         ruoli_obj[nome] = r
+    # CERCA PRIMA DI CREARE. Su un database costruito dalle migration il ruolo
+    # PM esiste già: lo inserisce la migration a5b6c7d8e9f0. Su uno creato con
+    # `create_all` non esiste e lo crea il seed. Se c'è con un tipo diverso da
+    # 'funzionale' il dato è incoerente: ci si ferma invece di correggerlo qui.
     for nome, descr in ruoli_funzionali:
-        r = Ruolo(nome=nome, descrizione=descr, tipo="funzionale")
-        session.add(r)
-        session.flush()
+        r = session.query(Ruolo).filter(Ruolo.nome == nome).first()
+        if r is None:
+            r = Ruolo(nome=nome, descrizione=descr, tipo="funzionale")
+            session.add(r)
+            session.flush()
+        elif r.tipo != "funzionale":
+            tipo_trovato = r.tipo
+            session.rollback()
+            session.close()
+            raise RuntimeError(
+                f"SEED FERMATO: il ruolo '{nome}' esiste già con tipo "
+                f"'{tipo_trovato}', atteso 'funzionale'. Correggere il dato prima "
+                f"di rilanciare il seed."
+            )
         ruoli_obj[nome] = r
     print(f"  ✓ {len(ruoli_base)} ruoli base + {len(ruoli_funzionali)} funzionali")
 
