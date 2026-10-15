@@ -1,0 +1,45 @@
+# IMC-GANTT-agent — regole per Code
+
+## Dove guardare
+- docs/INVENTARIO.md: stato del codice. È la fonte di verità; se il codice lo smentisce, dillo.
+- docs/DECISIONI.md: scelte fissate. Non si riaprono.
+- docs/PIANO.md: fasi e passi.
+- docs/BACKLOG.md: debito e idee.
+- Qualunque altro .md non versionato descrive intenzioni, non fatti.
+
+## Come si lavora
+- Un passo alla volta, nel perimetro del prompt. Se trovi altro da sistemare, lo segnali, non lo fai.
+- Mai commit né push. git restore è ammesso se lo riferisci. Path espliciti, mai git add con il punto.
+- Il resoconto contiene sempre: diff, verifica fatta, cosa NON hai verificato.
+- Il database di sviluppo è interamente sintetico; solo i nomi dei dipendenti sono reali. Prima e dopo ogni scrittura sul DB calcola l'impronta md5 della tabella dipendenti: deve restare identica, salvo che il prompt chieda esplicitamente di modificarla, perché gli e2e e gli scenari di prova si appoggiano a quei dipendenti.
+- Tutto il resto del database si può modificare e si rigenera dal seed. Le cancellazioni avvengono comunque per chiave esatta di ciò che hai creato, così ogni passo resta leggibile.
+- Prima di lanciare gli e2e, controlla che sulla porta 8000 non giri un uvicorn vecchio.
+
+## Regole di codice
+1. Una sola sorgente per ogni dato. Niente copie né colonne derivate salvate. Un calcolo vive in un punto solo.
+2. Il codice morto si toglie, non si commenta. Commenti e docstring dicono il vero o spariscono.
+3. La logica sta nel livello di servizio. I router traducono HTTP; il frontend mostra e non ricalcola formule.
+4. Le etichette dicono il vero: il nome di un numero corrisponde alla sua formula.
+5. Nessun valore specifico di IMC nel codice: aziende, persone, id, ore, festività, soglie, modelli IA. Vanno in DB o in configurazione.
+6. Nulli e ordine:
+   - ogni ORDER BY termina con l'id;
+   - ogni JOIN su chiave nullable è una scelta dichiarata, interna o esterna;
+   - attenzione a != in SQL, che scarta i NULL;
+   - nessun accesso a una relazione nullable senza gestire il caso vuoto.
+7. Soldi in Decimal, arrotondati in un punto solo, nel backend.
+8. Niente N+1. Le query devono reggere 500 dipendenti, non 18.
+9. Test pytest in tests/ per ogni regola di dominio, con il caso nullo nella matrice dei casi.
+10. Codice e migration nello stesso commit. Migration scritte a mano o riviste riga per riga, mai autogenerate accettate alla cieca. Ogni drop ha una guardia che conta prima di agire.
+11. Portabile su Windows Server: pathlib, encoding utf-8 esplicito, niente comandi solo Linux nel funzionamento.
+
+## Sicurezza
+- Ogni endpoint di scrittura verifica chi scrive e cosa può toccare. Nessun setattr su campi liberi: solo whitelist.
+- Mai segreti nel codice, nel frontend o nelle risposte API: password, hash, token, chiavi.
+- Sessione solo in cookie httpOnly, Secure e SameSite.
+- In produzione /docs e /openapi.json sono chiusi.
+
+## IA
+- I numeri li calcola il codice; l'LLM riceve numeri già fatti e si occupa solo di linguaggio e giudizio.
+- Ogni proposta dell'IA la decide un umano, e resta registrata.
+- L'IA ragiona sul lavoro e sulle competenze per un compito, mai sulla valutazione delle persone (AI Act, Allegato III).
+- Streaming e timeout espliciti lungo tutta la catena; modello da variabile d'ambiente.
