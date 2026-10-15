@@ -14,7 +14,7 @@ import logging
 from datetime import date, datetime
 from scenario_engine import (
     simula_scenario, _giorni_lavorativi, _aggiungi_giorni_lavorativi,
-    propaga_cascata, _to_date
+    propaga_cascata,
 )
 
 
@@ -26,8 +26,6 @@ def test_utilita():
     # Aggiungi 5 giorni lavorativi a lunedì 2 mar → lunedì 9 mar
     # lun 2 → mar 3 (1) → mer 4 (2) → gio 5 (3) → ven 6 (4) → salta sab/dom → lun 9 (5)
     assert _aggiungi_giorni_lavorativi(date(2026, 3, 2), 5) == date(2026, 3, 9)
-
-    print("✅ Test utilità OK")
 
 
 def test_cascata_semplice():
@@ -72,12 +70,6 @@ def test_cascata_semplice():
     # Design: dovrebbe iniziare il 30 mar (giorno lav dopo 27 mar)
     assert tasks["T002"]["data_inizio"] == date(2026, 3, 30), \
         f"Design inizio: atteso 30/03, ottenuto {tasks['T002']['data_inizio']}"
-
-    print(f"  Analisi:  {tasks['T001']['data_inizio']} → {tasks['T001']['data_fine']}")
-    print(f"  Design:   {tasks['T002']['data_inizio']} → {tasks['T002']['data_fine']}")
-    print(f"  Sviluppo: {tasks['T003']['data_inizio']} → {tasks['T003']['data_fine']}")
-    print(f"  Testing:  {tasks['T004']['data_inizio']} → {tasks['T004']['data_fine']}")
-    print("✅ Test cascata semplice OK")
 
 
 def test_simula_cambia_focus():
@@ -132,11 +124,6 @@ def test_simula_cambia_focus():
 
     risultato = simula_scenario(tasks_data, dip_data, proj_data, modifiche)
 
-    print(f"\n  Task modificati: {len(risultato['task_modificati'])}")
-    print(f"  Conseguenze: {len(risultato['conseguenze'])}")
-    for c in risultato["conseguenze"]:
-        print(f"    [{c['gravita'].upper()}] {c['testo']}")
-
     # Verifica che il catalogo sia slittato
     assert "T011" in risultato["task_modificati"], \
         "Il task Catalogo prodotti (T011) dovrebbe slittare"
@@ -144,8 +131,6 @@ def test_simula_cambia_focus():
     # Verifica cascata: Testing catalogo dovrebbe slittare perché dipende da T011
     assert "T012" in risultato["task_modificati"], \
         "Il task Testing catalogo (T012) dovrebbe slittare a cascata"
-
-    print("\n✅ Test cambia_focus + cascata OK")
 
 
 def test_scadenza_bucata():
@@ -182,11 +167,6 @@ def test_scadenza_bucata():
     assert len(risultato["scadenze_bucate"]) > 0, \
         "Dovrebbe segnalare la scadenza bucata del Portale Turismo"
 
-    for sb in risultato["scadenze_bucate"]:
-        print(f"  ⚠️ {sb['progetto']}: sfora di {sb['giorni_sforo']} giorni")
-
-    print("✅ Test scadenza bucata OK")
-
 
 # ══════════════════════════════════════════════════════════════════════
 # DIPENDENZE SS/FF/SF — logica temporale (Gruppo C)
@@ -198,39 +178,19 @@ def test_scadenza_bucata():
 # (test_dipendenza_fs_non_logga_warning) e una cascata multi-tipo dove vince
 # il vincolo più in avanti. Sono SEMPRE attivi (mai skip).
 
-class _CatturaWarning(logging.Handler):
-    """Handler minimale che accumula i record di log emessi dal motore.
-
-    Indipendente da `caplog`: funziona sia sotto pytest sia col runner __main__.
-    """
-    def __init__(self):
-        super().__init__()
-        self.records = []
-
-    def emit(self, record):
-        self.records.append(record)
-
-
-def _propaga_con_log(tasks, modificati):
+def _propaga_con_log(caplog, tasks, modificati):
     """Esegue propaga_cascata catturando i warning del logger 'scenario_engine'.
 
-    Ritorna (insieme_modificati, lista_messaggi_warning_formattati).
+    Usa la fixture `caplog` di pytest. Ritorna
+    (insieme_modificati, lista_messaggi_warning_formattati).
     """
-    handler = _CatturaWarning()
-    handler.setLevel(logging.WARNING)
-    eng_logger = logging.getLogger("scenario_engine")
-    livello_orig, propaga_orig = eng_logger.level, eng_logger.propagate
-    eng_logger.addHandler(handler)
-    eng_logger.setLevel(logging.WARNING)
-    eng_logger.propagate = False  # evita rumore su stderr durante i test
-    try:
+    with caplog.at_level(logging.WARNING, logger="scenario_engine"):
         risultato = propaga_cascata(tasks, modificati)
-    finally:
-        eng_logger.removeHandler(handler)
-        eng_logger.setLevel(livello_orig)
-        eng_logger.propagate = propaga_orig
-    messaggi = [r.getMessage() for r in handler.records
-                if r.levelno == logging.WARNING]
+    messaggi = [
+        r.getMessage() for r in caplog.records
+        if r.levelno == logging.WARNING
+        and (r.name == "scenario_engine" or r.name.startswith("scenario_engine."))
+    ]
     return risultato, messaggi
 
 
@@ -256,7 +216,7 @@ def _coppia_pred_succ(tipo):
     }
 
 
-def test_dipendenza_ss_inizia_con_predecessore():
+def test_dipendenza_ss_inizia_con_predecessore(caplog):
     """SS: il successore inizia alla STESSA data d'inizio del predecessore.
 
     Durata conservata, nessun warning. Sposto il predecessore in avanti
@@ -272,7 +232,7 @@ def test_dipendenza_ss_inizia_con_predecessore():
         tasks["T101"]["data_inizio"], tasks["T101"]["data_fine"]
     )
 
-    modificati, warnings = _propaga_con_log(tasks, {"T100"})
+    modificati, warnings = _propaga_con_log(caplog, tasks, {"T100"})
 
     assert "T101" in modificati, "SS: il successore dovrebbe slittare"
     # Ancoraggio SS: inizio successore == inizio predecessore.
@@ -285,10 +245,8 @@ def test_dipendenza_ss_inizia_con_predecessore():
     ) == durata_old, "SS: la durata lavorativa del successore deve restare invariata"
     assert warnings == [], f"SS non deve loggare warning, ottenuti: {warnings}"
 
-    print("✅ Test SS (inizio col predecessore) OK")
 
-
-def test_dipendenza_ff_finisce_con_predecessore():
+def test_dipendenza_ff_finisce_con_predecessore(caplog):
     """FF: il successore finisce alla STESSA data di fine del predecessore.
 
     Durata conservata, nessun warning. Come test_cascata_semplice muovo solo
@@ -302,7 +260,7 @@ def test_dipendenza_ff_finisce_con_predecessore():
         tasks["T101"]["data_inizio"], tasks["T101"]["data_fine"]
     )
 
-    modificati, warnings = _propaga_con_log(tasks, {"T100"})
+    modificati, warnings = _propaga_con_log(caplog, tasks, {"T100"})
 
     assert "T101" in modificati, "FF: il successore dovrebbe slittare"
     # Ancoraggio FF: fine successore == fine predecessore.
@@ -315,10 +273,8 @@ def test_dipendenza_ff_finisce_con_predecessore():
     ) == durata_old, "FF: la durata lavorativa del successore deve restare invariata"
     assert warnings == [], f"FF non deve loggare warning, ottenuti: {warnings}"
 
-    print("✅ Test FF (fine col predecessore) OK")
 
-
-def test_dipendenza_sf_finisce_quando_predecessore_inizia():
+def test_dipendenza_sf_finisce_quando_predecessore_inizia(caplog):
     """SF: il successore finisce il giorno lavorativo PRIMA che il pred inizi.
 
     Convenzione coerente col gap "+1 giorno lavorativo" di FS: i due task non
@@ -335,7 +291,7 @@ def test_dipendenza_sf_finisce_quando_predecessore_inizia():
         tasks["T101"]["data_inizio"], tasks["T101"]["data_fine"]
     )
 
-    modificati, warnings = _propaga_con_log(tasks, {"T100"})
+    modificati, warnings = _propaga_con_log(caplog, tasks, {"T100"})
 
     assert "T101" in modificati, "SF: il successore dovrebbe slittare"
     # Ancoraggio SF: fine successore == inizio pred − 1 giorno lavorativo.
@@ -348,10 +304,8 @@ def test_dipendenza_sf_finisce_quando_predecessore_inizia():
     ) == durata_old, "SF: la durata lavorativa del successore deve restare invariata"
     assert warnings == [], f"SF non deve loggare warning, ottenuti: {warnings}"
 
-    print("✅ Test SF (fine quando inizia il predecessore) OK")
 
-
-def test_cascata_multi_tipo_vince_il_piu_restrittivo():
+def test_cascata_multi_tipo_vince_il_piu_restrittivo(caplog):
     """Successore con DUE predecessori di tipi diversi (FS + SS).
 
     Il successore si sposta secondo il vincolo PIÙ in avanti tra i due. Qui il
@@ -387,7 +341,7 @@ def test_cascata_multi_tipo_vince_il_piu_restrittivo():
     )
 
     # Entrambi i predecessori sono "modificati": scattano entrambi i rami.
-    modificati, warnings = _propaga_con_log(tasks, {"T200", "T201"})
+    modificati, warnings = _propaga_con_log(caplog, tasks, {"T200", "T201"})
 
     assert "T202" in modificati, "Multi-tipo: il successore dovrebbe slittare"
     # Vince il vincolo più in avanti: FS (13/4), non SS (30/3).
@@ -400,43 +354,14 @@ def test_cascata_multi_tipo_vince_il_piu_restrittivo():
     ) == durata_old, "Multi-tipo: la durata lavorativa del successore deve restare invariata"
     assert warnings == [], f"Multi-tipo (FS+SS) non deve loggare warning, ottenuti: {warnings}"
 
-    print("✅ Test cascata multi-tipo (vince il più restrittivo) OK")
 
-
-def test_dipendenza_fs_non_logga_warning():
+def test_dipendenza_fs_non_logga_warning(caplog):
     """Controprova: una dipendenza FS slitta ma NON emette alcun warning."""
     tasks = _coppia_pred_succ("FS")
     tasks["T100"]["data_fine"] = date(2026, 3, 27)
 
-    modificati, warnings = _propaga_con_log(tasks, {"T100"})
+    modificati, warnings = _propaga_con_log(caplog, tasks, {"T100"})
 
     assert "T101" in modificati, "FS: il successore dovrebbe slittare"
     assert warnings == [], f"FS non deve loggare warning, ottenuti: {warnings}"
 
-    print("✅ Test dipendenza FS senza warning OK")
-
-
-if __name__ == "__main__":
-    print("=" * 60)
-    print("TEST SCENARIO ENGINE")
-    print("=" * 60)
-    test_utilita()
-    print()
-    test_cascata_semplice()
-    print()
-    test_simula_cambia_focus()
-    print()
-    test_scadenza_bucata()
-    print()
-    test_dipendenza_ss_inizia_con_predecessore()
-    print()
-    test_dipendenza_ff_finisce_con_predecessore()
-    print()
-    test_dipendenza_sf_finisce_quando_predecessore_inizia()
-    print()
-    test_cascata_multi_tipo_vince_il_piu_restrittivo()
-    print()
-    test_dipendenza_fs_non_logga_warning()
-    print()
-    print("=" * 60)
-    print("TUTTI I TEST PASSATI ✅")

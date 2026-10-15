@@ -1,3 +1,4 @@
+# Da spostare in tests/ quando esiste il database di test separato: oggi scrive sul Postgres di sviluppo.
 """
 Test dell'AGGREGAZIONE del semaforo (`semaforo_progetti`) — sotto-edit 2.
 

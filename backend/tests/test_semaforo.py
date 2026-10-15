@@ -9,11 +9,11 @@ connessione a Postgres all'import (`_verifica_database()`) e solleva se il
 server è spento. `data_db_impl` importa `models`, che chiama `create_engine` —
 lazy, nessuna connessione aperta finché non si esegue una query. Questi test
 non ne eseguono nessuna.
-
-Stile e runner: `test_scenario_engine.py`.
 """
 
 from datetime import date
+
+import pytest
 
 from data_db_impl import (
     colore_unita, STATI_FINITI_SEMAFORO, STATI_FERMI_SEMAFORO,
@@ -49,8 +49,6 @@ def test_grigio_senza_data_fine():
     for stato in STATI_FERMI_SEMAFORO:
         assert colore_unita(None, stato, OGGI) == "grigio", stato
 
-    print("✅ 1. grigio su unità viva senza data; chiusura batte grigio OK")
-
 
 def test_rosso_scaduto_e_vivo():
     """2. data_fine passata + unità viva → rosso."""
@@ -65,8 +63,6 @@ def test_rosso_scaduto_e_vivo():
     # Molto scaduto resta rosso, non «più rosso»: la scala non ha gradi.
     assert colore_unita(date(2025, 1, 1), "In corso", OGGI) == "rosso"
 
-    print("✅ 2. rosso su scaduto e vivo OK")
-
 
 def test_completato_non_e_rosso():
     """3. data_fine passata + Completato → verde, mai rosso.
@@ -75,7 +71,6 @@ def test_completato_non_e_rosso():
     """
     assert colore_unita(IERI, "Completato", OGGI) == "verde"    # task, progetto
     assert colore_unita(IERI, "Completata", OGGI) == "verde"    # FASE, femminile
-    print("✅ 3. completato in ritardo → verde (non rosso) OK")
 
 
 def test_annullato_eliminato_sono_verdi():
@@ -96,8 +91,6 @@ def test_annullato_eliminato_sono_verdi():
     # E i fermi non sono finiti: non devono essere finiti nel set sbagliato.
     for stato in STATI_FERMI_SEMAFORO:
         assert stato not in STATI_FINITI_SEMAFORO, stato
-
-    print("✅ 4. annullato/eliminato → verde (non rosso) OK")
 
 
 def test_sospeso_e_grigio_anche_se_scaduto():
@@ -121,8 +114,6 @@ def test_sospeso_e_grigio_anche_se_scaduto():
 
     # Non è verde, e non è rosso: sono le due risposte che il grigio rifiuta.
     assert colore_unita(IERI, "Sospeso", OGGI) not in ("verde", "rosso")
-
-    print("✅ 4-bis. sospeso → grigio, anche scaduto (caso P006) OK")
 
 
 def test_verde_futuro_il_giallo_e_spento():
@@ -152,8 +143,6 @@ def test_verde_futuro_il_giallo_e_spento():
         assert colore != "giallo", (d, s, p, oc, op)
         assert colore in ("verde", "rosso", "grigio"), (colore, d, s)
 
-    print(f"✅ 5. verde su futuro, giallo spento su {len(combinazioni)} combinazioni OK")
-
 
 def test_scadenza_oggi_non_e_ritardo():
     """6. data_fine == oggi → verde. Il confronto è `<` STRETTO.
@@ -168,8 +157,6 @@ def test_scadenza_oggi_non_e_ritardo():
 
     # Il giorno dopo, lo stesso task è rosso: la soglia è dove diciamo che sia.
     assert colore_unita(OGGI, "In corso", DOMANI) == "rosso"
-
-    print("✅ 6. scadenza = oggi → verde (`<` stretto) OK")
 
 
 def test_purezza():
@@ -201,8 +188,6 @@ def test_purezza():
                                     ore_consumate=oc,
                                     ore_pianificate=op) == atteso
 
-    print("✅ 7. purezza (determinismo, nessuna mutazione, gancio inerte) OK")
-
 
 def test_stato_sconosciuto_non_disarma_la_scadenza():
     """Extra: uno stato non riconosciuto NON è chiuso → vale il calendario.
@@ -215,8 +200,6 @@ def test_stato_sconosciuto_non_disarma_la_scadenza():
     assert colore_unita(IERI, None, OGGI) == "rosso"
     assert colore_unita(IERI, "", OGGI) == "rosso"
     assert colore_unita(IERI, "completato", OGGI) == "rosso"  # case-sensitive
-
-    print("✅ 8. stato sconosciuto → vale la scadenza OK")
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -247,13 +230,8 @@ def test_ordinamento_peggio():
     assert peggio_semaforo([None, "rosso"]) == "rosso"
 
     # Un colore fuori vocabolario è un bug del chiamante, non un default muto.
-    try:
+    with pytest.raises(KeyError):
         peggio_semaforo(["fucsia"])
-        raise AssertionError("atteso KeyError su colore sconosciuto")
-    except KeyError:
-        pass
-
-    print("✅ 9. ordinamento rosso>giallo>grigio>verde, vuoto→None OK")
 
 
 def test_nodo_origine():
@@ -287,21 +265,3 @@ def test_nodo_origine():
     assert _nodo_semaforo("verde", ["grigio", "rosso", "rosso"]) == {
         "semaforo": "rosso", "origine": "figli", "figli_rossi": 2}
 
-    print("✅ 10. origine propria/figli/entrambe/None e figli_rossi OK")
-
-
-if __name__ == "__main__":
-    test_grigio_senza_data_fine()
-    test_rosso_scaduto_e_vivo()
-    test_completato_non_e_rosso()
-    test_annullato_eliminato_sono_verdi()
-    test_sospeso_e_grigio_anche_se_scaduto()
-    test_verde_futuro_il_giallo_e_spento()
-    test_scadenza_oggi_non_e_ritardo()
-    test_purezza()
-    test_stato_sconosciuto_non_disarma_la_scadenza()
-    test_ordinamento_peggio()
-    test_nodo_origine()
-    print()
-    print("=" * 60)
-    print("TUTTI I TEST PASSATI ✅")

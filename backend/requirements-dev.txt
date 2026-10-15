@@ -1,0 +1,2 @@
+# Dipendenze solo di sviluppo e test: in produzione basta requirements.txt.
+pytest==9.1.1

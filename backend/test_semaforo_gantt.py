@@ -1,3 +1,4 @@
+# Da spostare in tests/ quando esiste il database di test separato: oggi scrive sul Postgres di sviluppo.
 """
 Test dell'INNESTO del semaforo su `GET /api/gantt/strutturato` — sotto-edit 3.
 

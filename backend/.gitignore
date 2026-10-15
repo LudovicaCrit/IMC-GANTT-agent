@@ -3,3 +3,5 @@ imcgroup.db
 __pycache__/
 *.pyc
 _*.py
+# ...ma i file dei package non sono script: non vanno mai ignorati.
+!__init__.py
