@@ -4,6 +4,8 @@
 
 **Commit da cui recuperare:** `f17a0e27c9a47bd7c33bc4dd00be6a7719c98b7a` (`f17a0e2`, 15/10/2026, «Fase 1: dati di prova con date relative, via grpcio e lxml»). Le righe indicate sotto si riferiscono a quel commit.
 
+**Destinazioni aggiornate.** Le pagine di destinazione indicate sotto sono quelle del giorno della stesura. Dopo questo archivio, DECISIONI.md sezione 8 ha stabilito che gli scenari vivono nel Cantiere, non nella scheda Scenari del dettaglio GANTT, che diventa Criticità. Dove le due fonti divergono, vale DECISIONI.md.
+
 Per recuperare un file così com'era:
 ```
 git restore --source=f17a0e27c9a47bd7c33bc4dd00be6a7719c98b7a -- <percorso>

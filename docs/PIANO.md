@@ -20,13 +20,13 @@
 ## Fase 1 — Ciò che l'utente tocca non si rompe
 - ✅ Modello Gemini da variabile d'ambiente
 - ✅ Pipeline e Tavolo di Lavoro fuori dal menu e dal codice, con i loro endpoint orfani (/api/tasks/applica, /api/agent/* non usati, /api/pianificazione/*), le funzioni morte di api.js e la dipendenza frappe-gantt. Prima si archiviano gli embrioni IA da recuperare. Attenzione: il webServer degli e2e usa /api/agent/status come healthcheck, va sostituito nello stesso passo.
-- ☐ Export GANTT: PDF funzionante (dipendenza mancante), PNG senza pdftoppm
+- ▶ Export GANTT: PDF funzionante (dipendenza mancante), PNG senza pdftoppm
 - ☐ Progetti "Da iniziare" visibili in Cantiere e GANTT
 - ☐ PUT /api/progetti/{id}/completo non azzera i campi che il Wizard non manda
 - ☐ Configurazione: salvare un dipendente non azzera la sede
 - ☐ azienda_id assegnata alla creazione del progetto (Wizard + backend)
 - ☐ GANTT: tendina progetti senza lo stato inesistente "In bando", Sospesi selezionabili
-- ☐ Colori degli stati in un solo punto: legenda, GanttChartFasi e TimelineBars coerenti
+- ▶ Colori degli stati in un solo punto: legenda, GanttChartFasi e TimelineBars coerenti
 - ☐ VistaManagement: nome del dipendente invece dell'id
 - ☐ Risorse: filtro per tipologia interna invece dell'id P010 cablato
 - ☐ Home: il clic su un progetto non porta al 403 per chi non è manager (si riapre in fase 3)
@@ -49,6 +49,7 @@
 - ☐ Cruscotto in Economia: testata anagrafica (descrizione esposta, valore del contratto nel Wizard), quattro ore, delta, erosioni, lente sulla dispersione
 - ☐ Saturazione sulle ore vere, affiancata a quella sul piano
 - ☐ GANTT: lenti portafoglio e per-dipendente nella stessa pagina
+- ☐ Lo schermo del GANTT disegna con lo stesso modulo SVG dell'export: un solo motore di disegno per schermo, export e lenti
 
 **Chiusura**: ogni numero di Economia e Risorse ha formula ed etichetta coerenti, coperte da test pytest.
 
@@ -60,6 +61,7 @@
 - ☐ GET /api/attivita-interne filtrato per persona
 - ☐ Urgenza modificabile da interfaccia
 - ☐ Configurazione: inquadramento base + ruoli aggiuntivi
+- ☐ Parametri di installazione in Configurazione: nome e logo dell'azienda, ore standard, giorni lavorativi e festività, soglie. Si svuota l'elenco dei valori cablati di INVENTARIO sezione 8
 - ☐ 🖐 Account per tutti i dipendenti; pm_id assegnato ai progetti
 
 **Chiusura**: ogni ruolo vede e modifica esattamente ciò che la matrice prevede, verificato da e2e per ruolo.
@@ -114,6 +116,7 @@
 - ☐ Fuso orario esplicito nel backend e date locali nel frontend
 - ☐ Servizio NSSM, PYTHONUTF8=1, backup del DB
 - ☐ Dataset dimostrativo: dati sintetici credibili, separati e cancellabili, con date recenti e ore consuntivate fino al giorno della presentazione
+- ☐ Gli e2e girano sempre sui propri dati di prova, mai sul dataset dimostrativo: oggi dipendono ancora da sei task Completati del seed e da P008
 
 **Chiusura**: un giro completo della demo su Windows Server, con ogni ruolo, anche da smartphone, senza interventi tecnici.
 

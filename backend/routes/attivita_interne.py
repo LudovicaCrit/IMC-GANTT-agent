@@ -107,7 +107,6 @@ STORIA
 """
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import func
 from sqlalchemy.orm import joinedload
 
 from deps import get_current_user

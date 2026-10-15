@@ -93,6 +93,7 @@ Saturazione: si mostra sia sul piano sia sulle ore vere, affiancate; lo scarto �
 - Modello IA da variabile d'ambiente; ID stabile esplicito, mai anteprime né alias.
 - GANTT e PMOGen restano progetti distinti: si possono collegare, mai travasare codice.
 - Leggibilità: il codice è un obiettivo quanto le funzioni. docs/ARCHITETTURA.md è la mappa per chi deve metterci le mani. data_db_impl.py si smonta un dominio alla volta in moduli di servizio, a comportamento invariato e provato dai test, finché non esiste più.
+- Impostabile per altre aziende: un'installazione per cliente, con il suo server e il suo database. Identità dell'azienda (nome, logo) e parametri (ore standard, giorni lavorativi e festività, soglie) si impostano da Configurazione; nel codice non c'è nessun valore di una singola azienda. Niente multi-tenant: separare i dati di più clienti nella stessa installazione è il modello a canone che il prodotto non vuole.
 
 ## 11. Futuro, già deciso nel principio
 - Notifiche (Teams): il giorno stesso in cui un task finisce.

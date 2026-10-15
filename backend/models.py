@@ -19,7 +19,7 @@ entrambi il 02/09/2026: vedi `DATABASE_URL` sotto.
 """
 
 import os
-from datetime import datetime, date
+from datetime import datetime
 from dotenv import load_dotenv
 load_dotenv()
 from sqlalchemy import (

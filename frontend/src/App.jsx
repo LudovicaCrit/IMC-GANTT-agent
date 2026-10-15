@@ -177,9 +177,7 @@ function MainLayout() {
           {/* Pagine accessibili a TUTTI gli utenti loggati (user + manager) */}
           <Route path="/" element={<Home />} />
           {/* LA CONSUNTIVAZIONE È UNA SOLA (passo 5.1, 23/09/2026): la griglia
-              a ore. La pagina a cursore ha smesso di essere raggiungibile qui —
-              il file c'è ancora e se ne va al passo 5.2, ma da questa riga in
-              poi non ha più una porta. */}
+              a ore. */}
           <Route path="/consuntivazione" element={<ConsuntivazioneOre />} />
           {/* I DUE INDIRIZZI DI CANTIERE, tutti e due su /consuntivazione.
               `/ore` era il posto della griglia finché conviveva con l'altra

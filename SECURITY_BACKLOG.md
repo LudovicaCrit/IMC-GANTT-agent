@@ -213,8 +213,8 @@ Nota di Ludovica (4 maggio 2026): pensare a stress test "classici" su software s
 **Endpoint critici da testare sotto carico:**
 - `/api/auth/login` — verifica comportamento del rate limiting sotto attacco distribuito
 - `/api/gantt` e `/api/dipendenti` — letture pesanti, stress della cache contesto IA
-- `/api/agent/chat` — Gemini latency + cache, costo per token
-- `/api/scenario/simula` — operazione complessa, time budget
+- `/api/agent/chat` — rimosso il 15/10/2026, insieme agli altri endpoint IA (vedi docs/EMBRIONI_IA.md)
+- `/api/scenario/simula` — rimosso il 15/10/2026, insieme al motore degli scenari (vedi docs/EMBRIONI_IA.md)
 
 **Scenari da simulare:**
 - 50 utenti concorrenti che chiamano `/api/gantt`
