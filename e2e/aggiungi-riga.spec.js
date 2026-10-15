@@ -28,11 +28,19 @@ test.describe.configure({ mode: 'serial' })
 
 // I task di prova (vedi dati_prova.py).
 const T_ATTIVO = 'T900'     // su P002, progetto su cui Helena sta già lavorando
-const T_ALTRO = 'T901'      // su P011, progetto non attivo questa settimana
-// Già in griglia questa settimana: non devono comparire nella lista.
-const GIA_IN_GRIGLIA = ['T015', 'T024', 'T026', 'T057', 'T063', 'T079', 'T091', 'T107']
-// Suoi, ma con la finestra chiusa da mesi: fuori dall'orizzonte del mese.
-const FUORI_ORIZZONTE = ['T004', 'T014', 'T020', 'T030', 'T043', 'T104', 'T109']
+const T_ALTRO = 'T901'      // su P008, progetto su cui Helena non ha task: mai attivo
+const T_OFFERTO = 'T904'    // da offrire: fuori dalla griglia, dentro l'orizzonte
+// Già in griglia questa settimana, e dentro l'orizzonte: se non compaiono nella
+// lista è per la griglia, non per l'orizzonte. Uno per ciascuna delle due vie
+// della griglia: finestra che interseca la settimana (T905), scaduto e ancora
+// vivo (T906). Task di prova con date relative: quelli veri del seed, con le
+// date fisse, uscivano dall'orizzonte col passare delle settimane.
+const GIA_IN_GRIGLIA = ['T905', 'T906']
+// Suoi, non in griglia, e con la finestra chiusa prima dell'orizzonte del mese:
+// se non compaiono è per l'orizzonte. T907 è di prova; gli altri sono task del
+// seed Completati in primavera, che non tornano né in griglia (Completati) né
+// nell'orizzonte (finiti, e l'orizzonte si sposta solo in avanti).
+const FUORI_ORIZZONTE = ['T907', 'T004', 'T020', 'T030', 'T043', 'T104', 'T109']
 
 // Qui tutte le righe sono task: l'aiutante condiviso vuole anche il tipo.
 const riga = (page, taskId) => rigaUnita(page, 'task', taskId)
@@ -45,27 +53,30 @@ test.describe('da utente normale (Helena)', () => {
     await expect(page.locator('[data-sintesi]')).toBeVisible()
     await apriPannello(page)
 
-    // I due task di prova ci sono, e con loro il T112 vero (ottobre, nell'orizzonte).
-    await expect(page.locator(`[data-aggiungi-task="${T_ATTIVO}"]`)).toBeVisible()
-    await expect(page.locator(`[data-aggiungi-task="${T_ALTRO}"]`)).toBeVisible()
-    await expect(page.locator('[data-aggiungi-task="T112"]')).toBeVisible()
+    // I tre task da offrire ci sono, e nessuno di loro è già una riga della griglia.
+    for (const id of [T_ATTIVO, T_ALTRO, T_OFFERTO]) {
+      await expect(riga(page, id), `${id} non deve essere in griglia`).toHaveCount(0)
+      await expect(page.locator(`[data-aggiungi-task="${id}"]`)).toBeVisible()
+    }
 
-    // Niente doppioni di ciò che la griglia già mostra.
+    // Niente doppioni di ciò che la griglia già mostra: la riga c'è, la voce no.
     for (const id of GIA_IN_GRIGLIA) {
+      await expect(riga(page, id), `${id} deve essere in griglia`).toBeVisible()
       await expect(page.locator(`[data-aggiungi-task="${id}"]`), `${id} è già in griglia`).toHaveCount(0)
     }
-    // L'orizzonte del mese tiene fuori lo storico: sono suoi, ma finiti in primavera.
+    // L'orizzonte del mese tiene fuori lo storico: suoi, non in griglia, finiti prima.
     for (const id of FUORI_ORIZZONTE) {
+      await expect(riga(page, id), `${id} non deve essere in griglia`).toHaveCount(0)
       await expect(page.locator(`[data-aggiungi-task="${id}"]`), `${id} è fuori orizzonte`).toHaveCount(0)
     }
 
     // Progetto + nome, non il solo nome del task.
     const lista = page.locator('[data-aggiungi-lista]')
     await expect(lista).toContainText('Framework Compliance 262')
-    await expect(lista).toContainText('AIoT Industria 4.0 Tecnomat')
+    await expect(lista).toContainText('Business Continuity Framework')
 
     // ORDINAMENTO: il progetto su cui lavora già sta in cima, anche se
-    // alfabeticamente verrebbe dopo («AIoT…» < «Framework…»).
+    // alfabeticamente verrebbe dopo («Business…» < «Framework…»).
     const primoGruppo = lista.locator('> div').first()
     await expect(primoGruppo).toContainText('Framework Compliance 262')
     await expect(primoGruppo).toContainText('ci stai già lavorando')
@@ -143,13 +154,13 @@ test.describe('da utente normale (Helena)', () => {
   test('una riga aggiunta per sbaglio si toglie', async ({ page }) => {
     await page.goto(GRIGLIA)
     await apriPannello(page)
-    await page.locator('[data-aggiungi-task="T112"]').click()
-    await expect(riga(page, 'T112')).toBeVisible()
+    await page.locator(`[data-aggiungi-task="${T_OFFERTO}"]`).click()
+    await expect(riga(page, T_OFFERTO)).toBeVisible()
 
-    await riga(page, 'T112').locator('[data-togli-riga]').click()
-    await expect(riga(page, 'T112')).toHaveCount(0)
+    await riga(page, T_OFFERTO).locator('[data-togli-riga]').click()
+    await expect(riga(page, T_OFFERTO)).toHaveCount(0)
     // E torna disponibile nella lista, che nel frattempo è rimasta aperta.
-    await expect(page.locator('[data-aggiungi-task="T112"]')).toBeVisible()
+    await expect(page.locator(`[data-aggiungi-task="${T_OFFERTO}"]`)).toBeVisible()
   })
 })
 

@@ -13,9 +13,12 @@ propone e che la selezione deve offrire:
   T900  su P002 — progetto su cui Helena STA GIÀ lavorando (ha T015 in griglia).
         Date dopo la settimana ma dentro l'orizzonte del mese. È il task su cui
         la verifica scrive davvero le ore.
-  T901  su P011 — progetto su cui NON sta lavorando questa settimana. Serve
-        all'ordinamento (dev'essere sotto P002) e al caso «solo stato, niente
-        ore», che deve far comparire l'avvertenza.
+  T901  su P008 — progetto su cui Helena non ha nessun task del seed, quindi
+        mai attivo per lei in nessuna settimana (con P011, dove ha T112, lo
+        diventava appena T112 entrava in griglia). Il nome viene prima di quello
+        di P002 in ordine alfabetico: serve all'ordinamento (dev'essere sotto
+        P002 anche se alfabeticamente verrebbe prima) e al caso «solo stato,
+        niente ore», che deve far comparire l'avvertenza.
 
 Per il «banner attività senza spiegazione» — servono invece task DENTRO la
 settimana, cioè righe che la griglia carica già, su cui nessuno ha ancora detto
@@ -26,7 +29,20 @@ vanno provati separatamente:
   T902  lo si spiega con lo STATO (Bloccato + nota), senza ore.
   T903  lo si spiega mettendoci le ORE.
 
-`--pulisci` rimuove i quattro task E tutto ciò che le verifiche hanno scritto su
+Per i confini della lista di «aggiungi riga» — prima erano task veri del seed,
+ma le loro date sono fisse e col passare delle settimane cambiavano categoria
+(un task «già in griglia» usciva dall'orizzonte, uno «da offrire» entrava in
+griglia). Questi le hanno relative, e restano ciò che il test dichiara:
+
+  T904  su P008 — da OFFRIRE: fuori dalla griglia, dentro l'orizzonte. È quello
+        che il test aggiunge per sbaglio e poi toglie.
+  T905  GIÀ IN GRIGLIA perché la sua finestra interseca la settimana, ed è
+        dentro l'orizzonte: se non fosse offerto, è per la griglia.
+  T906  GIÀ IN GRIGLIA perché scaduto e ancora vivo, dentro l'orizzonte.
+  T907  FUORI ORIZZONTE: Completato, finito prima del lunedì-30. Non è in
+        griglia, quindi se non è offerto è per l'orizzonte.
+
+`--pulisci` rimuove i task di prova E tutto ciò che le verifiche hanno scritto su
 di loro (blocchi, consuntivi): il resto del database dev'essere byte per byte
 quello di prima, ed è ciò che l'impronta md5 in fondo al README controlla.
 
@@ -72,25 +88,39 @@ DIPENDENTE = "D004"          # Helena Ullah — l'utente `user` del seed
 _OGGI = date.today()
 _LUN = _OGGI - timedelta(days=_OGGI.weekday())
 
+#
+# T904-T907 — i confini della lista di «aggiungi riga». T904 come T900/T901
+# (inizio due settimane avanti). T905 copre la settimana corrente e la
+# successiva, così la interseca anche se la verifica passa la mezzanotte di
+# domenica. T906 è finito prima del lunedì ed è ancora vivo: la griglia lo carica
+# come scaduto, e la sua fine (lunedì-8) resta dentro l'orizzonte anche quando
+# la settimana scatta di sette giorni (lunedì-23). T907 è Completato e finito al
+# lunedì-45: fuori dall'orizzonte (lunedì-30) anche dopo lo scatto (lunedì-23).
+_DA_INIZIARE = "Da iniziare"
+
 TASK_PROVA = [
-    # id     progetto  fase  nome                                   inizio      fine
-    ("T900", "P002", 8, "[prova e2e] Ritocco integrazione fuori piano", _LUN + timedelta(days=15), _LUN + timedelta(days=22)),
-    ("T901", "P011", 68, "[prova e2e] Sopralluogo non pianificato", _LUN + timedelta(days=14), _LUN + timedelta(days=20)),
-    ("T902", "P002", 8, "[prova e2e] Da spiegare con lo stato", _LUN - timedelta(days=7), _LUN + timedelta(days=13)),
-    ("T903", "P002", 8, "[prova e2e] Da spiegare con le ore", _LUN - timedelta(days=7), _LUN + timedelta(days=13)),
+    # id     progetto  fase  nome                                   inizio      fine      stato
+    ("T900", "P002", 8, "[prova e2e] Ritocco integrazione fuori piano", _LUN + timedelta(days=15), _LUN + timedelta(days=22), _DA_INIZIARE),
+    ("T901", "P008", 31, "[prova e2e] Sopralluogo non pianificato", _LUN + timedelta(days=14), _LUN + timedelta(days=20), _DA_INIZIARE),
+    ("T902", "P002", 8, "[prova e2e] Da spiegare con lo stato", _LUN - timedelta(days=7), _LUN + timedelta(days=13), _DA_INIZIARE),
+    ("T903", "P002", 8, "[prova e2e] Da spiegare con le ore", _LUN - timedelta(days=7), _LUN + timedelta(days=13), _DA_INIZIARE),
+    ("T904", "P008", 31, "[prova e2e] Da offrire nella lista", _LUN + timedelta(days=16), _LUN + timedelta(days=25), _DA_INIZIARE),
+    ("T905", "P002", 8, "[prova e2e] In griglia dentro la settimana", _LUN - timedelta(days=7), _LUN + timedelta(days=13), _DA_INIZIARE),
+    ("T906", "P002", 8, "[prova e2e] In griglia perché scaduto", _LUN - timedelta(days=21), _LUN - timedelta(days=8), _DA_INIZIARE),
+    ("T907", "P002", 8, "[prova e2e] Completato fuori orizzonte", _LUN - timedelta(days=60), _LUN - timedelta(days=45), "Completato"),
 ]
 
 
 def crea():
     session = get_session()
     try:
-        for tid, pid, fase_id, nome, inizio, fine in TASK_PROVA:
+        for tid, pid, fase_id, nome, inizio, fine, stato in TASK_PROVA:
             if session.query(Task).filter(Task.id == tid).first():
                 print(f"  {tid} c'è già")
                 continue
             session.add(Task(
                 id=tid, progetto_id=pid, fase_id=fase_id, nome=nome,
-                stato="Da iniziare", dipendente_id=DIPENDENTE,
+                stato=stato, dipendente_id=DIPENDENTE,
                 data_inizio=inizio, data_fine=fine,
                 ore_stimate=8, ore_pianificate=8,
             ))
