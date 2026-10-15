@@ -66,7 +66,8 @@ export default function GanttPage() {
   const navigate = useNavigate()
 
   // Step 2.3-bis 4d (19/05/2026): rimosso state `vista`. GANTT è solo Timeline.
-  const [filtroStato, setFiltroStato] = useState('attivi')  // attivi | in esecuzione | sospeso
+  // Default "in piano": anche i progetti Da iniziare (models.STATI_PROGETTO_IN_PIANO).
+  const [filtroStato, setFiltroStato] = useState('in piano')
 
   // State legacy (per la vista timeline)
   const [ganttStrutturato, setGanttStrutturato] = useState([])
@@ -78,9 +79,12 @@ export default function GanttPage() {
   const [esportando, setEsportando] = useState(false)
 
   // Mount: anagrafica progetti+dipendenti (per filtri dropdown).
+  // La tendina dei progetti offre quelli "in piano", lo stesso insieme del
+  // filtro di stato più largo: l'elenco lo decide il backend, non una lista
+  // di stati scritta qui.
   // La gerarchia ganttStrutturato è gestita dal useEffect successivo.
   useEffect(() => {
-    Promise.all([fetchProgetti(), fetchDipendenti()])
+    Promise.all([fetchProgetti('in piano'), fetchDipendenti()])
       .then(([p, d]) => { setProgetti(p); setDipendenti(d) })
       .finally(() => setLoading(false))
   }, [])
@@ -138,7 +142,6 @@ export default function GanttPage() {
   if (loading) return <p className="text-gray-400">Caricamento...</p>
 
   const profili = [...new Set(dipendenti.map(d => d.profilo))].sort()
-  const progettiAttivi = progetti.filter(p => ['In esecuzione', 'In bando'].includes(p.stato))
 
   return (
     <div>
@@ -161,14 +164,15 @@ export default function GanttPage() {
               onChange={e => setFiltroStato(e.target.value)}
               className="bg-gray-800 border border-gray-600 rounded-lg px-3 py-1.5 text-sm"
             >
-              <option value="attivi">Attivi (In esecuzione + Sospeso)</option>
+              <option value="in piano">In piano (Da iniziare + In esecuzione + Sospeso)</option>
+              <option value="da iniziare">Solo Da iniziare</option>
               <option value="in esecuzione">Solo In esecuzione</option>
               <option value="sospeso">Solo Sospeso</option>
             </select>
             <select value={filtroProgetto} onChange={e => setFiltroProgetto(e.target.value)}
               className="bg-gray-800 border border-gray-600 rounded-lg px-4 py-2 text-sm">
               <option value="">Tutti i progetti</option>
-              {progettiAttivi.map(p => <option key={p.id} value={p.id}>{p.nome}</option>)}
+              {progetti.map(p => <option key={p.id} value={p.id}>{p.nome}</option>)}
             </select>
             <select value={filtroProfilo} onChange={e => setFiltroProfilo(e.target.value)}
               className="bg-gray-800 border border-gray-600 rounded-lg px-4 py-2 text-sm">

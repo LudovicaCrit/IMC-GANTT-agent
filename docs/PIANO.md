@@ -21,11 +21,11 @@
 - ✅ Modello Gemini da variabile d'ambiente
 - ✅ Pipeline e Tavolo di Lavoro fuori dal menu e dal codice, con i loro endpoint orfani (/api/tasks/applica, /api/agent/* non usati, /api/pianificazione/*), le funzioni morte di api.js e la dipendenza frappe-gantt. Prima si archiviano gli embrioni IA da recuperare. Attenzione: il webServer degli e2e usa /api/agent/status come healthcheck, va sostituito nello stesso passo.
 - ✅ Export GANTT: PDF funzionante (dipendenza mancante), PNG senza pdftoppm
-- ☐ Progetti "Da iniziare" visibili in Cantiere e GANTT
-- ☐ PUT /api/progetti/{id}/completo non azzera i campi che il Wizard non manda
+- ✅ Progetti "Da iniziare" visibili in Cantiere e GANTT
+- ✅ PUT /api/progetti/{id}/completo non azzera i campi che il Wizard non manda
 - ☐ Configurazione: salvare un dipendente non azzera la sede
-- ☐ azienda_id assegnata alla creazione del progetto (Wizard + backend)
-- ☐ GANTT: tendina progetti senza lo stato inesistente "In bando", Sospesi selezionabili
+- ✅ azienda_id assegnata alla creazione del progetto (Wizard + backend)
+- ✅ GANTT: tendina progetti senza lo stato inesistente "In bando", Sospesi selezionabili
 - ✅ Colori degli stati in un solo punto: legenda, GanttChartFasi e TimelineBars coerenti
 - ☐ VistaManagement: nome del dipendente invece dell'id
 - ☐ Risorse: filtro per tipologia interna invece dell'id P010 cablato

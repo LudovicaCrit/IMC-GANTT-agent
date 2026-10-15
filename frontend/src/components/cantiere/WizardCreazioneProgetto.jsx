@@ -3,7 +3,7 @@
 //
 // Step 2.7 parte 2 (scheletro 19/05/2026 sera):
 //   Step 1: Anagrafica (obbligatorio)
-//     - nome, cliente, tipologia, PM, data_inizio, data_fine, budget_ore
+//     - nome, cliente, tipologia, società, PM, data_inizio, data_fine, budget_ore
 //   Step 2: Fasi (obbligatorio, almeno 1 fase)
 //     - tabella editabile: nome, ordine, data_inizio, data_fine, ore_vendute
 //     - somma ore vendute fase deve quadrare col budget progetto
@@ -29,8 +29,9 @@
 // ═════════════════════════════════════════════════════════════════════════
 
 import React, { useState, useEffect } from 'react'
-import { fetchDipendenti } from '../../api'
+import { fetchDipendenti, fetchAziende } from '../../api'
 import { FormInput, FormSelect } from '../_shared/Form'
+import { isoLocale } from '../_shared/ganttSvg'
 
 
 export default function WizardCreazioneProgetto({ onClose, onCreaProgetto, bozzaIniziale = null }) {
@@ -41,6 +42,7 @@ export default function WizardCreazioneProgetto({ onClose, onCreaProgetto, bozza
 
   const [step, setStep] = useState(1)
   const [dipendenti, setDipendenti] = useState([])
+  const [aziende, setAziende] = useState([])
 
   // Stato form complessivo — precaricato dalla bozza se presente
   const [anagrafica, setAnagrafica] = useState(
@@ -49,6 +51,7 @@ export default function WizardCreazioneProgetto({ onClose, onCreaProgetto, bozza
           nome: bozzaIniziale.nome || '',
           cliente: bozzaIniziale.cliente || '',
           tipologia: bozzaIniziale.tipologia || 'ordinario',
+          azienda_id: bozzaIniziale.azienda_id ?? '',
           pm_id: bozzaIniziale.pm_id || '',
           data_inizio: bozzaIniziale.data_inizio || '',
           data_fine: bozzaIniziale.data_fine || '',
@@ -58,6 +61,7 @@ export default function WizardCreazioneProgetto({ onClose, onCreaProgetto, bozza
           nome: '',
           cliente: '',
           tipologia: 'ordinario',
+          azienda_id: '',
           pm_id: '',
           data_inizio: '',
           data_fine: '',
@@ -90,10 +94,14 @@ export default function WizardCreazioneProgetto({ onClose, onCreaProgetto, bozza
 
   useEffect(() => {
     fetchDipendenti().then(d => setDipendenti(d || []))
+    fetchAziende().then(a => setAziende(a || []))
   }, [])
 
   // ── Validazione step 1 ────────────────────────────────────────────────
+  // La società serve a ogni progetto del Wizard, bozza compresa: il Wizard
+  // crea solo ordinari e bandi, e il backend li rifiuta senza società.
   const step1Valido = anagrafica.nome.trim() !== '' && anagrafica.budget_ore > 0
+    && anagrafica.azienda_id !== ''
 
   // ── Validazione step 2 ────────────────────────────────────────────────
   const totaleOreFasi = fasi.reduce((s, f) => s + Number(f.ore_vendute || 0), 0)
@@ -114,7 +122,9 @@ export default function WizardCreazioneProgetto({ onClose, onCreaProgetto, bozza
     && anagrafica.pm_id.trim() !== ''
 
   // data_inizio futura? (stringa ISO 'YYYY-MM-DD' confrontata con oggi)
-  const oggiISO = new Date().toISOString().slice(0, 10)
+  // Oggi è il giorno LOCALE, come nell'export: toISOString darebbe quello
+  // UTC, che fra mezzanotte e le 2 in Italia è ancora ieri.
+  const oggiISO = isoLocale(new Date())
   const dataInizioFutura = anagrafica.data_inizio !== '' && anagrafica.data_inizio > oggiISO
 
   // "In esecuzione" sensato solo se la data non è nel futuro;
@@ -135,6 +145,7 @@ export default function WizardCreazioneProgetto({ onClose, onCreaProgetto, bozza
           nome: anagrafica.nome.trim(),
           cliente: anagrafica.cliente.trim() || null,
           tipologia: anagrafica.tipologia,
+          azienda_id: Number(anagrafica.azienda_id),
           stato: statoScelto,
           pm_id: anagrafica.pm_id || null,
           data_inizio: anagrafica.data_inizio || null,
@@ -199,6 +210,7 @@ export default function WizardCreazioneProgetto({ onClose, onCreaProgetto, bozza
               dati={anagrafica}
               onChange={setAnagrafica}
               dipendenti={dipendenti}
+              aziende={aziende}
             />
           )}
           {step === 2 && (
@@ -300,7 +312,7 @@ export default function WizardCreazioneProgetto({ onClose, onCreaProgetto, bozza
 // Step 1 — Anagrafica
 // ═════════════════════════════════════════════════════════════════════════
 
-function StepAnagrafica({ dati, onChange, dipendenti }) {
+function StepAnagrafica({ dati, onChange, dipendenti, aziende }) {
   const pmOptions = [
     { value: '', label: '— (da assegnare) —' },
     ...dipendenti.map(d => ({ value: d.id, label: `${d.nome} (${d.profilo || '—'})` }))
@@ -337,6 +349,16 @@ function StepAnagrafica({ dati, onChange, dipendenti }) {
           ]}
         />
       </div>
+
+      <FormSelect
+        label="Società *"
+        value={dati.azienda_id}
+        onChange={v => onChange({ ...dati, azienda_id: v })}
+        options={[
+          { value: '', label: '— scegli la società —' },
+          ...aziende.map(a => ({ value: a.id, label: a.nome })),
+        ]}
+      />
 
       <FormSelect
         label="PM (Project Manager)"

@@ -10,7 +10,8 @@
 //   2. COMPLETARE BOZZE esistenti → ripresa di progetti in stato "Bozza" che
 //      avevano nome+cliente ma fasi/task incompleti
 //
-//   3. DETTAGLIARE PROGETTI ATTIVI/SOSPESI → principio cardine dinamismo:
+//   3. DETTAGLIARE PROGETTI IN PIANO (da iniziare, attivi, sospesi) →
+//      principio cardine dinamismo:
 //      i task si sviluppano nel corso dei mesi, le ore vendute al cliente
 //      sono quelle delle FASI, i task vengono aggiunti progressivamente.
 //      Da qui si seleziona un progetto attivo e si aggiungono task alla
@@ -69,6 +70,7 @@ function progettoABozzaIniziale(p) {
     nome: p.nome || '',
     cliente: p.cliente || '',
     tipologia: p.tipologia || 'ordinario',
+    azienda_id: p.azienda_id ?? '',
     pm_id: p.pm_id || '',
     data_inizio: p.data_inizio || '',
     data_fine: p.data_fine || '',
@@ -81,7 +83,9 @@ function progettoABozzaIniziale(p) {
 
 export default function CantierePage() {
   const navigate = useNavigate()
-  const [data, setData] = useState([])
+  // Due elenchi, ciascuno col filtro di stato del backend
+  // (models.filtro_stato_progetto): le bozze e i progetti in piano.
+  const [data, setData] = useState({ bozze: [], inPiano: [] })
   const [loading, setLoading] = useState(true)
   const [errore, setErrore] = useState(null)
   const [wizardAperto, setWizardAperto] = useState(false)
@@ -95,8 +99,11 @@ export default function CantierePage() {
   const caricaCantiere = useCallback(() => {
     setLoading(true)
     setErrore(null)
-    return fetchGanttStrutturato({ stato: 'all' })
-      .then(d => setData(d || []))
+    return Promise.all([
+      fetchGanttStrutturato({ stato: 'bozza' }),
+      fetchGanttStrutturato({ stato: 'in piano' }),
+    ])
+      .then(([bozze, inPiano]) => setData({ bozze: bozze || [], inPiano: inPiano || [] }))
       .catch(e => setErrore(e.message || 'Errore di caricamento'))
       .finally(() => setLoading(false))
   }, [])
@@ -109,15 +116,8 @@ export default function CantierePage() {
   // Le attività interne (tipologia 'interna') NON compaiono in Cantiere: hanno
   // la loro pagina dedicata "Attività Interne". Cantiere è per progetti-cliente
   // (ordinario) e bandi. Distinzione introdotta con Migration #2 (03/06/2026).
-  const progettiCantiere = useMemo(
-    () => data.filter(p => p.tipologia !== 'interna'),
-    [data]
-  )
-  const bozze = useMemo(() => progettiCantiere.filter(p => p.stato === 'Bozza'), [progettiCantiere])
-  const attiviSospesi = useMemo(
-    () => progettiCantiere.filter(p => p.stato === 'In esecuzione' || p.stato === 'Sospeso'),
-    [progettiCantiere]
-  )
+  const bozze = useMemo(() => data.bozze.filter(p => p.tipologia !== 'interna'), [data])
+  const inPiano = useMemo(() => data.inPiano.filter(p => p.tipologia !== 'interna'), [data])
 
   return (
     <div className="max-w-6xl">
@@ -201,16 +201,16 @@ export default function CantierePage() {
             colorAccent="#f59e0b"
           />
 
-          {/* Sezione 2 — Progetti attivi/sospesi (per staffing progressivo) */}
+          {/* Sezione 2 — Progetti in piano (per staffing progressivo) */}
           <SezioneCantiere
-            titolo="🔧 Progetti attivi e sospesi"
-            descrizione="Progetti in corso a cui aggiungere task progressivamente — i task si sviluppano nel tempo, le ore vendute restano quelle delle fasi."
-            progetti={attiviSospesi}
+            titolo="🔧 Progetti da iniziare, attivi e sospesi"
+            descrizione="Progetti approvati a cui aggiungere task progressivamente, anche prima che partano — i task si sviluppano nel tempo, le ore vendute restano quelle delle fasi."
+            progetti={inPiano}
             ctaLabel="Aggiungi task"
             ctaDisabled={false}
             ctaTooltip="Aggiungi uno o più task a una fase di questo progetto"
             onCta={(progetto) => setProgettoStaffing(progetto)}
-            emptyMessage="Nessun progetto attivo o sospeso al momento."
+            emptyMessage="Nessun progetto da iniziare, attivo o sospeso al momento."
             navigate={navigate}
             colorAccent="#3b82f6"
           />

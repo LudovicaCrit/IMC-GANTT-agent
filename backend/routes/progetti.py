@@ -27,10 +27,11 @@ ENDPOINT ESPOSTI
 
 DETTAGLIO ENDPOINT
 ──────────────────
-1. GET /api/progetti?stato=bozza|in esecuzione|sospeso|completato|annullato|attivi|all
+1. GET /api/progetti?stato=bozza|in esecuzione|sospeso|completato|annullato|attivi|in piano|all
    - Manager-only. Restituisce lista progetti con stato avanzamento.
-   - Filtro `stato` opzionale (default: "attivi" = In esecuzione + Sospeso).
-     Valori speciali: "all" (tutti), "attivi" (In esecuzione + Sospeso).
+   - Filtro `stato` opzionale (default: "attivi" = In esecuzione + Sospeso),
+     letto da `models.filtro_stato_progetto`. Valori speciali: "all" (tutti),
+     "attivi" (In esecuzione + Sospeso), "in piano" (Da iniziare + attivi).
    - Default backward-compatible: chi consuma /api/progetti senza filtri
      riceve lo stesso subset di sempre (attivi + sospesi).
 
@@ -38,6 +39,9 @@ DETTAGLIO ENDPOINT
    - Manager-only. Crea un nuovo progetto (bozza o attivo).
    - Body: ProgettoCreate (id opzionale, generato server-side se mancante).
    - Stato di default: "Bozza".
+   - Un progetto ordinario o bando senza società è rifiutato con 422
+     (`_valida_societa`); un interno può non averla. Vale anche per
+     POST /completo e PUT /{id}/completo.
 
 3. PATCH /api/progetti/{id}
    - Manager-only. Modifica anagrafica e/o stato.
@@ -63,7 +67,8 @@ DIPENDENZE
 - `data_db_impl`: `_next_progetto_id`, `genera_id_task_multipli`,
   `_to_dt` (per format ISO datetime).
 - `models`: `get_session`, `Utente`, `Progetto`, `Fase`, `Task`,
-  `DipendenzaTask`, `STATI_PROGETTO`, `STATI_PROGETTO_ATTIVI`.
+  `DipendenzaTask`, `Azienda`, `STATI_PROGETTO`, `STATI_PROGETTO_IN_PIANO`,
+  `filtro_stato_progetto`.
 - `deps`: `require_manager`.
 
 STORIA
@@ -86,8 +91,9 @@ from sqlalchemy import func, case
 
 from deps import require_manager
 from models import (
-    get_session, Utente, Progetto, Fase, Task, DipendenzaTask,
-    STATI_PROGETTO, STATI_PROGETTO_ATTIVI, URGENZA_DEFAULT, LIVELLI_URGENZA,
+    get_session, Utente, Progetto, Fase, Task, DipendenzaTask, Azienda,
+    STATI_PROGETTO, STATI_PROGETTO_IN_PIANO, URGENZA_DEFAULT, LIVELLI_URGENZA,
+    filtro_stato_progetto,
 )
 from data import ore_consuntivate_progetto, tasso_compilazione_progetto
 from data_db_impl import (_next_progetto_id, genera_id_task_multipli, _to_dt,
@@ -99,7 +105,6 @@ from data_db_impl import (_next_progetto_id, genera_id_task_multipli, _to_dt,
 # Stati ammessi: importati da models.STATI_PROGETTO (fonte di verità unica,
 # allineata al CHECK constraint del DB tramite migration D3).
 STATI_PROGETTO_AMMESSI = STATI_PROGETTO
-STATI_ATTIVI = STATI_PROGETTO_ATTIVI
 
 
 def _valida_urgenza(valore):
@@ -124,6 +129,31 @@ def _valida_urgenza(valore):
             f"{', '.join(LIVELLI_URGENZA)}.",
         )
     return valore
+
+
+def _valida_societa(session, tipologia, azienda_id):
+    """Alza 422 se un progetto ordinario o bando non ha una società valida.
+
+    Un progetto commerciale è lavoro DI una società del gruppo: senza, la Home
+    non saprebbe in quale ramo metterlo e l'Economia in quale totale. Un
+    interno può non averla. La società deve esistere fra quelle di
+    Configurazione: un id inventato arriverebbe alla foreign key come
+    IntegrityError, cioè un 500 opaco su un errore del client.
+    """
+    if azienda_id is None:
+        if tipologia != "interna":
+            raise HTTPException(
+                422,
+                f"Un progetto di tipologia '{tipologia}' deve avere una società: "
+                f"sceglila fra quelle in Configurazione.",
+            )
+        return
+    if session.get(Azienda, azienda_id) is None:
+        raise HTTPException(
+            422,
+            f"La società {azienda_id} non esiste: scegline una fra quelle in "
+            f"Configurazione.",
+        )
 
 
 class ProgettoCreate(BaseModel):
@@ -153,6 +183,7 @@ class ProgettoCreate(BaseModel):
     fase_corrente: Optional[str] = Field(default=None, max_length=80)
     sede: Optional[str] = Field(default=None, max_length=40)
     pm_id: Optional[str] = Field(default=None, max_length=10)
+    azienda_id: Optional[int] = None
     scadenza_bando: Optional[date_type] = None
     note: Optional[str] = None
 
@@ -160,6 +191,17 @@ class ProgettoCreate(BaseModel):
     def _urgenza_ammessa(self):
         _valida_urgenza(self.urgenza)
         return self
+
+
+# I campi dell'anagrafica che il completamento di una bozza può scrivere.
+# Whitelist esplicita: `id` resta fuori (il progetto è quello dell'URL), e
+# un campo nuovo del DTO non diventa scrivibile senza passare di qui.
+CAMPI_ANAGRAFICA_COMPLETAMENTO = (
+    "nome", "cliente", "stato", "tipologia", "priorita", "urgenza",
+    "data_inizio", "data_fine", "budget_ore", "giornate_vendute",
+    "valore_contratto", "descrizione", "fase_corrente", "sede", "pm_id",
+    "azienda_id", "scadenza_bando", "note",
+)
 
 
 class ProgettoUpdate(BaseModel):
@@ -248,8 +290,9 @@ class TaskStaffing(BaseModel):
 class StaffingRequest(BaseModel):
     """Body per POST /api/progetti/{id}/task-multipli.
 
-    Aggiunge uno o più task a fasi esistenti di un progetto attivo/sospeso,
-    in un'unica transazione (principio del dinamismo, handoff §0.3).
+    Aggiunge uno o più task a fasi esistenti di un progetto da iniziare,
+    attivo o sospeso, in un'unica transazione (principio del dinamismo,
+    handoff §0.3).
     """
     task: list[TaskStaffing] = Field(..., min_length=1)
 
@@ -298,21 +341,19 @@ def lista_progetti(stato: Optional[str] = None, _: Utente = Depends(require_mana
 
     Filtro opzionale `?stato=`:
       - omesso o "attivi": In esecuzione + Sospeso (default backward-compat)
-      - "bozza": solo bozze (per Cantiere "In cantiere")
+      - "in piano": Da iniziare + In esecuzione + Sospeso (tendina del GANTT)
+      - "bozza": solo bozze
       - "all": tutti i progetti
       - altro: filtro singolo case-insensitive su `stato`
+    La regola sta in `models.filtro_stato_progetto`, la stessa del GANTT.
     """
     session = get_session()
     q = session.query(Progetto)
+    condizione = filtro_stato_progetto(stato)
+    if condizione is not None:
+        q = q.filter(condizione)
 
-    if stato is None or stato.lower() == "attivi":
-        q = q.filter(Progetto.stato.in_(STATI_ATTIVI))
-    elif stato.lower() == "all":
-        pass
-    else:
-        q = q.filter(func.lower(Progetto.stato) == stato.lower())
-
-    progetti = q.all()
+    progetti = q.order_by(Progetto.id).all()
 
     # Aggregati task in UNA sola query (GROUP BY progetto_id) per evitare
     # un filter DataFrame N+1 nella serializzazione.
@@ -352,6 +393,7 @@ def crea_progetto(req: ProgettoCreate, _: Utente = Depends(require_manager)):
 
         if session.query(Progetto).filter(Progetto.id == progetto_id).first():
             raise HTTPException(status_code=409, detail=f"Progetto id '{progetto_id}' già esistente")
+        _valida_societa(session, req.tipologia, req.azienda_id)
 
         nuovo = Progetto(
             id=progetto_id,
@@ -370,6 +412,7 @@ def crea_progetto(req: ProgettoCreate, _: Utente = Depends(require_manager)):
             fase_corrente=req.fase_corrente,
             sede=req.sede,
             pm_id=req.pm_id,
+            azienda_id=req.azienda_id,
             scadenza_bando=req.scadenza_bando,
             note=req.note,
         )
@@ -434,6 +477,7 @@ def crea_progetto_completo(req: ProgettoCompletoCreate, _: Utente = Depends(requ
                 status_code=409,
                 detail=f"Progetto id '{progetto_id}' già esistente"
             )
+        _valida_societa(session, p.tipologia, p.azienda_id)
 
         nuovo = Progetto(
             id=progetto_id, nome=p.nome, cliente=p.cliente, stato=p.stato,
@@ -441,7 +485,8 @@ def crea_progetto_completo(req: ProgettoCompletoCreate, _: Utente = Depends(requ
             data_inizio=p.data_inizio, data_fine=p.data_fine, budget_ore=p.budget_ore,
             giornate_vendute=p.giornate_vendute, valore_contratto=p.valore_contratto,
             descrizione=p.descrizione, fase_corrente=p.fase_corrente, sede=p.sede,
-            pm_id=p.pm_id, scadenza_bando=p.scadenza_bando, note=p.note,
+            pm_id=p.pm_id, azienda_id=p.azienda_id,
+            scadenza_bando=p.scadenza_bando, note=p.note,
         )
         session.add(nuovo)
 
@@ -558,6 +603,11 @@ def completa_progetto(progetto_id: str, req: ProgettoCompletoCreate,
       - ammesso SOLO se il progetto è in stato 'Bozza' (un progetto attivo
         ha dati reali: cancellarne le fasi sarebbe distruttivo).
 
+    Dell'anagrafica si scrivono SOLO i campi presenti nel body
+    (`model_fields_set`): il Wizard non manda descrizione, note, valore del
+    contratto, urgenza e altri, e assegnarli tutti li azzerava o li riportava
+    ai default del DTO.
+
     Tutto in un'unica transazione: o l'intero completamento va a buon fine,
     o la bozza resta esattamente com'era.
     """
@@ -606,24 +656,11 @@ def completa_progetto(progetto_id: str, req: ProgettoCompletoCreate,
                        f"'{progetto.stato}'. Usa il Cantiere per modificarlo."
             )
 
-        # ── 1. Aggiorna anagrafica del progetto esistente ────────────────
-        progetto.nome = p.nome
-        progetto.cliente = p.cliente
-        progetto.stato = p.stato
-        progetto.tipologia = p.tipologia
-        progetto.priorita = p.priorita
-        progetto.urgenza = p.urgenza
-        progetto.data_inizio = p.data_inizio
-        progetto.data_fine = p.data_fine
-        progetto.budget_ore = p.budget_ore
-        progetto.giornate_vendute = p.giornate_vendute
-        progetto.valore_contratto = p.valore_contratto
-        progetto.descrizione = p.descrizione
-        progetto.fase_corrente = p.fase_corrente
-        progetto.sede = p.sede
-        progetto.pm_id = p.pm_id
-        progetto.scadenza_bando = p.scadenza_bando
-        progetto.note = p.note
+        # ── 1. Aggiorna anagrafica: solo i campi inviati ─────────────────
+        for campo in CAMPI_ANAGRAFICA_COMPLETAMENTO:
+            if campo in p.model_fields_set:
+                setattr(progetto, campo, getattr(p, campo))
+        _valida_societa(session, progetto.tipologia, progetto.azienda_id)
 
         # ── 2. Cancella le fasi vecchie (i task figli vanno via in cascata,
         #       Fase.task ha cascade="all, delete-orphan"). Sicuro perché
@@ -736,9 +773,9 @@ def aggiungi_task_multipli(progetto_id: str, req: StaffingRequest,
     fasi man mano che il progetto procede.
 
     Vincoli:
-      - il progetto deve essere 'In esecuzione' o 'Sospeso' (non Bozza:
-        per le bozze si usa il completamento; non Completato/Annullato:
-        sono chiusi).
+      - il progetto deve essere 'Da iniziare', 'In esecuzione' o 'Sospeso'
+        (non Bozza: per le bozze si usa il completamento; non
+        Completato/Annullato: sono chiusi).
       - ogni fase_id referenziato deve appartenere a QUESTO progetto.
       - retrodatazione task ammessa solo se il progetto è 'In esecuzione'.
 
@@ -748,19 +785,21 @@ def aggiungi_task_multipli(progetto_id: str, req: StaffingRequest,
 
     session = get_session()
     try:
-        # ── 0. Il progetto deve esistere ed essere attivo/sospeso ────────
+        # ── 0. Il progetto deve esistere ed essere in piano ─────────────
         progetto = session.query(Progetto).filter(Progetto.id == progetto_id).first()
         if not progetto:
             raise HTTPException(
                 status_code=404,
                 detail=f"Progetto '{progetto_id}' non trovato."
             )
-        if progetto.stato not in STATI_ATTIVI:
+        # Anche "Da iniziare": un progetto che parte fra un mese si staffa
+        # adesso (STATI_PROGETTO_IN_PIANO).
+        if progetto.stato not in STATI_PROGETTO_IN_PIANO:
             raise HTTPException(
                 status_code=409,
-                detail=f"L'aggiunta di task è ammessa solo per progetti attivi o "
-                       f"sospesi. Il progetto '{progetto_id}' è in stato "
-                       f"'{progetto.stato}'."
+                detail=f"L'aggiunta di task è ammessa solo per progetti da "
+                       f"iniziare, attivi o sospesi. Il progetto '{progetto_id}' "
+                       f"è in stato '{progetto.stato}'."
             )
         consenti_date_passate = (progetto.stato == "In esecuzione")
 

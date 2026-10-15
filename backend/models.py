@@ -93,10 +93,38 @@ STATI_PROGETTO = (
     "Completato",
     "Annullato",
 )
-# Sottoinsieme "attivi": progetti visibili in GANTT e Cantiere "Progetti attivi"
-# (handoff §3.3). Bozza vive solo in Cantiere "In cantiere", Completato/Annullato
-# in Archivio. "Da iniziare" è in attesa di partire, gestito con alert Home.
+# Sottoinsieme "attivi": i progetti partiti e non chiusi. Sono quelli che
+# chiedono ore e decisioni: li usano la Home (attenzione, sforamenti), la
+# vista-PM della consuntivazione e il default `?stato=` delle liste.
+# Bozza vive solo nel Cantiere, Completato/Annullato in Archivio.
 STATI_PROGETTO_ATTIVI = ("In esecuzione", "Sospeso")
+
+# Sottoinsieme "in piano": gli attivi più "Da iniziare", cioè i progetti
+# approvati e non chiusi. È quello che mostrano il GANTT e il Cantiere: un
+# progetto che parte fra un mese ha già fasi e task da vedere e da staffare.
+# Non sostituisce gli attivi: un progetto non ancora partito non ha ore da
+# consuntivare né sforamenti, e nella Home sarebbe rumore.
+STATI_PROGETTO_IN_PIANO = ("Da iniziare",) + STATI_PROGETTO_ATTIVI
+
+
+def filtro_stato_progetto(stato):
+    """La condizione SQL del parametro `?stato=` sui progetti, una sola per
+    gli endpoint che lo accettano (/api/progetti, /api/gantt/strutturato,
+    l'export Excel). Restituisce None quando non si filtra.
+
+      - assente o "attivi": STATI_PROGETTO_ATTIVI
+      - "in piano": STATI_PROGETTO_IN_PIANO
+      - "all": nessun filtro
+      - altro: quello stato, senza badare alle maiuscole
+    """
+    chiave = (stato or "attivi").lower()
+    if chiave == "attivi":
+        return Progetto.stato.in_(STATI_PROGETTO_ATTIVI)
+    if chiave == "in piano":
+        return Progetto.stato.in_(STATI_PROGETTO_IN_PIANO)
+    if chiave == "all":
+        return None
+    return func.lower(Progetto.stato) == chiave
 
 # Step 2.7-pre (20/05/2026): stati Task formalizzati. Prima il modello accettava
 # qualsiasi stringa (no CHECK su task.stato). Sospeso e Annullato erano scritti

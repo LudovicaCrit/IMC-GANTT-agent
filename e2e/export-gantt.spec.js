@@ -48,7 +48,7 @@ function fileNelloZip(zip) {
 }
 
 async function fogliAttesi(request, progettoId) {
-  const query = progettoId ? `?stato=attivi&progetto_id=${progettoId}` : '?stato=attivi'
+  const query = progettoId ? `?stato=in%20piano&progetto_id=${progettoId}` : '?stato=in%20piano'
   const r = await request.get(`/api/gantt/strutturato${query}`)
   expect(r.status()).toBe(200)
   return costruisciPagine(await r.json(), { titolo: 'conteggio' }).length

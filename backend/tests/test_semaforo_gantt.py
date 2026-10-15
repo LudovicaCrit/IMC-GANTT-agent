@@ -40,6 +40,8 @@ CAMPI_PROGETTO = {
     # Urgenza (A1, 03/09/2026): sul progetto è un campo solo, sempre
     # valorizzato — è NOT NULL perché è la radice dell'eredità delle fasi.
     "urgenza",
+    # Società (Fase 1, passo 5): serve al Wizard che riprende una bozza.
+    "azienda_id",
 }
 CAMPI_FASE = {
     "id", "nome", "ordine", "stato", "data_inizio", "data_fine",

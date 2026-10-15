@@ -75,7 +75,7 @@ DIPENDENZE INTERNE
 - `data` (modulo): `get_dipendente`.
 - `models`: `Progetto`, `Fase`, `Task`, `OreSettimanali` (vista delle ore,
   al posto di `Consuntivo.ore_dichiarate`), `Dipendente`,
-  `get_session`, `STATI_PROGETTO_ATTIVI`.
+  `get_session`, `filtro_stato_progetto`.
 - `stati_colori`: colori ed etichette degli stati (condiviso/stati.json).
 - `data_db_impl._to_dt`: normalizza `Date` SQL → `datetime` a mezzanotte
   (necessario per l'export Excel — vedi NOTE TECNICHE).
@@ -112,7 +112,7 @@ from sqlalchemy import func
 from deps import require_manager
 from models import (
     Utente, Progetto, Fase, Task, OreSettimanali, Dipendente, Sottotask,
-    get_session, STATI_PROGETTO_ATTIVI, urgenza_fase_risolta,
+    get_session, filtro_stato_progetto, urgenza_fase_risolta,
 )
 
 
@@ -271,15 +271,11 @@ def dati_gantt(
 def _filtra_progetti(q, stato: Optional[str], progetto_id: Optional[str]):
     """Il filtro sui progetti della pagina GANTT, uno solo per lo schermo
     (/strutturato) e per l'export Excel. Con `progetto_id` vale solo quello;
-    altrimenti `stato`: "attivi" (anche se assente) = STATI_PROGETTO_ATTIVI,
-    "all" = nessun filtro, altro = quello stato, senza badare alle maiuscole."""
+    altrimenti `stato`, letto da `models.filtro_stato_progetto`."""
     if progetto_id:
         return q.filter(Progetto.id == progetto_id)
-    if stato is None or stato.lower() == "attivi":
-        return q.filter(Progetto.stato.in_(STATI_PROGETTO_ATTIVI))
-    if stato.lower() != "all":
-        return q.filter(func.lower(Progetto.stato) == stato.lower())
-    return q
+    condizione = filtro_stato_progetto(stato)
+    return q if condizione is None else q.filter(condizione)
 
 
 @router.get("/strutturato")
@@ -293,9 +289,10 @@ def gantt_strutturato(
     Step 2.2 del Blocco 2 esteso (handoff v15 §2.2 punto 1, §2.3).
 
     Filtri query params:
-    - `stato`: filtra i progetti per stato. Default: "attivi"
-      (In esecuzione + Sospeso, allineato a handoff §3.3).
-      Valori: "attivi" | "all" | "bozza" | "in esecuzione" | ...
+    - `stato`: filtra i progetti per stato (models.filtro_stato_progetto).
+      Default: "attivi" (In esecuzione + Sospeso). La pagina GANTT chiede
+      "in piano" (anche i Da iniziare).
+      Valori: "attivi" | "in piano" | "all" | "bozza" | "in esecuzione" | ...
     - `progetto_id`: drill su un singolo progetto (utile per `/cantiere/{id}`).
 
     Struttura risposta:
@@ -682,6 +679,9 @@ def gantt_strutturato(
                 "data_fine": p.data_fine.isoformat() if p.data_fine else None,
                 "budget_ore": int(p.budget_ore) if p.budget_ore else 0,
                 "pm_id": p.pm_id,
+                # La società: il Wizard la precarica quando si riprende una
+                # bozza, e il PUT /completo la richiede ai progetti commerciali.
+                "azienda_id": p.azienda_id,
                 "ore_vendute_totali": ore_vendute_proj,
                 "ore_consumate_totali": round(ore_consumate_proj, 2),
                 # Urgenza del progetto: un campo solo, sempre valorizzato — è

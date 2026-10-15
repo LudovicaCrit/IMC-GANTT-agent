@@ -207,18 +207,17 @@ def dashboard(current_user: Utente = Depends(get_current_user)):
     decorativa: una Home che mostra solo problemi diventa una pagina che si
     evita di aprire, e smette di essere letta proprio quando servirebbe.
 
-    ── PERCHÉ SI SEGMENTA PER `azienda_id` E NON PER `tipologia` ─────────
-    Oggi i due campi COINCIDONO al 100% (ordinario↔Improve 9, bando↔Innovation
-    Plaza 2, interna↔NULL 27), quindi segmentare per l'uno o per l'altro dà lo
-    stesso risultato — ma non è la stessa domanda, e la differenza si vedrà il
-    giorno in cui un progetto rompe la corrispondenza (il modello lo permette:
-    le due colonne sono indipendenti).
-    `azienda_id` risponde a «DI CHI è questo lavoro», che è la domanda di una
-    Home divisa per società; `tipologia` risponde a «CHE TIPO di lavoro è». Un
-    bando è tale perché lo fa Innovation Plaza, non viceversa. È anche il
-    criterio di `margini_economia`, che espone `totali_per_azienda`: due pagine
-    che segmentano lo stesso perimetro devono farlo sullo stesso campo, o i
-    conti non torneranno fra loro.
+    ── DUE DOMANDE, DUE CAMPI ────────────────────────────────────────────
+    «È un'attività interna?» si chiede alla `tipologia`, come fa
+    `margini_economia` (`tipologia != "interna"`): è il campo che dice CHE TIPO
+    di lavoro è. Fino al passo 5 della fase 1 si guardava `azienda_id` vuota, e
+    un progetto commerciale creato da interfaccia, che nasceva senza società,
+    finiva contato fra gli interni.
+    «In quale ramo?» si chiede invece ad `azienda_id`, che dice DI CHI è il
+    lavoro: i rami sono le società. Un commerciale deve averla (lo impongono la
+    creazione e il completamento, routes/progetti.py `_valida_societa`); uno
+    nato prima di quella regola senza società finisce in un ramo a parte,
+    «Società non indicata», visibile invece che confuso con gli interni.
 
     ── LE ATTIVITÀ INTERNE SONO FUORI DAI RAMI, E RIDOTTE A DUE NUMERI ──
     Sono 27 progetti su 38 — la maggioranza — e in tre colonne pari
@@ -322,9 +321,7 @@ def dashboard(current_user: Utente = Depends(get_current_user)):
     )
 
     # ── SMISTAMENTO: ogni progetto nel suo ramo, o fra le interne ────────
-    # `azienda_id is None` ⇔ attività interna. Oggi la corrispondenza con
-    # `tipologia='interna'` è totale; se un giorno si rompesse, questo blocco
-    # segue l'azienda — che è il criterio dichiarato sopra.
+    # Interna per tipologia; il ramo dei commerciali per società (docstring).
     per_ramo = {}
     interne_totali = 0
     interne_attenzione = 0
@@ -332,7 +329,7 @@ def dashboard(current_user: Utente = Depends(get_current_user)):
 
     for p in progetti:
         nodo = alberi.get(p.id)
-        if p.azienda_id is None:
+        if p.tipologia == "interna":
             interne_totali += 1
             # In attenzione solo se ATTIVA e con almeno un motivo: si conta la
             # stessa soglia dei rami, così il numero è confrontabile.
@@ -342,7 +339,8 @@ def dashboard(current_user: Utente = Depends(get_current_user)):
 
         r = per_ramo.setdefault(p.azienda_id, {
             "azienda_id": p.azienda_id,
-            "azienda": aziende.get(p.azienda_id, f"(azienda {p.azienda_id})"),
+            "azienda": (aziende.get(p.azienda_id, f"(azienda {p.azienda_id})")
+                        if p.azienda_id is not None else "Società non indicata"),
             "_progetti": [], "_colori_prog": [], "_colori_fasi": [],
             "_colori_task": [], "_stati": {}, "_completati": 0, "attenzione": [],
         })
@@ -383,7 +381,8 @@ def dashboard(current_user: Utente = Depends(get_current_user)):
         })
     # Ordine STABILE per azienda_id: due rami paritari non hanno una gerarchia,
     # ma la loro posizione non deve ballare fra due caricamenti della pagina.
-    rami.sort(key=lambda x: x["azienda_id"])
+    # Il ramo senza società va in coda.
+    rami.sort(key=lambda x: (x["azienda_id"] is None, x["azienda_id"] or 0))
 
     return {
         "rami": rami,

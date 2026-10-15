@@ -159,8 +159,15 @@ export async function fetchRuoli() {
   return apiFetch(`${API_BASE}/config/ruoli`);
 }
 
+// Le società del gruppo, da Configurazione: il Wizard le offre per i progetti
+// commerciali, senza nomi scritti nel codice.
+export async function fetchAziende() {
+  return apiFetch(`${API_BASE}/config/aziende`);
+}
+
 export async function fetchProgetti(stato = null) {
-  // stato opzionale: "attivi" (default backend), "bozza", "all", "in esecuzione", ecc.
+  // stato opzionale: "attivi" (default backend), "in piano", "bozza", "all",
+  // "in esecuzione", ecc. (backend: models.filtro_stato_progetto)
   const params = new URLSearchParams();
   if (stato) params.set('stato', stato);
   const qs = params.toString();
@@ -214,7 +221,7 @@ export async function fetchTasks(progettoId = null, profilo = null) {
 
 export async function fetchGanttStrutturato({ stato = null, progettoId = null } = {}) {
   // Endpoint gerarchico Progetto → Fase → Task per drill-down (Step 2.2).
-  // stato: "attivi" (default backend), "all", "bozza", "in esecuzione", "sospeso", ecc.
+  // stato: "attivi" (default backend), "in piano", "all", "bozza", "in esecuzione", "sospeso", ecc.
   // progettoId: drill su un singolo progetto.
   const params = new URLSearchParams();
   if (stato) params.set('stato', stato);
