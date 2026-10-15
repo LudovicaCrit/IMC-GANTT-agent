@@ -1,7 +1,7 @@
 # IMC-GANTT-agent — regole per Code
 
 ## Dove guardare
-- docs/INVENTARIO.md: stato del codice. È la fonte di verità; se il codice lo smentisce, dillo.
+- docs/INVENTARIO.md: fotografia del codice al commit indicato in testa. Non si aggiorna: i passi successivi possono averla superata, e lo stato dei lavori sta in docs/PIANO.md. Se il codice la smentisce, dillo.
 - docs/DECISIONI.md: scelte fissate. Non si riaprono.
 - docs/PIANO.md: fasi e passi.
 - docs/BACKLOG.md: debito e idee.
@@ -28,7 +28,7 @@
    - nessun accesso a una relazione nullable senza gestire il caso vuoto.
 7. Soldi in Decimal, arrotondati in un punto solo, nel backend.
 8. Niente N+1. Le query devono reggere 500 dipendenti, non 18.
-9. Test pytest in tests/ per ogni regola di dominio, con il caso nullo nella matrice dei casi.
+9. Test pytest in backend/tests/ per ogni regola di dominio, con il caso nullo nella matrice dei casi.
 10. Codice e migration nello stesso commit. Migration scritte a mano o riviste riga per riga, mai autogenerate accettate alla cieca. Ogni drop ha una guardia che conta prima di agire.
 11. Portabile su Windows Server: pathlib, encoding utf-8 esplicito, niente comandi solo Linux nel funzionamento.
 

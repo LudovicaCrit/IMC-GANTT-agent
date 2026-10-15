@@ -34,8 +34,8 @@ Saturazione: si mostra sia sul piano sia sulle ore vere, affiancate; lo scarto �
 - Uno stato senza ore è legittimo: un task fermo si dichiara con stato e nota.
 - Lo storico migrato è intoccabile; ogni salvataggio sostituisce solo i blocchi manuali.
 - Un task è scomposto se ha pezzi non annullati. La definizione è unica, ovunque.
-- Calendario chiusure aziendali: sospende consuntivazione e copertura. Le ferie non si consuntivano.
-- Modulo presenze e rimborsi: da rifare da zero sulla griglia dei giorni; l'amministrazione vede presenze e spese di tutti.
+- Periodi di assenza: servono solo a far funzionare l'app senza disturbare chi è assente, non a gestire le ferie dell'azienda, la cui comunicazione ufficiale resta fuori dall'app. Il dipendente segna il periodo in Consuntivazione; lo approva il management o un PM di uno dei progetti su cui la persona lavora, e basta la prima approvazione. Solo un periodo approvato ha effetto: nei suoi giorni non si chiede consuntivazione e non partono promemoria, e la copertura li conta come resi conto. Le chiusure aziendali usano lo stesso meccanismo, dichiarate dal management e già approvate. Le ferie non si consuntivano.
+- Presenze e rimborsi: costruiti sulla griglia dei giorni; l'amministrazione vede presenze e spese di tutti. Fanno parte del prodotto presentato.
 
 ## 4. Dal basso verso il piano: un solo meccanismo propone / ratifica
 - Appunto al volo: una casella sempre a portata (Home, griglia, poi avatar vocale). Una riga scritta diventa un pezzo (sottotask) con origine (PM o dipendente), stato di ratifica e, facoltativo, richiesto da. L'IA propone dove collocarlo; senza IA restano due tendine.
@@ -96,7 +96,7 @@ Saturazione: si mostra sia sul piano sia sulle ore vere, affiancate; lo scarto �
 ## 11. Futuro, già deciso nel principio
 - Notifiche (Teams): il giorno stesso in cui un task finisce.
 - Avatar vocale: interfaccia della consuntivazione e dell'appunto al volo.
-- Mobile: nel perimetro, non ancora toccato.
+- Smartphone e PC: l'app è un sito responsive, installabile dal browser come icona, senza store e senza cache offline. Da fuori ufficio si raggiunge tramite la VPN aziendale.
 - Transizioni di stato: registrare quando cambia uno stato, non solo lo stato corrente.
 - Scheda di valutazione di fine progetto: nutre l'IA-Archivio.
 - Tempo di direzione del PM: da modellare con un meccanismo dedicato, non con task-PM legati a pm_id.
