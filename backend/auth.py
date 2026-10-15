@@ -30,12 +30,12 @@ _ph = PasswordHasher()
 # ══════════════════════════════════════════════════════════════
 
 def hash_password(plain_password: str) -> str:
-    """Hasha una password in chiaro con bcrypt."""
+    """Hasha una password in chiaro con Argon2id."""
     return _ph.hash(plain_password)
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """Verifica che una password in chiaro corrisponda all'hash bcrypt."""
+    """Verifica che una password in chiaro corrisponda all'hash Argon2id."""
     try:
         return _ph.verify(hashed_password, plain_password)
     except (VerifyMismatchError, VerificationError, InvalidHashError):
