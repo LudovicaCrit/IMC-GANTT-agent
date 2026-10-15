@@ -463,7 +463,7 @@ def gantt_strutturato(
         # blocco 2-quater (per le righe da serializzare). È la stessa scelta,
         # fatta di nuovo e con gli stessi occhi — non una svista: due letture di
         # una tabella piccola contro un calcolo legato al suo chiamante.
-        # `oggi` non si passa: lo strato dati legge `date.today()` una volta
+        # `oggi` non si passa: lo strato dati legge `get_oggi()` una volta
         # sola e lo usa per tutto l'albero.
         semaforo_per_progetto = semaforo_progetti([p.id for p in progetti])
 
