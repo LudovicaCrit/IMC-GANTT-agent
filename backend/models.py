@@ -25,7 +25,7 @@ load_dotenv()
 from sqlalchemy import (
     create_engine, Column, Integer, String, Float, Boolean, Text, Date,
     DateTime, ForeignKey, UniqueConstraint, CheckConstraint, JSON, SmallInteger,
-    Numeric, ForeignKeyConstraint, func, event, DDL, MetaData, Table,
+    Numeric, ForeignKeyConstraint, func, event, DDL, MetaData, Table, Index,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
@@ -485,7 +485,8 @@ class Dipendente(Base):
     # in `ruoli_aggiuntivi` (M2M) — vedi `DipendentiRuoliAggiuntivi`.
     # azienda_id: ogni persona appartiene a un'azienda del gruppo (obbligatorio).
     # Vedi migration a7b8c9d0e1f2 + DESIGN_SEED_Innovation_Plaza §1-§2.
-    azienda_id = Column(Integer, ForeignKey("azienda.id"), nullable=False)
+    azienda_id = Column(Integer, ForeignKey("azienda.id", name="fk_dipendenti_azienda_id_azienda"),
+                        nullable=False)
     ruolo_id = Column(Integer, ForeignKey("ruoli.id"), nullable=True)
     ore_sett = Column(SmallInteger, nullable=False, default=40)
     costo_ora = Column(Float, nullable=True)
@@ -537,8 +538,8 @@ class Progetto(Base):
     # di cui solo PM ha ore vendute. Le ore "a sentimento" (Monitoraggio/Proposal/prevendita)
     # si consuntivano come "Attività commerciale" sotto Attività Interne.
     # Era "tipo" con default "progetto" inutilizzato; rinominato per chiarezza.
-    # CHECK constraint sui valori ammessi: vedi alembic f6a7b8c9d0e1 (Step 3.2,
-    # 03/06/2026) — ck_progetti_tipologia. Valore "interna" aggiunto per le
+    # CHECK sui valori ammessi: ck_progetti_tipologia, in __table_args__ qui sotto
+    # e nella migration f6a7b8c9d0e1 (Step 3.2, 03/06/2026). Valore "interna" aggiunto per le
     # attività interne non fatturabili (ex contenitore-unico P010, ora
     # spacchettato in N progetti distinti: mansioni continuative, corsi, innovazione).
     tipologia = Column(String(20), nullable=False, default="ordinario")  # "ordinario" | "bando" | "interna"
@@ -569,7 +570,8 @@ class Progetto(Base):
     # azienda_id: nullable. Obbligatoria per commerciali/bandi (garantita nel
     # seed / futuro CHECK condizionato), NULL ammesso per gli interni (attività
     # trasversale). Vedi migration a7b8c9d0e1f2 + DESIGN §1.
-    azienda_id = Column(Integer, ForeignKey("azienda.id"), nullable=True)
+    azienda_id = Column(Integer, ForeignKey("azienda.id", name="fk_progetti_azienda_id_azienda"),
+                        nullable=True)
     # area: valorizzata SOLO per i bandi Innovation ("PA" | "Imprese"), NULL
     # altrove. Spezza Innovation tra le due aree (Ida=PA, Domenica=Imprese).
     area = Column(String(20), nullable=True)
@@ -587,6 +589,8 @@ class Progetto(Base):
                         name="ck_progetti_stato_ammessi"),
         CheckConstraint(_check_in("urgenza", LIVELLI_URGENZA),
                         name="ck_progetti_urgenza"),
+        CheckConstraint(_check_in("tipologia", ("ordinario", "bando", "interna")),
+                        name="ck_progetti_tipologia"),
     )
 
     azienda_rel = relationship("Azienda", back_populates="progetti")
@@ -828,7 +832,7 @@ class DipendenzaTask(Base):
         ForeignKey("task.id", ondelete="CASCADE"),
         nullable=False,
     )
-    tipo_dipendenza = Column(String(2), nullable=False, default="FS")
+    tipo_dipendenza = Column(String(2), nullable=False, default="FS", server_default="FS")
     created_at = Column(DateTime, default=datetime.utcnow)
 
     __table_args__ = (
@@ -1091,6 +1095,8 @@ class ConsuntivoSottotask(Base):
             "sottotask_id", "dipendente_id", "settimana",
             name="uq_consuntivo_sottotask",
         ),
+        CheckConstraint(_check_in("stato_dichiarato", STATI_DICHIARABILI, ammetti_null=True),
+                        name="ck_consuntivo_sottotask_stato"),
     )
 
     sottotask = relationship("Sottotask", back_populates="dichiarazioni")
@@ -1278,11 +1284,16 @@ class SalSnapshot(Base):
     __tablename__ = "sal_snapshot"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    progetto_id = Column(String(10), ForeignKey("progetti.id"), nullable=False)
+    progetto_id = Column(String(10), ForeignKey("progetti.id", name="fk_sal_snapshot_progetto_id"),
+                         nullable=False)
     data_snapshot = Column(DateTime, nullable=False, server_default=func.now())
     consolidato_da = Column(String(10), nullable=True)  # id dipendente, no FK (durabilità)
     nota = Column(Text, nullable=True)
     stato = Column(JSONB, nullable=False)  # stato completo serializzato
+
+    __table_args__ = (
+        Index("ix_sal_snapshot_progetto_id", "progetto_id"),
+    )
 
 
 class BollettinoEconomico(Base):
@@ -1297,11 +1308,16 @@ class BollettinoEconomico(Base):
     __tablename__ = "bollettino_economico"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    progetto_id = Column(String(10), ForeignKey("progetti.id"), nullable=False)
+    progetto_id = Column(String(10), ForeignKey("progetti.id", name="fk_bollettino_economico_progetto_id"),
+                         nullable=False)
     data_snapshot = Column(DateTime, nullable=False, server_default=func.now())
     consolidato_da = Column(String(10), nullable=True)  # id dipendente, no FK (durabilità)
     nota = Column(Text, nullable=True)
     stato = Column(JSONB, nullable=False)  # economia serializzata (margini + grezzi)
+
+    __table_args__ = (
+        Index("ix_bollettino_economico_progetto_id", "progetto_id"),
+    )
 
 
 # ══════════════════════════════════════════════════════════════════════
