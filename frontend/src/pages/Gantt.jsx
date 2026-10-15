@@ -1,23 +1,29 @@
 import React, { useState, useEffect, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { fetchGanttStrutturato, fetchProgetti, fetchDipendenti, exportGanttPdf } from '../api'
+import { fetchGanttStrutturato, fetchProgetti, fetchDipendenti } from '../api'
 import GanttChartFasi from '../components/_shared/GanttChartFasi'
-
-// ── Colori stati ────────────────────────────────────────────────────
-const STATUS_COLORS = {
-  'Completato': { bar: '#22c55e', bg: 'bg-green-900/30', text: 'text-green-300' },
-  'In corso':   { bar: '#3b82f6', bg: 'bg-blue-900/30',  text: 'text-blue-300'  },
-  'Da iniziare':{ bar: '#9ca3af', bg: 'bg-gray-700/30',  text: 'text-gray-300'  },
-  'Sospeso':    { bar: '#d97706', bg: 'bg-amber-900/30', text: 'text-amber-300'  },
-}
+import { vociLegenda } from '../components/_shared/statiColori'
+import { disegnaGantt, titoloGantt } from '../components/_shared/ganttSvg'
 
 // ── Legenda ─────────────────────────────────────────────────────────
-function StatusLegend() {
+// Gli stati presenti nei progetti filtrati, fasi e task separati: «Completata»
+// e «Completato» sono due stati, non uno scritto in due modi.
+function StatusLegend({ progetti }) {
+  const fasi = progetti.flatMap(p => p.fasi || [])
+  const gruppi = [
+    ['Fasi', vociLegenda('fase', fasi.map(f => f.stato))],
+    ['Task', vociLegenda('task', fasi.flatMap(f => (f.tasks || []).map(t => t.stato)))],
+  ]
   return (
-    <div className="flex gap-4 text-xs">
-      {Object.entries(STATUS_COLORS).map(([st, c]) => (
-        <span key={st} className="flex items-center gap-1.5">
-          <span className="w-3 h-3 rounded" style={{ backgroundColor: c.bar }} />{st}
+    <div className="flex gap-4 text-xs flex-wrap">
+      {gruppi.filter(([, voci]) => voci.length > 0).map(([gruppo, voci]) => (
+        <span key={gruppo} className="flex items-center gap-3">
+          <span className="text-gray-500">{gruppo}:</span>
+          {voci.map(v => (
+            <span key={v.stato} className="flex items-center gap-1.5">
+              <span className="w-3 h-3 rounded" style={{ backgroundColor: v.colore }} />{v.etichetta}
+            </span>
+          ))}
         </span>
       ))}
     </div>
@@ -69,6 +75,7 @@ export default function GanttPage() {
   const [loading, setLoading] = useState(true)
   const [filtroProgetto, setFiltroProgetto] = useState('')
   const [filtroProfilo, setFiltroProfilo] = useState('')
+  const [esportando, setEsportando] = useState(false)
 
   // Mount: anagrafica progetti+dipendenti (per filtri dropdown).
   // La gerarchia ganttStrutturato è gestita dal useEffect successivo.
@@ -103,6 +110,24 @@ export default function GanttPage() {
       // .filter(fase => (fase.tasks || []).length > 0)
     }))
   }, [ganttStrutturato, filtroProfilo])
+
+  // L'export disegna ciò che la pagina ha filtrato (stato, progetto, profilo),
+  // con tutte le fasi aperte. Le librerie PDF arrivano solo al primo clic.
+  async function esporta(formato) {
+    setEsportando(true)
+    try {
+      const modulo = await import('../components/_shared/esportaGantt')
+      const nomeProgetto = filtroProgetto ? ganttFiltrato.find(p => p.id === filtroProgetto)?.nome : null
+      const pagine = disegnaGantt(ganttFiltrato, { titolo: titoloGantt(nomeProgetto) })
+      const nomeBase = modulo.nomeBaseFile(filtroProgetto)
+      if (formato === 'pdf') await modulo.esportaPdf(pagine, nomeBase)
+      else await modulo.esportaPng(pagine, nomeBase)
+    } catch (e) {
+      alert(`Errore nella generazione ${formato.toUpperCase()}: ${e.message}`)
+    } finally {
+      setEsportando(false)
+    }
+  }
 
   if (loading) return <p className="text-gray-400">Caricamento...</p>
 
@@ -144,29 +169,14 @@ export default function GanttPage() {
               <option value="">Tutti i profili</option>
               {profili.map(p => <option key={p} value={p}>{p}</option>)}
             </select>
-            <StatusLegend />
+            <StatusLegend progetti={ganttFiltrato} />
             <div className="ml-auto flex gap-2">
-              <button onClick={() => exportGanttPdf(filtroProgetto || null)}
-                className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm transition-colors">
+              <button onClick={() => esporta('pdf')} disabled={esportando}
+                className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm transition-colors disabled:opacity-50">
                 📥 PDF
               </button>
-              <button onClick={() => {
-                const params = filtroProgetto ? `?progetto_id=${filtroProgetto}` : '';
-                fetch(`/api/gantt/export-png${params}`)
-                  .then(res => res.blob())
-                  .then(blob => {
-                    const url = URL.createObjectURL(blob);
-                    const a = document.createElement('a');
-                    a.href = url;
-                    a.download = `gantt_${filtroProgetto || 'tutti'}_${new Date().toISOString().slice(0,10)}.png`;
-                    document.body.appendChild(a);
-                    a.click();
-                    document.body.removeChild(a);
-                    URL.revokeObjectURL(url);
-                  })
-                  .catch(() => alert('Errore nella generazione PNG'))
-              }}
-                className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm transition-colors">
+              <button onClick={() => esporta('png')} disabled={esportando}
+                className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm transition-colors disabled:opacity-50">
                 🖼️ PNG
               </button>
               <button onClick={() => {

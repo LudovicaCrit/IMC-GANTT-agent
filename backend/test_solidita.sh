@@ -62,15 +62,6 @@ test_post "POST /task/anteprima-impatto" "$BASE/task/anteprima-impatto" \
 echo ""
 echo "── Export endpoints ──"
 
-EXPORT_PDF=$(curl -s -o /dev/null -w "%{http_code}" "$BASE/gantt/export-pdf")
-if [ "$EXPORT_PDF" = "200" ]; then
-  echo "  ✅ GET /gantt/export-pdf ($EXPORT_PDF)"
-  PASS=$((PASS + 1))
-else
-  echo "  ❌ GET /gantt/export-pdf ($EXPORT_PDF)"
-  FAIL=$((FAIL + 1))
-fi
-
 EXPORT_EXCEL=$(curl -s -o /dev/null -w "%{http_code}" "$BASE/gantt/export-excel")
 if [ "$EXPORT_EXCEL" = "200" ]; then
   echo "  ✅ GET /gantt/export-excel ($EXPORT_EXCEL)"
@@ -78,15 +69,6 @@ if [ "$EXPORT_EXCEL" = "200" ]; then
 else
   echo "  ❌ GET /gantt/export-excel ($EXPORT_EXCEL)"
   FAIL=$((FAIL + 1))
-fi
-
-EXPORT_PNG=$(curl -s -o /dev/null -w "%{http_code}" "$BASE/gantt/export-png")
-if [ "$EXPORT_PNG" = "200" ]; then
-  echo "  ✅ GET /gantt/export-png ($EXPORT_PNG)"
-  PASS=$((PASS + 1))
-else
-  echo "  ⚠️  GET /gantt/export-png ($EXPORT_PNG) — richiede poppler-utils"
-  SKIP=$((SKIP + 1))
 fi
 
 echo ""

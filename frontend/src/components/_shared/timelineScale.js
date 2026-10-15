@@ -76,12 +76,16 @@ function getOggi() { return new Date() }
 
 /**
  * @param {Array<{start,end}>} tasks  barre da contenere — solo start/end contano
- * @param {{weekPxMax?: number}} opts tetto della densità (default: WEEK_PX_MAX)
+ * @param {{weekPxMax?: number, weekPx?: number}} opts
+ *        weekPxMax: tetto della densità (default: WEEK_PX_MAX).
+ *        weekPx: densità imposta, che salta l'adattamento. Serve a chi
+ *        impagina su un foglio di larghezza nota (l'export, ganttSvg.js):
+ *        lì la settimana vale quanto il foglio permette, non ~900px.
  * @returns {{firstMonday, totalWeeks, weekPx, totalWidth, weeks, months, oggiX}|null}
  *          `null` su lista vuota: il chiamante non disegna nulla, invece di
  *          ricevere una scala degenere da un min/max su un insieme vuoto.
  */
-export function buildTimeline(tasks, { weekPxMax = WEEK_PX_MAX } = {}) {
+export function buildTimeline(tasks, { weekPxMax = WEEK_PX_MAX, weekPx: weekPxImposto } = {}) {
   if (!tasks || tasks.length === 0) return null
   const starts = tasks.map(t => new Date(t.start).getTime())
   const ends = tasks.map(t => new Date(t.end).getTime())
@@ -90,7 +94,8 @@ export function buildTimeline(tasks, { weekPxMax = WEEK_PX_MAX } = {}) {
   const firstMonday = getMonday(minDate)
   const lastMonday = getMonday(maxDate)
   const totalWeeks = weeksBetween(firstMonday, lastMonday) + 1
-  const weekPx = Math.min(weekPxMax, Math.max(WEEK_PX_DEFAULT, Math.floor(LARGHEZZA_OBIETTIVO / totalWeeks)))
+  const weekPx = weekPxImposto
+    ?? Math.min(weekPxMax, Math.max(WEEK_PX_DEFAULT, Math.floor(LARGHEZZA_OBIETTIVO / totalWeeks)))
   const totalWidth = totalWeeks * weekPx
 
   const weeks = []

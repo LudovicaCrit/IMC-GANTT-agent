@@ -42,39 +42,7 @@
 
 import React, { useMemo } from 'react'
 import { buildTimeline, barXW } from './timelineScale'
-
-/* ── Colori per stato ──────────────────────────────────────────────────
- * Due mappe perché il dominio ha due generi: una fase è «Completata», un task
- * è «Completato». Sono stringhe diverse e nessuna delle due chiave funziona
- * sull'altra mappa — tenerle separate è più onesto di una mappa unica con le
- * chiavi doppie.
- *
- * La mappa TASK qui è COMPLETA (6 stati). Quella di `GanttChartFasi` ne ha 4:
- * lì un task «Sospeso» o «Annullato» cade sul fallback grigio, indistinguibile
- * da un «Da iniziare». Non l'ho allineata: cambiare i colori del GANTT vero è
- * un altro lavoro, e questo doveva essere additivo. Restano due copie — è un
- * debito noto, non una svista.
- */
-export const COLORI_FASE = {
-  'Da iniziare': '#9ca3af',  // gray-400
-  'In corso':    '#3b82f6',  // blue-500
-  'Completata':  '#22c55e',  // green-500
-  'Sospesa':     '#d97706',  // amber-600
-  'Annullata':   '#6b7280',  // gray-500 — più desaturato: è uscita di scena
-}
-
-export const COLORI_TASK = {
-  'Da iniziare': '#9ca3af',
-  'In corso':    '#3b82f6',
-  'Completato':  '#22c55e',
-  'Bloccato':    '#ef4444',  // red-500
-  'Sospeso':     '#d97706',  // ← assente in GanttChartFasi
-  'Annullato':   '#6b7280',  // ← assente in GanttChartFasi
-}
-
-// Stato ignoto → grigio, come il vecchio GANTT. Uno stato che non conosciamo
-// non deve far sparire la barra: meglio una barra neutra di un buco.
-const COLORE_IGNOTO = '#9ca3af'
+import { coloreStato } from './statiColori'
 
 /* ── Marcatura del CAMBIAMENTO (opzionale) ─────────────────────────────
  * Se una barra porta `diff`, il componente entra in «modalità evidenziato».
@@ -105,8 +73,8 @@ const OPACITA_INVARIATO = 0.28
  * Stesse altezze di `GanttChartFasi`, così le due viste "pesano" uguale
  * all'occhio: una fase è una fascia, un task un filo.
  */
-const STILE_FASE = { riga: 28, barra: 16, colori: COLORI_FASE, raggio: 3, opacita: 0.9 }
-const STILE_TASK = { riga: 18, barra: 10, colori: COLORI_TASK, raggio: 2, opacita: 0.65 }
+const STILE_FASE = { riga: 28, barra: 16, livelloStato: 'fase', raggio: 3, opacita: 0.9 }
+const STILE_TASK = { riga: 18, barra: 10, livelloStato: 'task', raggio: 2, opacita: 0.65 }
 const stilePerLivello = (livello) => (livello > 0 ? STILE_TASK : STILE_FASE)
 const rientroPerLivello = (livello) => 10 + Math.max(0, livello) * 12
 
@@ -234,7 +202,7 @@ export default function TimelineBars({
               const st = stilePerLivello(b.livello)
               const disegnabile = Boolean(b.data_inizio && b.data_fine)
               const { x, w } = disegnabile ? barXW(timeline, b.data_inizio, b.data_fine) : { x: 0, w: 0 }
-              const colore = st.colori[b.stato] || COLORE_IGNOTO
+              const colore = coloreStato(st.livelloStato, b.stato)
               const marca = modalitaDiff ? MARCA_DIFF[b.diff] : null
               const attenuata = modalitaDiff && !marca
               const sparita = b.diff === 'sparito'

@@ -7,7 +7,7 @@
 //    • redirect automatico al login su 401 (cookie scaduto/assente)
 //    • lancio di ForbiddenError su 403 (loggato ma non autorizzato)
 //    • messaggio dedicato su 429 (rate limit)
-//    • parsing JSON di default (override con rawResponse per blob/PDF)
+//    • parsing JSON della risposta
 //
 //  Le funzioni esportate mantengono la stessa firma di prima — questo file
 //  è un refactoring infrastrutturale, non un cambio di API per le pagine.
@@ -31,13 +31,11 @@ export class ForbiddenError extends Error {
  * @param {object} options - opzioni standard di fetch + estensioni:
  *   - body: se presente come oggetto, viene serializzato a JSON e l'header
  *     Content-Type viene impostato automaticamente
- *   - rawResponse: se true, restituisce la Response grezza senza parsare JSON
- *     (usato da exportGanttPdf per scaricare il blob)
  *   - skipAuthRedirect: se true, NON reindirizza al login su 401
  *     (riservato al solo getCurrentUser durante il bootstrap di AuthContext)
  */
 export async function apiFetch(url, options = {}) {
-  const { body, rawResponse = false, skipAuthRedirect = false, ...rest } = options;
+  const { body, skipAuthRedirect = false, ...rest } = options;
 
   // Costruzione opzioni per fetch
   const fetchOptions = {
@@ -100,24 +98,21 @@ export async function apiFetch(url, options = {}) {
   }
 
   // ── Successo ────────────────────────────────────────────────────────
-  if (rawResponse) return res;
-
   // 204 No Content / 205 Reset Content: il body è vuoto PER SPECIFICA, e
   // `res.json()` su un body vuoto alza `SyntaxError: Unexpected end of JSON
   // input`. Senza questo ramo un DELETE RIUSCITO veniva riportato al chiamante
   // come errore — e i chiamanti sono `try { await deleteFase(...) } catch { alert }`,
   // quindi l'utente vedeva un avviso di fallimento su un'operazione andata a
   // buon fine. Valeva per `deleteFase` e `deleteProgetto`; `eliminaSottotask`
-  // si difendeva da sola con `rawResponse: true`, un cerotto che ora non serve.
+  // si difendeva da sola aggirando il parsing, un cerotto che ora non serve.
   //
   // Si guarda lo STATUS e non la lunghezza del body: «nessun contenuto» è il
   // contratto della risposta, non una sua proprietà accidentale.
   //
   // Nessun altro chiamante ne è toccato: in tutto il backend le risposte a body
-  // vuoto sono esattamente i tre DELETE 204 (fasi, progetti, sottotask). Le tre
-  // `Response(...)` esplicite di routes/gantt.py hanno `content` valorizzato e
-  // passano da `rawResponse` per il blob; un handler FastAPI che restituisce
-  // None serializza `null`, che è JSON valido e continua a parsarsi come prima.
+  // vuoto sono esattamente i tre DELETE 204 (fasi, progetti, sottotask). Un
+  // handler FastAPI che restituisce None serializza `null`, che è JSON valido
+  // e continua a parsarsi come prima.
   if (res.status === 204 || res.status === 205) return null;
 
   return res.json();
@@ -352,8 +347,8 @@ export async function eliminaSottotask(sottotaskId) {
   // disabilitando il cestino prima ancora di provare.
   //
   // Il 204 lo gestisce `apiFetch`, che su «no content» torna null senza tentare
-  // il parsing. Fino al 02/09/2026 questa funzione usava `rawResponse: true`
-  // per aggirare quel parsing da sola: era un cerotto sul sintomo, e gli altri
+  // il parsing. Fino al 02/09/2026 questa funzione aggirava quel parsing da
+  // sola: era un cerotto sul sintomo, e gli altri
   // due DELETE del progetto — che non ce l'avevano — riportavano come errore
   // ogni cancellazione riuscita. Ora la cura è alla radice e il cerotto è via.
   await apiFetch(`${API_BASE}/sottotask/${sottotaskId}`, { method: 'DELETE' });
@@ -500,27 +495,6 @@ export async function salvaBlocchi(data) {
   // Solo per l'utente loggato — niente `dipendente_id` nel body. Un 400 arriva
   // come Error col messaggio del backend («Consuntivo non salvato: …; …»).
   return apiFetch(`${API_BASE}/consuntivi/salva-blocchi`, { method: 'POST', body: data });
-}
-
-// ═════════════════════════════════════════════════════════════════════════
-//  EXPORT (PDF — caso speciale: blob, non JSON)
-// ═════════════════════════════════════════════════════════════════════════
-
-export async function exportGanttPdf(progettoId = null) {
-  const params = progettoId ? `?progetto_id=${progettoId}` : '';
-  const res = await apiFetch(`${API_BASE}/gantt/export-pdf${params}`, {
-    rawResponse: true,
-  });
-  const blob = await res.blob();
-  // Scarica il file
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `gantt_${progettoId || 'tutti'}_${new Date().toISOString().slice(0, 10)}.pdf`;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
 }
 
 // ═════════════════════════════════════════════════════════════════════════

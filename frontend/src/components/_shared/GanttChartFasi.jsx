@@ -17,25 +17,7 @@ import React, { useState, useMemo, useRef, useEffect } from 'react'
 // La scala arriva da _shared, non più dalla PAGINA Gantt (dipendenza al
 // contrario: un componente condiviso non deve trascinare una pagina).
 import { buildTimeline, barXW as barXWScala } from './timelineScale'
-
-// ── Colori per stato ─────────────────────────────────────────────────
-// I task hanno 4 stati colorati. Le fasi hanno 5
-// stati: aggiungiamo 'Completata', 'Sospesa', 'Annullata' (suffisso al
-// femminile come da §5.1).
-const COLORI_FASE = {
-  'Da iniziare': '#9ca3af',  // gray-400
-  'In corso':    '#3b82f6',  // blue-500
-  'Completata':  '#22c55e',  // green-500
-  'Sospesa':     '#d97706',  // amber-600
-  'Annullata':   '#6b7280',  // gray-500 (più desaturato)
-}
-
-const COLORI_TASK = {
-  'Da iniziare': '#9ca3af',
-  'In corso':    '#3b82f6',
-  'Completato':  '#22c55e',
-  'Bloccato':    '#ef4444',  // red-500
-}
+import { coloreStato } from './statiColori'
 
 // ── Costanti layout ──────────────────────────────────────────────────
 const LABEL_W = 300
@@ -471,7 +453,7 @@ export default function GanttChartFasi({ progetti, onTaskClick, onProgettoClick 
 
                 if (r.kind === 'fase') {
                   const { x, w } = barXW(r.start, r.end)
-                  const color = COLORI_FASE[r.stato] || COLORI_FASE['Da iniziare']
+                  const color = coloreStato('fase', r.stato)
                   return (
                     <div
                       key={`fb-${r.faseId}`}
@@ -512,7 +494,7 @@ export default function GanttChartFasi({ progetti, onTaskClick, onProgettoClick 
 
                 // r.kind === 'task'
                 const { x, w } = barXW(r.start, r.end)
-                const color = COLORI_TASK[r.stato] || COLORI_TASK['Da iniziare']
+                const color = coloreStato('task', r.stato)
                 return (
                   <div
                     key={`tb-${r.taskId}`}

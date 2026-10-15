@@ -200,7 +200,6 @@ obbligatorio e un database irraggiungibile ferma l'avvio con un errore parlante.
 │   ├── auth.py + auth_routes.py      # Auth JWT
 │   ├── deps.py                       # Dependency: get_current_user, require_manager
 │   ├── gemini_client.py              # Client Gemini (infrastruttura IA)
-│   ├── gantt_pdf.py                  # Rendering PDF GANTT
 │   ├── utils.py                      # Helper condivisi
 │   ├── alembic/                      # Migration tracciate
 │   │   ├── env.py

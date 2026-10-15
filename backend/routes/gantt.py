@@ -7,7 +7,8 @@ SCOPO
 ─────
 Espone gli endpoint per la pagina GANTT del frontend:
   - Lettura dati GANTT in JSON, formato piatto (oggi senza chiamanti nel frontend)
-  - Esportazione GANTT in formato PDF, PNG e Excel (download file)
+  - Esportazione GANTT in Excel (download file). PDF e PNG non passano di
+    qui: li disegna il browser (frontend, _shared/ganttSvg.js).
 Tutti gli endpoint sono manager-only (vista d'insieme aziendale).
 
 Decisione di design (5 maggio 2026): tutti gli endpoint /api/gantt/*
@@ -23,8 +24,6 @@ ENDPOINT ESPOSTI
 ├──────────────────────────────────┼──────────┼──────────────────────────────┤
 │ /api/gantt                       │ GET      │ require_manager              │
 │ /api/gantt/strutturato           │ GET      │ require_manager              │
-│ /api/gantt/export-pdf            │ GET      │ require_manager              │
-│ /api/gantt/export-png            │ GET      │ require_manager              │
 │ /api/gantt/export-excel          │ GET      │ require_manager              │
 └──────────────────────────────────┴──────────┴──────────────────────────────┘
 
@@ -39,19 +38,7 @@ DETTAGLIO ENDPOINT
      dependencies (predecessore), project, project_id, assignee, profile,
      status, estimated_hours, hours_done, predecessor_name.
 
-2. GET /api/gantt/export-pdf?progetto_id=P00X
-   - Manager-only.
-   - Genera un PDF tramite `gantt_pdf.genera_gantt_pdf` (modulo dedicato).
-   - Filtra automaticamente progetti non sospesi se non c'è filtro esplicito.
-   - Response: application/pdf con Content-Disposition: attachment.
-
-3. GET /api/gantt/export-png?progetto_id=P00X
-   - Manager-only.
-   - Genera prima il PDF, poi lo converte in PNG via `pdftoppm` (poppler-utils).
-   - Risoluzione: 200 dpi, single page.
-   - 500 con messaggio specifico se `pdftoppm` non è installato.
-
-4. GET /api/gantt/export-excel?progetto_id=P00X
+2. GET /api/gantt/export-excel?progetto_id=P00X
    - Manager-only.
    - Genera un .xlsx con due fogli:
      • "Dati GANTT": tabella con stati colorati per riga
@@ -61,17 +48,12 @@ DETTAGLIO ENDPOINT
 
 PATTERN AUTH USATI
 ──────────────────
-- `require_manager` su tutti e 4 gli endpoint. Il GANTT aziendale e i suoi
+- `require_manager` su tutti e 3 gli endpoint. Il GANTT aziendale e i suoi
   export sono informazione manageriale (Scenario B); Helena vede solo i
   propri task tramite `/api/tasks` con filtro Scenario B.
 
 DIPENDENZE ESTERNE (oltre al backend)
 ─────────────────────────────────────
-- `gantt_pdf` (modulo locale): `genera_gantt_pdf()` — usato da PDF e PNG
-- `reportlab` (via gantt_pdf): rendering PDF
-- `pdftoppm` (binario poppler-utils): conversione PDF→PNG. Sistema Linux:
-  `sudo apt install poppler-utils`. Se manca, l'endpoint risponde 500 con
-  messaggio chiaro.
 - `openpyxl`: rendering Excel. Se manca, fallback su CSV.
 - `pandas`: usato come strumento di sort/iter dentro l'export Excel
   (NON più come cache di lettura — i dati arrivano da Postgres).
@@ -108,7 +90,7 @@ _to_dt()** quando costruiamo `task_records`.
 STORIA
 ──────
 Estratto da main.py il 5 maggio 2026 nell'ambito del refactoring strangler.
-Tutti e 4 gli endpoint /api/gantt/* sono qui (decisione presa con Ludovica
+Gli endpoint /api/gantt/* sono tutti qui (decisione presa con Ludovica
 durante il refactoring stesso).
 Letture DataFrame migrate a Postgres diretto il 21 maggio 2026 (handoff
 migrazione §6-ter). `gantt_strutturato` era già nativamente su SQLAlchemy.
@@ -117,7 +99,7 @@ migrazione §6-ter). `gantt_strutturato` era già nativamente su SQLAlchemy.
 
 from datetime import datetime
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, Response
 from sqlalchemy.orm import joinedload, selectinload
 from sqlalchemy import func
 
@@ -704,40 +686,26 @@ def gantt_strutturato(
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# Helper privato: carica i task per l'export (PDF/PNG/Excel) da Postgres
+# Helper privato: carica i task per l'export Excel da Postgres
 # e restituisce una lista di dict pronti all'uso. Centralizza il filtro
 # "progetti non Sospesi" e la pre-conversione delle date a datetime
 # (necessaria per il foglio "GANTT Visivo" — vedi NOTE TECNICHE).
 # ─────────────────────────────────────────────────────────────────────────
 
-def _carica_task_export(
-    progetto_id: Optional[str],
-    *,
-    escludi_eliminati: bool,
-    include_fase: bool = False,
-) -> list[dict]:
-    """Carica i task per gli endpoint di export con tutti i campi serviti.
+def _carica_task_export(progetto_id: Optional[str]) -> list[dict]:
+    """Carica i task dell'export Excel, senza gli «Eliminato».
 
     Args:
         progetto_id: filtro su singolo progetto. Se None, esclude i
             progetti in stato 'Sospeso' (replica del comportamento DataFrame).
-        escludi_eliminati: se True, scarta i task con stato 'Eliminato'.
-            PDF/PNG storicamente NON filtravano; Excel sì — passare il
-            flag corretto preserva l'iso-comportamento per ciascun endpoint.
-        include_fase: se True, joinedload anche su Task.fase_rel per
-            poter leggere il nome fase (usato solo dall'export Excel).
     """
     session = get_session()
-    opts = [joinedload(Task.progetto)]
-    if include_fase:
-        opts.append(joinedload(Task.fase_rel))
-    q = session.query(Task).options(*opts)
+    q = session.query(Task).options(joinedload(Task.progetto), joinedload(Task.fase_rel))
     if progetto_id:
         q = q.filter(Task.progetto_id == progetto_id)
     else:
         q = q.filter(Task.progetto.has(Progetto.stato != "Sospeso"))
-    if escludi_eliminati:
-        q = q.filter(Task.stato != "Eliminato")
+    q = q.filter(Task.stato != "Eliminato")
     tasks = q.all()
     session.close()
 
@@ -756,148 +724,13 @@ def _carica_task_export(
             "dipendente_id": t.dipendente_id or "",
             "progetto_id": t.progetto_id,
             "progetto_nome": t.progetto.nome if t.progetto else "?",
-            "fase": (t.fase_rel.nome if t.fase_rel else "") if include_fase else "",
+            "fase": t.fase_rel.nome if t.fase_rel else "",
         })
     return records
 
 
 # ═════════════════════════════════════════════════════════════════════════
-# 2. GET /api/gantt/export-pdf — esportazione PDF
-# ═════════════════════════════════════════════════════════════════════════
-
-@router.get("/export-pdf")
-def export_gantt_pdf(
-    progetto_id: Optional[str] = None,
-    _: Utente = Depends(require_manager),
-):
-    """Genera e scarica un PDF del GANTT."""
-    from gantt_pdf import genera_gantt_pdf
-
-    # NB: PDF/PNG storicamente non filtravano "Eliminato" (asimmetria col
-    # GET /api/gantt e l'Excel). Iso-comportamento → escludi_eliminati=False.
-    records = _carica_task_export(progetto_id, escludi_eliminati=False)
-
-    # PDF e PNG sono grafici su asse temporale: un task senza date non è
-    # rappresentabile lì e farebbe crashare gantt_pdf.py su
-    # datetime.strptime("", "%Y-%m-%d"). Lo scartiamo qui. I task senza
-    # date restano comunque visibili in GET /api/gantt (con start/end "")
-    # e nell'Excel (riga senza barra).
-    records = [r for r in records if r["data_inizio"] and r["data_fine"]]
-
-    gantt_data = []
-    for r in records:
-        dip = get_dipendente(r["dipendente_id"])
-        gantt_data.append({
-            "id": r["id"],
-            "name": r["nome"],
-            # Date opzionali: task senza data passa con stringa vuota
-            # al generatore PDF (evita AttributeError sul .strftime di None).
-            "start": r["data_inizio"].strftime("%Y-%m-%d") if r["data_inizio"] else "",
-            "end": r["data_fine"].strftime("%Y-%m-%d") if r["data_fine"] else "",
-            "project": r["progetto_nome"],
-            "assignee": dip["nome"],
-            "status": r["stato"],
-            "estimated_hours": r["ore_stimate"],
-        })
-
-    # Titolo
-    if progetto_id:
-        session = get_session()
-        prog = session.query(Progetto).filter(Progetto.id == progetto_id).first()
-        session.close()
-        titolo = f"GANTT — {prog.nome}" if prog else "GANTT"
-    else:
-        titolo = "GANTT IMC-Group — Tutti i progetti"
-
-    pdf_bytes = genera_gantt_pdf(gantt_data, titolo=titolo, progetto_filtro=progetto_id)
-    filename = f"gantt_{progetto_id or 'tutti'}_{datetime.now().strftime('%Y%m%d')}.pdf"
-
-    return Response(
-        content=pdf_bytes,
-        media_type="application/pdf",
-        headers={"Content-Disposition": f"attachment; filename={filename}"}
-    )
-
-
-# ═════════════════════════════════════════════════════════════════════════
-# 3. GET /api/gantt/export-png — esportazione PNG (via PDF + pdftoppm)
-# ═════════════════════════════════════════════════════════════════════════
-
-@router.get("/export-png")
-def export_gantt_png(
-    progetto_id: Optional[str] = None,
-    _: Utente = Depends(require_manager),
-):
-    """Genera e scarica un PNG del GANTT (convertendo il PDF)."""
-    from gantt_pdf import genera_gantt_pdf
-    import subprocess
-    import tempfile
-    import os
-
-    # Stessa logica di export-pdf (storicamente non filtrava "Eliminato").
-    records = _carica_task_export(progetto_id, escludi_eliminati=False)
-
-    # Stesso filtro di export-pdf: task senza date non sono rappresentabili
-    # su asse temporale (vedi nota in export_gantt_pdf).
-    records = [r for r in records if r["data_inizio"] and r["data_fine"]]
-
-    gantt_data = []
-    for r in records:
-        dip = get_dipendente(r["dipendente_id"])
-        gantt_data.append({
-            "id": r["id"], "name": r["nome"],
-            # Date opzionali: stesso pattern di export-pdf.
-            "start": r["data_inizio"].strftime("%Y-%m-%d") if r["data_inizio"] else "",
-            "end": r["data_fine"].strftime("%Y-%m-%d") if r["data_fine"] else "",
-            "project": r["progetto_nome"], "assignee": dip["nome"],
-            "status": r["stato"], "estimated_hours": r["ore_stimate"],
-        })
-
-    if progetto_id:
-        session = get_session()
-        prog = session.query(Progetto).filter(Progetto.id == progetto_id).first()
-        session.close()
-        titolo = f"GANTT — {prog.nome}" if prog else "GANTT"
-    else:
-        titolo = "GANTT IMC-Group — Tutti i progetti"
-
-    pdf_bytes = genera_gantt_pdf(gantt_data, titolo=titolo)
-
-    # Converti PDF → PNG con pdftoppm (poppler-utils)
-    try:
-        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp_pdf:
-            tmp_pdf.write(pdf_bytes)
-            tmp_pdf_path = tmp_pdf.name
-
-        png_path = tmp_pdf_path.replace(".pdf", "")
-        subprocess.run(
-            ["pdftoppm", "-png", "-r", "200", "-singlefile", tmp_pdf_path, png_path],
-            check=True, capture_output=True
-        )
-
-        png_file = png_path + ".png"
-        with open(png_file, "rb") as f:
-            png_bytes = f.read()
-
-        os.unlink(tmp_pdf_path)
-        os.unlink(png_file)
-
-        filename = f"gantt_{progetto_id or 'tutti'}_{datetime.now().strftime('%Y%m%d')}.png"
-        return Response(
-            content=png_bytes,
-            media_type="image/png",
-            headers={"Content-Disposition": f"attachment; filename={filename}"}
-        )
-
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        raise HTTPException(
-            500,
-            "Conversione PNG non disponibile. Installa poppler-utils: sudo apt install poppler-utils"
-        )
-
-
-# ═════════════════════════════════════════════════════════════════════════
-# 4. GET /api/gantt/export-excel — esportazione Excel (2 fogli)
+# 2. GET /api/gantt/export-excel — esportazione Excel (2 fogli)
 # ═════════════════════════════════════════════════════════════════════════
 
 @router.get("/export-excel")
@@ -909,8 +742,7 @@ def export_gantt_excel(
     import io
     import pandas as pd
 
-    # Excel storicamente filtrava "Eliminato".
-    records = _carica_task_export(progetto_id, escludi_eliminati=True, include_fase=True)
+    records = _carica_task_export(progetto_id)
 
     # Costruisci dati per il foglio "Dati GANTT"
     export_data = []
