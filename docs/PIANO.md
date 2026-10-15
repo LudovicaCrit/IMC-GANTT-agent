@@ -13,7 +13,7 @@
 - ✅ PIANO.md e BACKLOG.md
 - ✅ Seed su gantt_test e spostamento in backend/tests/ dei test che scrivono sul DB
 - ✅ Ricostruire il DB di sviluppo gantt_db da migration e seed
-- ☐ Pulizia requirements: via google-ai-generativelanguage, python-jose (resta PyJWT), passlib (resta argon2)
+- ✅ Pulizia requirements: via google-ai-generativelanguage, python-jose (resta PyJWT), passlib (resta argon2)
 
 **Chiusura**: Code lavora con regole scritte e una rete di test che non tocca il DB di sviluppo.
 
