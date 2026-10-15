@@ -14,7 +14,7 @@
 - Il resoconto contiene sempre: diff, verifica fatta, cosa NON hai verificato.
 - Il database di sviluppo è interamente sintetico; solo i nomi dei dipendenti sono reali. Prima e dopo ogni scrittura sul DB calcola l'impronta md5 della tabella dipendenti: deve restare identica, salvo che il prompt chieda esplicitamente di modificarla, perché gli e2e e gli scenari di prova si appoggiano a quei dipendenti.
 - Tutto il resto del database si può modificare e si rigenera dal seed. Le cancellazioni avvengono comunque per chiave esatta di ciò che hai creato, così ogni passo resta leggibile.
-- Prima di lanciare gli e2e, controlla che sulla porta 8000 non giri un uvicorn vecchio.
+- Prima di lanciare gli e2e, controlla che sulle porte del GANTT (GANTT_PORTA_BACKEND e GANTT_PORTA_FRONTEND in backend/.env) non giri un processo vecchio. Non fermare mai processi di altri progetti.
 
 ## Regole di codice
 1. Una sola sorgente per ogni dato. Niente copie né colonne derivate salvate. Un calcolo vive in un punto solo.

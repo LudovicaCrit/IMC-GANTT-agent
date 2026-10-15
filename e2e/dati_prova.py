@@ -55,16 +55,27 @@ from scenario_fasi import TASK as TASK_FASI  # noqa: E402
 
 DIPENDENTE = "D004"          # Helena Ullah — l'utente `user` del seed
 
-# Le date dei due task «dentro la settimana» si calcolano da oggi, non sono
-# scritte: devono intersecare la settimana corrente qualunque giorno si lanci la
-# verifica, o la griglia non li caricherebbe affatto.
+# Le date si calcolano dal lunedì della settimana in cui si lancia la verifica,
+# non sono scritte: con date fisse il calendario sposta i task da una parte
+# all'altra della regola che il test vuole provare.
+#
+# T902, T903 — DENTRO la settimana: devono intersecarla, o la griglia non li
+# caricherebbe.
+# T900, T901 — FUORI dalla griglia ma DENTRO l'orizzonte della lista «Ho
+# lavorato su altro». Fuori dalla griglia vuol dire che non intersecano la
+# settimana (inizio dopo la domenica) e non sono scaduti (la griglia carica
+# anche i task scaduti e ancora vivi). L'orizzonte va dal lunedì-30 alla
+# domenica+30 (AggiungiRiga.jsx). Iniziano due settimane avanti e non una: se
+# la verifica parte domenica sera e passa la mezzanotte, la settimana corrente
+# scatta di sette giorni e un task che iniziasse il lunedì dopo ci finirebbe
+# dentro.
 _OGGI = date.today()
 _LUN = _OGGI - timedelta(days=_OGGI.weekday())
 
 TASK_PROVA = [
     # id     progetto  fase  nome                                   inizio      fine
-    ("T900", "P002", 8, "[prova e2e] Ritocco integrazione fuori piano", date(2026, 10, 5), date(2026, 10, 12)),
-    ("T901", "P011", 68, "[prova e2e] Sopralluogo non pianificato", date(2026, 10, 1), date(2026, 10, 9)),
+    ("T900", "P002", 8, "[prova e2e] Ritocco integrazione fuori piano", _LUN + timedelta(days=15), _LUN + timedelta(days=22)),
+    ("T901", "P011", 68, "[prova e2e] Sopralluogo non pianificato", _LUN + timedelta(days=14), _LUN + timedelta(days=20)),
     ("T902", "P002", 8, "[prova e2e] Da spiegare con lo stato", _LUN - timedelta(days=7), _LUN + timedelta(days=13)),
     ("T903", "P002", 8, "[prova e2e] Da spiegare con le ore", _LUN - timedelta(days=7), _LUN + timedelta(days=13)),
 ]
