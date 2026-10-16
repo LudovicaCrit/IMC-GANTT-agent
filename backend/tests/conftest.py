@@ -23,7 +23,6 @@ dalla posizione di questo file, da qualunque cartella si lanci pytest.
 
 import json
 import os
-import subprocess
 import sys
 from datetime import date, datetime, time
 from pathlib import Path
@@ -66,19 +65,6 @@ if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
 
-def _esegui(*argomenti):
-    """Lancia un comando Python del backend in un processo figlio, con lo
-    stesso ambiente (quindi DATABASE_URL = gantt_test). Processo separato
-    perché alembic riconfigura il logging alla sua maniera, e quel cambiamento
-    non deve ricadere sui test."""
-    esito = subprocess.run(
-        [sys.executable, *argomenti], cwd=BACKEND, env=os.environ.copy(),
-        capture_output=True, text=True, encoding="utf-8",
-    )
-    if esito.returncode != 0:
-        pytest.fail(f"`{' '.join(argomenti)}` fallito:\n{esito.stdout}\n{esito.stderr}")
-
-
 def _data_del_seed():
     """La data a cui il seed è ancorato (`_meta.ancorato_a` di seed_data.json).
     Le date del seed sono assolute: «oggi», per i test su questi dati, è
@@ -89,12 +75,10 @@ def _data_del_seed():
 
 @pytest.fixture(scope="session")
 def db_test():
-    """gantt_test ricostruito da zero, una volta per sessione: schema public
-    svuotato, `alembic upgrade head`, seed. La usano solo i test che toccano
+    """gantt_test ricostruito da zero, una volta per sessione, con la stessa
+    procedura di chi lavora: `scripts/ricostruisci_db.py` (schema public
+    svuotato, `alembic upgrade head`, seed). La usano solo i test che toccano
     il database; i test puri non la chiedono e girano anche senza database.
-
-    Lo schema si ricrea com'era (proprietario pg_database_owner, USAGE a
-    tutti) e il database non si droppa mai: vicacrit non potrebbe ricrearlo.
 
     Per tutta la sessione `utils.get_oggi()` restituisce la data del seed (a
     mezzanotte: get_oggi restituisce un datetime). I moduli fanno
@@ -106,20 +90,17 @@ def db_test():
     """
     from sqlalchemy import text
     import models
+    from scripts.ricostruisci_db import ricostruisci
 
     if models.engine.url.database != DB_TEST:
         pytest.exit(f"GUARDIA: l'engine punta a «{models.engine.url.database}».",
                     returncode=3)
 
-    with models.engine.begin() as conn:
-        assert conn.execute(text("SELECT current_database()")).scalar() == DB_TEST
-        conn.execute(text("DROP SCHEMA public CASCADE"))
-        conn.execute(text("CREATE SCHEMA public AUTHORIZATION pg_database_owner"))
-        conn.execute(text("GRANT USAGE ON SCHEMA public TO PUBLIC"))
     models.engine.dispose()
-
-    _esegui("-m", "alembic", "upgrade", "head")
-    _esegui("seed.py")
+    try:
+        ricostruisci(os.environ["DATABASE_URL"], conferma=DB_TEST)
+    except Exception as e:
+        pytest.fail(f"ricostruzione di {DB_TEST} fallita: {e}")
 
     with models.engine.connect() as conn:
         assert conn.execute(text("SELECT current_database()")).scalar() == DB_TEST
