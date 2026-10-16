@@ -140,7 +140,7 @@ fase). Gestiti tramite la pagina Configurazione, accessibile solo ai manager.
 | Backend | Python + FastAPI | 3.10 + 0.115 | API REST, JWT auth, rate limiting |
 | ORM | SQLAlchemy | 2.x | Modelli dichiarativi |
 | Database | PostgreSQL | 16.13 | Migrato da SQLite il 6 mag 2026 |
-| Migration | Alembic | 1.18.4 | Schema tracciato, niente drop & recreate |
+| Migration | Alembic | 1.18.4 | Schema tracciato, una baseline e le migration successive |
 | IA | Gemini (Google) | da `GEMINI_MODEL` | Infrastruttura per le IA della fase 6 (`gemini_client.py`) |
 | Frontend | React + Vite | 19 + 6 | Tailwind + react-router-dom 7 |
 | Auth | JWT + cookie httpOnly | - | Secure, SameSite=Lax, scadenza 8h |
@@ -245,16 +245,19 @@ il codice non cambia.
 
 ### Perché Alembic?
 
-Da un certo punto del progetto in poi, i dati immessi dagli utenti (Helena, Vincenzo,
-Cosimo che testano) hanno **valore proprio**: non sono ricostruibili da `seed.py`.
-Da quel momento, ogni cambio di schema deve preservare i dati.
+Il database di sviluppo è sintetico e si ricostruisce per intero: schema `public`
+vuoto, `alembic upgrade head`, `python seed.py`. Le migration servono ai database
+che hanno dati propri, cioè quelli del cliente: lì ogni cambio di schema deve
+preservarli.
 
 Alembic genera automaticamente migration scripts confrontando `models.py` con il
 database reale. Ogni script Python ha un ID univoco, sa cosa precede e cosa segue,
 e può essere applicato/annullato con un comando. La storia dello schema diventa
 parte del repository, esattamente come il codice.
 
-Da quando Alembic è in piedi (6 mag 2026), **niente più drop & recreate** del db.
+Le migration fino al 16 ott 2026 sono state riassunte in una baseline,
+`backend/alembic/versions/0001_baseline.py`, che crea lo stesso schema in un passo
+solo; le vecchie restano nella storia di git.
 
 ### Perché 16 router separati e non un unico file?
 
@@ -337,7 +340,7 @@ cat > backend/.env << EOF
 DATABASE_URL=postgresql://gantt_user:gantt_dev_2026@localhost:5432/gantt_db
 GANTT_PORTA_BACKEND=8100
 GANTT_PORTA_FRONTEND=3100
-JWT_SECRET=<chiave-segreta-da-generare>
+SECRET_KEY=<chiave-segreta-da-generare>
 JWT_ALGORITHM=HS256
 JWT_EXPIRE_HOURS=8
 COOKIE_NAME=imc_session
@@ -532,8 +535,9 @@ refactor(backend): estratto router fasi (ULTIMO router del refactoring)
 test certificati, motivazione]
 ```
 
-### Niente più drop & recreate
-Da quando Alembic è in piedi (6 mag 2026), ogni cambio di schema:
+### Ogni cambio di schema passa da una migration
+Il database di sviluppo si può ricostruire da baseline e seed; quelli del cliente
+no. Per questo ogni cambio di schema:
 1. Modifica `models.py`
 2. `alembic revision --autogenerate -m "messaggio"`
 3. Lettura attenta dello script generato
