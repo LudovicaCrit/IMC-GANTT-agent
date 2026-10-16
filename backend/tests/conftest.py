@@ -4,7 +4,7 @@ QUALE DATABASE
 I test non usano mai il database di sviluppo. Prima di qualunque import del
 backend, qui si legge DATABASE_URL_TEST (dall'ambiente o da backend/.env) e la
 si copia in DATABASE_URL. I moduli del backend leggono DATABASE_URL al loro
-primo import (`models` crea l'engine lì, `data` si collega subito) e chiamano
+primo import (`models` crea l'engine lì, senza collegarsi) e chiamano
 `load_dotenv()`, che NON sovrascrive una variabile già presente: trovano quindi
 l'URL di test e non quello del .env. pytest carica questo file prima di
 raccogliere i moduli di test, quindi prima di ogni loro import.

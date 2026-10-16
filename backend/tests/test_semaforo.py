@@ -4,11 +4,10 @@ Test della primitiva-colore del SEMAFORO RITARDABILITÀ (strato 1).
 `colore_unita` è pura: nessuna query, nessun modello ORM, nessuna gerarchia.
 Questi test lo verificano — girano SENZA database attivo.
 
-Perché l'import è da `data_db_impl` e non da `data`: `data` verifica la
-connessione a Postgres all'import (`_verifica_database()`) e solleva se il
-server è spento. `data_db_impl` importa `models`, che chiama `create_engine` —
-lazy, nessuna connessione aperta finché non si esegue una query. Questi test
-non ne eseguono nessuna.
+L'import è da `data_db_impl`, dove la funzione vive. Nessun modulo apre
+connessioni all'import (CLAUDE.md, regola 13): `models` chiama `create_engine`,
+che è lazy, e il controllo del database lo fa l'avvio dell'applicazione. Questi
+test non eseguono nessuna query.
 """
 
 from datetime import date

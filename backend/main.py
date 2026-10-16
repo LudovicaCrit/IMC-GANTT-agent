@@ -3,7 +3,9 @@ IMC-Group GANTT Agent — Backend API (FastAPI)
 Espone endpoint REST per il frontend React.
 """
 
+import asyncio
 import os
+from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
 from fastapi import FastAPI
@@ -27,6 +29,7 @@ from routes.bollettino import router as bollettino_router
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
+from data import attendi_database
 
 
 # ── Porte e origini ──────────────────────────────────────────────────────
@@ -52,7 +55,17 @@ def _origini_cors():
     return [o.strip() for o in valore.split(",") if o.strip()]
 
 
-app = FastAPI(title="IMC-Group GANTT Agent", version="0.1.0")
+@asynccontextmanager
+async def avvio(_app):
+    """All'avvio, prima di servire richieste: il database deve rispondere e
+    avere lo schema (data.attendi_database, con i suoi tentativi). Se non c'è,
+    l'avvio fallisce con il messaggio che dice cosa manca. In un thread, perché
+    fra un tentativo e l'altro si aspetta."""
+    await asyncio.to_thread(attendi_database)
+    yield
+
+
+app = FastAPI(title="IMC-Group GANTT Agent", version="0.1.0", lifespan=avvio)
 
 # Rate limiter - strategia: per IP del client
 limiter = Limiter(key_func=get_remote_address)

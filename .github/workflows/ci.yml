@@ -71,12 +71,6 @@ jobs:
           createdb gantt_test
       - name: Dipendenze
         run: pip install -r requirements.txt -r requirements-dev.txt
-      # data.py controlla lo schema già all'import, cioè quando pytest
-      # raccoglie i test e prima che la fixture db_test ricostruisca il
-      # database: su un gantt_test vuoto la raccolta si ferma. Lo si costruisce
-      # prima, con la stessa procedura della fixture.
-      - name: Schema di gantt_test prima della raccolta dei test
-        run: python scripts/ricostruisci_db.py --database gantt_test --conferma gantt_test
       - name: pytest
         run: python -m pytest
 

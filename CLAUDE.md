@@ -33,6 +33,7 @@
 10. Codice e migration nello stesso commit. Migration scritte a mano o riviste riga per riga, mai autogenerate accettate alla cieca. Ogni drop ha una guardia che conta prima di agire.
 11. Portabile su Windows Server: pathlib, encoding utf-8 esplicito, niente comandi solo Linux nel funzionamento.
 12. Niente stato modificabile in memoria a livello di modulo (dizionari, cache, contatori): le route girano in più thread e in produzione possono girare più processi. Lo stato condiviso sta nel database.
+13. Importare un modulo non ha effetti esterni: niente connessioni, query o scritture all'import. I controlli d'ambiente si fanno all'avvio dell'applicazione.
 
 ## Leggibilità
 - Il codice deve poterlo prendere in mano chi non ne conosce la storia.
