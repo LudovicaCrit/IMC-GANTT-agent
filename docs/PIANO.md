@@ -29,6 +29,10 @@
 - ☐ G. Frontend robusto: ErrorBoundary, chiamate con timeout e messaggi del server, stati di caricamento ed errore, niente doppi invii
 - ☐ H. Query che crescono coi dati: niente N+1, ore aggregate senza ricalcolare tutto, liste paginate
 - ☐ SAL: revisione completa di consolidamento, storico e confronto, dopo i blocchi C, D ed E
+- ☐ CI su GitHub Actions: pytest, build, test del disegno ed e2e su un Postgres di prova a ogni push
+- ☐ Optimistic locking: colonna versione su progetti, fasi e task; chi salva su dati cambiati riceve 409 (blocco D)
+- ☐ Log con un codice per ogni richiesta e la sua durata (blocco C)
+- ☐ Sicurezza mirata: CSRF sul cookie di sessione, XSS sul testo generato dall'IA mostrato a schermo, nessun SQL costruito con f-string (blocco E)
 
 **Chiusura**: nessun bloccante dell'audit aperto, tranne 7.3 (fase 3) e 7.4 (fase 8).
 
@@ -77,6 +81,7 @@
 - ☐ Urgenza modificabile da interfaccia
 - ☐ Configurazione: inquadramento base + ruoli aggiuntivi
 - ☐ Parametri di installazione in Configurazione: nome e logo dell'azienda, ore standard, giorni lavorativi e festività, soglie. Si svuota l'elenco dei valori cablati di INVENTARIO sezione 8
+- ☐ Da decidere: accesso con l'account Microsoft aziendale (Entra ID) accanto agli account locali
 - ☐ 🖐 Account per tutti i dipendenti; pm_id assegnato ai progetti
 
 **Chiusura**: ogni ruolo vede e modifica esattamente ciò che la matrice prevede, verificato da e2e per ruolo.
@@ -106,6 +111,7 @@
 ## Fase 6 — IA
 - ☐ Estrazione da data_db_impl.py dei domini semaforo, scenari e SAL in moduli di servizio, a comportamento invariato
 - ☐ Infrastruttura comune: streaming, timeout lungo la catena, output strutturato con schema, retry
+- ☐ IA attivabile per installazione da configurazione; limite di chiamate contemporanee e tetto di spesa
 - ☐ Registro delle transizioni di stato
 - ☐ Sintesi per il management nel cruscotto
 - ☐ Costruisci-GANTT nel Wizard del Cantiere (recupero dell'embrione di Pipeline)
@@ -117,6 +123,8 @@
 
 ## Fase 7 — Notifiche e accesso da smartphone e PC
 - ☐ 🖐 Notifiche Teams: autorizzazione lato azienda (webhook o flusso Teams), poi notifica il giorno stesso in cui un task o un pezzo finisce, quando c'è qualcosa da ratificare o un periodo di assenza da approvare, e promemoria di consuntivazione che tacciono nei periodi di assenza approvati
+- ☐ Notifiche tramite una tabella outbox: scritte nella stessa transazione dell'evento, inviate con retry e backoff, marcate come fallite dopo N tentativi
+- ☐ Lavori pianificati (promemoria, notifiche del giorno) eseguiti una volta sola anche con più processi
 - ☐ Pagine responsive per l'uso quotidiano: consuntivazione, appunto al volo, Home
 - ☐ Sito installabile dal browser come icona su smartphone e PC (manifest), senza cache offline e senza store
 - ☐ 🖐 Accesso da fuori ufficio tramite la VPN aziendale, configurato con l'IT
@@ -130,6 +138,10 @@
 - ☐ Produzione blindata: HTTPS, COOKIE_SECURE, /docs chiuso, CORS da env, rate limit corretto dietro IIS
 - ☐ Fuso orario esplicito nel backend e date locali nel frontend
 - ☐ Servizio NSSM, PYTHONUTF8=1, backup del DB
+- ☐ Backup cifrati con una prova di ripristino; procedura scritta per tornare alla versione precedente
+- ☐ docs/ESERCIZIO.md: avvio, log, riavvio, ripristino, chi chiamare
+- ☐ Versione dell'app con numerazione semantica, tag git, visibile nell'app, elenco delle modifiche
+- ☐ 🖐 Disco del server cifrato: richiesta all'IT
 - ☐ Dataset dimostrativo: dati sintetici credibili, separati e cancellabili, con date recenti e ore consuntivate fino al giorno della presentazione
 - ☐ Gli e2e girano sempre sui propri dati di prova, mai sul dataset dimostrativo: oggi dipendono ancora da sei task Completati del seed e da P008
 

@@ -1,0 +1,16 @@
+# Lezioni del progetto
+
+*Gli errori che hanno segnato IMC-GANTT-agent e cosa insegnano. Per chi eredita il codice, e per non ripeterli.*
+
+1. **La memoria al posto del codice.** Per mesi lo stato del progetto è vissuto in appunti e handoff, che davano aperti debiti già chiusi e citavano codice di altri progetti. Il codice è l'unica verità sullo stato; i documenti versionati dicono cosa si è deciso.
+2. **Costruire su un'ipotesi mai verificata.** Il motore dello slider dell'avanzamento è stato costruito per settimane; due conversazioni con gli utenti hanno mostrato che nessuno avrebbe lavorato così. Prima di una funzione complessa, si chiede a due utenti veri come lavorano oggi.
+3. **Lo stesso dato in più copie.** Ore copiate e mai aggiornate, budget in contraddizione con le ore vendute, colori in quattro mappe, tre orologi. Ogni copia prima o poi diverge: una sola sorgente per ogni dato e ogni regola.
+4. **Un DataFrame come strato dati.** Pandas usato fra applicazione e database perde i tipi (interi che diventano float, nulli che diventano NaN), non ha transazioni e carica tutto in memoria. Pandas serve ad analizzare; verso il database si usano l'ORM e le query.
+5. **Chiavi parlanti e id calcolati a mano.** Id come P001 e T112, generati col massimo su una stringa: il Wizard prendeva 409 e dopo T999 non si sarebbe creato più nessun task. Gli id li genera il database; un codice leggibile è un campo separato.
+6. **Uno schema nato a mano.** Il database era stato creato con create_all e marcato come aggiornato: le migration non erano mai state eseguite davvero, e alembic check rassicurava senza controllare vincoli, nomi e default. Lo schema nasce dalle migration, e un controllo va provato facendolo fallire.
+7. **Grandezze con tipi diversi.** Le ore erano intere in una colonna, float in un'altra, Numeric in una terza; i float sommati e confrontati danno errori di millesimi. Una grandezza, un tipo; soldi e quantità che si sommano in decimale esatto.
+8. **Test e dati che scadono.** Test legati alle date fisse del seed, e un seed che violava le regole del prodotto con 95 ore in un giorno. Un test si costruisce lo stato che verifica o fissa il tempo; i dati di prova rispettano le regole dei dati veri.
+9. **Errori invisibili.** Una scheda di Economia era una pagina bianca da mesi e la build passava; un semaforo travestito da IA aveva le soglie invertite. Compilare non vuol dire funzionare: ogni pagina ha un test che la apre, e ogni etichetta dice cosa calcola.
+10. **Scrivere prima di validare, cancellare senza difese.** Un input sbagliato diventava un 500 per l'autoflush; un endpoint scriveva qualunque campo; due clic potevano cancellare tutte le ore di un progetto. Prima si valida, poi si scrive; i campi scrivibili sono una lista esplicita; i dati preziosi si proteggono nel database.
+11. **La strada rapida come scelta di default.** Più volte la soluzione veloce è stata proposta prima di quella solida. In un progetto che deve durare la scelta di default è quella giusta per la produzione, e ogni scorciatoia si dichiara.
+12. **Più sessioni sullo stesso repo.** Un commit fatto mentre un'altra sessione aveva modifiche nello stage ha preso le cancellazioni delle migration senza la baseline. Un solo scrittore alla volta, e commit con i percorsi espliciti.
