@@ -112,7 +112,7 @@ from sqlalchemy import func
 from deps import require_manager
 from models import (
     Utente, Progetto, Fase, Task, OreSettimanali, Dipendente, Sottotask,
-    get_session, filtro_stato_progetto, ordine_progetti,
+    get_session, filtro_stato_progetto, ordine_progetti, urgenza_fase_risolta,
 )
 
 
@@ -523,6 +523,7 @@ def gantt_strutturato(
             semaforo_fasi = albero_semaforo.get("fasi", {})
 
             for f in sorted(p.fasi, key=lambda x: x.ordine or 0):
+                urgenza, urgenza_ereditata = urgenza_fase_risolta(f, p)
                 semaforo_task = semaforo_fasi.get(f.id, {}).get("task", {})
                 tasks_serial = []
                 ore_consumate_fase = 0.0
@@ -649,6 +650,18 @@ def gantt_strutturato(
                     "ore_vendute": ore_vendute_fase,
                     "ore_pianificate": float(f.ore_pianificate or 0),
                     "ore_consumate": round(ore_consumate_fase, 2),
+                    # URGENZA della fase: il valore che VALE e la sua provenienza.
+                    #   `urgenza` è quella risolta, sempre valorizzata: lo stesso
+                    #     nome e lo stesso significato che ha sul progetto, così
+                    #     chi la usa non deve sapere da dove viene.
+                    #   `urgenza_ereditata` dice se viene dal progetto (true) o
+                    #     è un'eccezione decisa sulla fase (false): il Cantiere
+                    #     può mostrare «(dal progetto)» invece di un livello scelto.
+                    # Non il valore grezzo accanto al risolto: quando la fase ne
+                    # ha uno proprio sarebbero due campi con lo stesso livello.
+                    # La regola sta in `urgenza_fase_risolta`.
+                    "urgenza": urgenza,
+                    "urgenza_ereditata": urgenza_ereditata,
                     # Semaforo di fase: il peggio fra il proprio calendario e i
                     # task. `figli_rossi` = quanti task rossi ha dentro.
                     "semaforo": _semaforo_payload(semaforo_fasi.get(f.id)),

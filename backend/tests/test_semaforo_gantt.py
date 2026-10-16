@@ -38,7 +38,7 @@ CAMPI_PROGETTO = {
     "ore_vendute_totali", "ore_consumate_totali", "n_fasi", "fasi",
     "semaforo",
     # Urgenza (A1, 03/09/2026): sul progetto è un campo solo, sempre
-    # valorizzato, e vale anche per le sue fasi.
+    # valorizzato — è NOT NULL perché è la radice dell'eredità delle fasi.
     "urgenza",
     # Società (Fase 1, passo 5): serve al Wizard che riprende una bozza.
     "azienda_id",
@@ -47,8 +47,9 @@ CAMPI_FASE = {
     "id", "nome", "ordine", "stato", "data_inizio", "data_fine",
     "ore_vendute", "ore_pianificate", "ore_consumate", "n_task", "tasks",
     "semaforo",
-    # Niente urgenza sulla fase (passo B3): la fase eredita quella del
-    # progetto (DECISIONI §5), che sta già sul nodo progetto.
+    # Urgenza della fase (B3 bis): il valore che vale e se è ereditato dal
+    # progetto. Non il grezzo accanto al risolto: vedi gantt_strutturato.
+    "urgenza", "urgenza_ereditata",
 }
 CAMPI_TASK = {
     "id", "nome", "stato", "ore_stimate", "ore_pianificate", "ore_consumate",

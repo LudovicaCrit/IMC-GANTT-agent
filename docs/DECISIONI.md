@@ -49,7 +49,7 @@ Saturazione: si mostra sia sul piano sia sulle ore vere, affiancate; lo scarto �
 
 ## 5. Semaforo, urgenza, criticità
 - Ritardabilità (semaforo) = piano contro calendario. Strato 1: verde, rosso e grigio da date e stati; scala dal sottotask al progetto col peggio dei figli. Strato 2 (prospettico): ore residue contro capacità residua, condivide il motore con l'IA-scenari.
-- Urgenza = priorità decisa dal management, 4 livelli, la fase la eredita. Modula la ritardabilità, non la sostituisce.
+- Urgenza = priorità decisa dal management, 4 livelli, la fase la eredita dal progetto salvo un'urgenza propria, impostata come eccezione. Modula la ritardabilità, non la sostituisce.
 - Criticità = il piano contro se stesso (igiene del piano). Non guarda la data di oggi.
 
 ## 6. Persone, ruoli, competenze, permessi

@@ -233,6 +233,45 @@ LIVELLI_URGENZA = ("Bassa", "Medio-Bassa", "Medio-Alta", "Alta")
 URGENZA_DEFAULT = "Medio-Bassa"
 
 
+def urgenza_fase_risolta(fase, progetto):
+    """L'urgenza EFFETTIVA di una fase, e se è ereditata: (urgenza, ereditata).
+
+        (fase.urgenza, False)     se la fase ne ha una propria (l'eccezione)
+        (progetto.urgenza, True)  altrimenti (il caso normale)
+
+    Restituisce anche la provenienza perché i payload la espongono, e così
+    nessun lettore la ricalcola per conto suo (DECISIONI §5: la fase eredita
+    dal progetto salvo un'urgenza propria, impostata come eccezione).
+
+    UNA REGOLA, UN POSTO. Sono due righe, e proprio per questo è il tipo di
+    regola che si riscrive volentieri in ogni lettore — e che poi diverge. Il
+    precedente in casa lo dimostra: la risoluzione gemella dell'assegnatario
+    (`sottotask.dipendente_id or task.dipendente_id`) è documentata in QUATTRO
+    punti (models, routes/sottotask, data_db_impl ×2) ma implementata inline,
+    quindi ogni nuovo lettore la ricopia a memoria. Qui si parte con la funzione,
+    prima che i lettori siano più di uno.
+
+    IL PATTERN — si guarda se il valore è vero, non se è `None`. Un override a
+    stringa vuota (che il CHECK ck_fasi_urgenza rifiuta, ma che un client
+    distratto potrebbe tentare)
+    deve ricadere sull'eredità come farebbe un NULL: è la stessa scelta, con la
+    stessa motivazione, del commento in `task_settimana_dipendente` sulla
+    risoluzione dell'assegnatario.
+
+    NON PUÒ TORNARE None: `Progetto.urgenza` è NOT NULL proprio perché è la
+    radice dell'eredità. Se un giorno tornasse nullable, questa funzione
+    comincerebbe a restituire None in silenzio e il chiamante lo scoprirebbe
+    altrove — è la ragione per cui quel NOT NULL non è un dettaglio.
+
+    Pura: due oggetti, nessuna query. Chi la chiama ha già la fase e il suo
+    progetto sotto mano (la relationship `Fase.progetto` o il loop che li
+    attraversa entrambi).
+    """
+    if fase.urgenza:
+        return fase.urgenza, False
+    return progetto.urgenza, True
+
+
 def _check_in(colonna, valori, ammetti_null=False):
     """Espressione SQL `col IN (...)` per i CheckConstraint dei modelli.
 
@@ -553,8 +592,9 @@ class Progetto(Base):
     # urgenza: quanto questo progetto non può aspettare. Vedi LIVELLI_URGENZA.
     #   Fino al 03/09/2026 si chiamava `ritardabilita` ed era il suo INVERSO —
     #   stesso dato, nome sbagliato, mai letto da nessuna logica.
-    #   NOT NULL con default: le fasi non hanno un'urgenza propria e valgono
-    #   quella del progetto (DECISIONI §5), quindi qui serve sempre. Il default lato DB
+    #   NOT NULL con default: il progetto è la RADICE dell'eredità, e una radice
+    #   NULL renderebbe irrisolvibile l'urgenza di tutte le sue fasi
+    #   (`fase.urgenza or progetto.urgenza` tornerebbe None). Il default lato DB
     #   serve anche perché tre punti creano Progetto fuori dal DTO (seed.py,
     #   add_p010.py, le due route di creazione).
     urgenza = Column(String(16), nullable=False,
@@ -702,9 +742,17 @@ class Fase(Base):
     ore_vendute = Column(Float, nullable=True)
     ore_pianificate = Column(Float, nullable=True)
     stato = Column(String(20), nullable=False, default="Da iniziare")
-    # Niente urgenza propria: la fase eredita quella del progetto (DECISIONI
-    # §5). La colonna di override è stata tolta al passo B3; chi vuole
-    # l'urgenza di una fase legge `fase.progetto.urgenza`.
+    # urgenza: OVERRIDE dell'urgenza del progetto (A1, 03/09/2026).
+    #   NULL — il caso normale — vuol dire «eredita dal progetto». La
+    #   risoluzione è `urgenza_fase_risolta`, gemella di
+    #   `sottotask.dipendente_id or task.dipendente_id`.
+    #   nullable=True e SENZA default NON è una lacuna da riempire: il NULL È
+    #   l'informazione. Un valore copiato dal progetto alla creazione sembrerebbe
+    #   identico oggi e DIVERGEREBBE domani, appena il PM cambia l'urgenza del
+    #   progetto — la fase resterebbe ferma al valore di ieri senza che nessuno
+    #   l'abbia deciso. È lo stesso ragionamento, parola per parola, del commento
+    #   su Sottotask.dipendente_id.
+    urgenza = Column(String(16), nullable=True)
     note = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -712,6 +760,9 @@ class Fase(Base):
     __table_args__ = (
         CheckConstraint(_check_in("stato", STATI_FASE),
                         name="stato_ammessi"),
+        # `ammetti_null`: sulla fase il NULL è legittimo e significa «eredita».
+        CheckConstraint(_check_in("urgenza", LIVELLI_URGENZA, ammetti_null=True),
+                        name="urgenza"),
     )
 
     progetto = relationship("Progetto", back_populates="fasi")

@@ -205,12 +205,15 @@ def upgrade() -> None:
         sa.Column("note", sa.Text),
         sa.Column("created_at", sa.DateTime),
         sa.Column("updated_at", sa.DateTime),
+        sa.Column("urgenza", sa.String(16)),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_fasi")),
         sa.ForeignKeyConstraint(["progetto_id"], ["progetti.id"], ondelete="CASCADE",
                                 name=op.f("fk_fasi_progetto_id_progetti")),
         sa.CheckConstraint(_in("stato", ("Da iniziare", "In corso", "Completata",
                                          "Sospesa", "Annullata")),
                            name=op.f("ck_fasi_stato_ammessi")),
+        sa.CheckConstraint(_in("urgenza", URGENZE, ammetti_null=True),
+                           name=op.f("ck_fasi_urgenza")),
     )
     op.create_table(
         "task",

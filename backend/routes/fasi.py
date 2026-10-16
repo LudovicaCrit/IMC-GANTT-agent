@@ -106,12 +106,12 @@ from datetime import date as date_type
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import func
 
 from deps import require_manager
 from models import (get_session, Utente, Fase, Task, OreSettimanali, Progetto,
-                    STATI_FASE)
+                    STATI_FASE, LIVELLI_URGENZA, urgenza_fase_risolta)
 
 
 # ── DTO ──────────────────────────────────────────────────────────────────
@@ -145,11 +145,39 @@ class FaseUpdate(BaseModel):
     ore_vendute: Optional[float] = Field(default=None, ge=0)
     ore_pianificate: Optional[float] = Field(default=None, ge=0)
     stato: Optional[str] = Field(default=None, max_length=20)
+    # OVERRIDE dell'urgenza del progetto (A1, 03/09/2026). Era il canale che
+    # mancava: senza, l'urgenza di fase non era impostabile da nessuna parte.
+    #
+    # I TRE CASI, e sono tre — è la semantica PATCH che il progetto usa già per
+    # `Sottotask.dipendente_id`, resa possibile da `exclude_unset` nel handler:
+    #   campo ASSENTE      → non toccare l'override esistente
+    #   `null` ESPLICITO   → RIMUOVI l'override, torna a ereditare dal progetto
+    #   un livello         → override esplicito
+    # Il `null` qui non è «azzera» ma «rimetti in eredità»: non si perde niente,
+    # si smette di dire una cosa in più.
+    urgenza: Optional[str] = Field(default=None, max_length=16)
     note: Optional[str] = None
     cascade: bool = Field(
         default=False,
         description="Se true e stato cambia a Sospesa/Annullata/Completata/Da iniziare, propaga ai task figli"
     )
+
+    @model_validator(mode="after")
+    def _urgenza_ammessa(self):
+        """Un livello non ammesso è un 422 di validazione, prima del CHECK
+        `ck_fasi_urgenza` che risponderebbe con un 500.
+
+        `None` passa, e sulla fase ha un significato preciso: rimette in
+        eredità dal progetto. Il CHECK del DB infatti ammette il NULL qui, a
+        differenza del gemello sui progetti.
+        """
+        if self.urgenza is not None and self.urgenza not in LIVELLI_URGENZA:
+            raise ValueError(
+                f"urgenza '{self.urgenza}' non ammessa sulla fase: deve essere "
+                f"uno di {', '.join(LIVELLI_URGENZA)}, oppure null per tornare "
+                f"a ereditare l'urgenza del progetto"
+            )
+        return self
 
 
 # ── Cascata stato fase → task (handoff v16 §14.1) ─────────────────────────
@@ -422,6 +450,7 @@ def lista_fasi_progetto(progetto_id: str, _: Utente = Depends(require_manager)):
     for f in fasi:
         ore_consumate = consumate_per_fase.get(f.id, 0)
         n_task_fase = n_task_per_fase.get(f.id, 0)
+        urgenza, urgenza_ereditata = urgenza_fase_risolta(f, f.progetto)
 
         result.append({
             "id": f.id,
@@ -434,6 +463,10 @@ def lista_fasi_progetto(progetto_id: str, _: Utente = Depends(require_manager)):
             "ore_consumate": float(ore_consumate),
             "ore_rimanenti": (f.ore_vendute or 0) - float(ore_consumate),
             "stato": f.stato,
+            # Urgenza RISOLTA e la sua provenienza, come in gantt_strutturato:
+            # vedi lì il perché dei due nomi.
+            "urgenza": urgenza,
+            "urgenza_ereditata": urgenza_ereditata,
             "n_task": n_task_fase,
             "note": f.note or "",
         })
