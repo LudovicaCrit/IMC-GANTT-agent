@@ -1,0 +1,169 @@
+# CI del GANTT: a ogni push e pull request, pytest e build del frontend in
+# parallelo, poi la suite e2e completa su un database ricostruito dal seed.
+#
+# Nessun valore di backend/.env entra qui. Le credenziali di Postgres sono
+# fittizie e valgono solo per il container del lavoro; la SECRET_KEY si
+# genera a ogni esecuzione e non esce dal runner.
+
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  # Python della produzione; Node richiesto da Vite 8 (>= 20.19 o >= 22.12).
+  VERSIONE_PYTHON: "3.13"
+  VERSIONE_NODE: "22"
+  PGHOST: localhost
+  PGPORT: "5432"
+  PGUSER: gantt_ci
+  PGPASSWORD: gantt_ci
+  DATABASE_URL: postgresql://gantt_ci:gantt_ci@localhost:5432/gantt_db
+  DATABASE_URL_TEST: postgresql://gantt_ci:gantt_ci@localhost:5432/gantt_test
+  GANTT_PORTA_BACKEND: "8100"
+  GANTT_PORTA_FRONTEND: "3100"
+  # Nessuna chiamata all'IA nella CI: chiave vuota, modello fittizio.
+  GEMINI_API_KEY: ""
+  GEMINI_MODEL: modello-fittizio-ci
+
+jobs:
+  backend:
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        # Stessa versione maggiore del Postgres di sviluppo.
+        image: postgres:18
+        env:
+          POSTGRES_USER: gantt_ci
+          POSTGRES_PASSWORD: gantt_ci
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U gantt_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.VERSIONE_PYTHON }}
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-dev.txt
+      - name: Chiave di sessione usa e getta
+        run: |
+          chiave=$(python -c "import secrets; print(secrets.token_urlsafe(48))")
+          echo "::add-mask::$chiave"
+          echo "SECRET_KEY=$chiave" >> "$GITHUB_ENV"
+      - name: Database gantt_db e gantt_test
+        run: |
+          createdb gantt_db
+          createdb gantt_test
+      - name: Dipendenze
+        run: pip install -r requirements.txt -r requirements-dev.txt
+      # data.py controlla lo schema già all'import, cioè quando pytest
+      # raccoglie i test e prima che la fixture db_test ricostruisca il
+      # database: su un gantt_test vuoto la raccolta si ferma. Lo si costruisce
+      # prima, con la stessa procedura della fixture.
+      - name: Schema di gantt_test prima della raccolta dei test
+        run: python scripts/ricostruisci_db.py --database gantt_test --conferma gantt_test
+      - name: pytest
+        run: python -m pytest
+
+  frontend:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.VERSIONE_NODE }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      - run: npm run test:disegno
+
+  e2e:
+    needs: [backend, frontend]
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: gantt_ci
+          POSTGRES_PASSWORD: gantt_ci
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U gantt_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.VERSIONE_PYTHON }}
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-dev.txt
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.VERSIONE_NODE }}
+          cache: npm
+          cache-dependency-path: |
+            frontend/package-lock.json
+            e2e/package-lock.json
+      - name: Chiave di sessione usa e getta
+        run: |
+          chiave=$(python -c "import secrets; print(secrets.token_urlsafe(48))")
+          echo "::add-mask::$chiave"
+          echo "SECRET_KEY=$chiave" >> "$GITHUB_ENV"
+      # playwright.config.js e dati_prova.js chiamano .venv/bin/python dalla
+      # radice del repo: il virtualenv sta lì.
+      - name: Virtualenv del backend
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install -r backend/requirements.txt -r backend/requirements-dev.txt
+      - name: Database gantt_db dal seed
+        working-directory: backend
+        run: |
+          createdb gantt_db
+          ../.venv/bin/python scripts/ricostruisci_db.py --conferma gantt_db
+      - name: Dipendenze del frontend
+        working-directory: frontend
+        run: npm ci
+      - name: Dipendenze degli e2e e Chromium
+        working-directory: e2e
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+      - name: Suite e2e
+        working-directory: e2e
+        run: npx playwright test --reporter=list,html
+        env:
+          PLAYWRIGHT_HTML_OPEN: never
+      - name: Report di Playwright
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            e2e/playwright-report/
+            e2e/test-results/
+          retention-days: 14
