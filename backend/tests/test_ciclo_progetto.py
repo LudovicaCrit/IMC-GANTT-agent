@@ -319,3 +319,82 @@ def test_home_un_interno_con_societa_resta_un_interno(creati, una_societa):
     assert dopo["interne"]["n_totali"] == prima["interne"]["n_totali"] + 1
     assert ([r["polso"]["n_progetti"] for r in dopo["rami"]]
             == [r["polso"]["n_progetti"] for r in prima["rami"]])
+
+
+def test_completare_una_bozza_con_una_societa_inesistente_e_un_422(
+        client, creati, una_societa):
+    """La società si valida PRIMA di toccare la bozza. Prima si scrivevano i
+    campi sull'oggetto e poi si validava: la query di `_valida_societa` faceva
+    l'autoflush dell'azienda inesistente, e la foreign key rispondeva con un
+    IntegrityError, cioè un 500, invece del 422."""
+    creati.append("PT525")
+    client.post("/api/progetti", json={
+        "id": "PT525", "nome": "[TEST] bozza", "stato": "Bozza",
+        "tipologia": "ordinario", "azienda_id": una_societa,
+    })
+    r = client.put("/api/progetti/PT525/completo",
+                   json=_payload_wizard("PT525", "Da iniziare", 999999))
+    assert r.status_code == 422, r.text
+    assert "non esiste" in r.json()["detail"]
+    session = get_session()
+    try:
+        p = session.get(Progetto, "PT525")
+        assert (p.stato, p.azienda_id) == ("Bozza", una_societa)
+    finally:
+        session.close()
+
+
+def test_il_patch_valida_la_societa_sui_valori_risultanti(client, creati):
+    """Un interno senza società che diventa ordinario dal PATCH resterebbe un
+    commerciale senza società: il PATCH lo rifiuta e il progetto resta com'era."""
+    creati.append("PT526")
+    client.post("/api/progetti", json={
+        "id": "PT526", "nome": "[TEST] interno", "stato": "Da iniziare",
+        "tipologia": "interna",
+    })
+    r = client.patch("/api/progetti/PT526", json={"tipologia": "ordinario"})
+    assert r.status_code == 422, r.text
+    assert "società" in r.json()["detail"]
+    session = get_session()
+    try:
+        assert session.get(Progetto, "PT526").tipologia == "interna"
+    finally:
+        session.close()
+
+
+def test_il_patch_fa_diventare_ordinario_un_interno_con_la_societa(
+        client, creati, una_societa):
+    """Tipologia e società insieme: i valori risultanti sono un ordinario con
+    una società valida, e il PATCH li scrive entrambi."""
+    creati.append("PT527")
+    client.post("/api/progetti", json={
+        "id": "PT527", "nome": "[TEST] interno", "stato": "Da iniziare",
+        "tipologia": "interna",
+    })
+    r = client.patch("/api/progetti/PT527",
+                     json={"tipologia": "ordinario", "azienda_id": una_societa})
+    assert r.status_code == 200, r.text
+    session = get_session()
+    try:
+        p = session.get(Progetto, "PT527")
+        assert (p.tipologia, p.azienda_id) == ("ordinario", una_societa)
+    finally:
+        session.close()
+
+
+def test_il_patch_con_una_societa_inesistente_e_un_422(client, creati, una_societa):
+    """Lo stesso caso del completamento: validata dopo i setattr, la società
+    inesistente arriverebbe alla foreign key come 500."""
+    creati.append("PT528")
+    client.post("/api/progetti", json={
+        "id": "PT528", "nome": "[TEST] ordinario", "stato": "Da iniziare",
+        "tipologia": "ordinario", "azienda_id": una_societa,
+    })
+    r = client.patch("/api/progetti/PT528", json={"azienda_id": 999999})
+    assert r.status_code == 422, r.text
+    assert "non esiste" in r.json()["detail"]
+    session = get_session()
+    try:
+        assert session.get(Progetto, "PT528").azienda_id == una_societa
+    finally:
+        session.close()

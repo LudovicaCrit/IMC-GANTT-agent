@@ -94,7 +94,8 @@ load_dotenv(os.path.join(RADICE, "backend", ".env"))
 
 from data_db_impl import get_session, _lunedi, salva_blocchi_settimana  # noqa: E402
 from models import (  # noqa: E402
-    Progetto, Fase, Task, Sottotask, Consuntivo, ConsuntivoSottotask, BloccoOre,
+    Azienda, Progetto, Fase, Task, Sottotask, Consuntivo, ConsuntivoSottotask,
+    BloccoOre,
 )
 
 PROGETTO = "PPROVA"
@@ -124,13 +125,20 @@ def crea():
             print(f"  {PROGETTO} c'è già — lancia prima --cancella")
             return
 
+        # Un ordinario ha una società (`_valida_societa`): la prima per id,
+        # qualunque sia, perché lo scenario non dipende da quale.
+        societa = session.query(Azienda).order_by(Azienda.id).first()
+        if societa is None:
+            print("  nessuna società in Configurazione: lo scenario non si crea")
+            return
+
         # La finestra copre settimana corrente E precedente: lo scenario si
         # guarda da entrambe senza doverlo ricreare.
         inizio, fine = lun - timedelta(days=7), lun + timedelta(days=13)
 
         session.add(Progetto(
             id=PROGETTO, nome=NOME_PROGETTO, cliente="[PROVA]",
-            stato="In esecuzione", tipologia="ordinario",
+            stato="In esecuzione", tipologia="ordinario", azienda_id=societa.id,
             data_inizio=inizio, data_fine=fine,
             descrizione="Scenario sintetico per il mondo-scomposto. "
                         "Si cancella con e2e/scenario_sottotask.py --cancella.",

@@ -46,7 +46,7 @@ load_dotenv(os.path.join(RADICE, "backend", ".env"))
 from sqlalchemy import func  # noqa: E402
 from data_db_impl import get_session, _lunedi, salva_blocchi_settimana  # noqa: E402
 from models import (  # noqa: E402
-    Progetto, Fase, Task, Consuntivo, BloccoOre, OreSettimanali,
+    Azienda, Progetto, Fase, Task, Consuntivo, BloccoOre, OreSettimanali,
 )
 
 PROGETTO = "PFASI"
@@ -67,10 +67,17 @@ def crea():
             print(f"  {PROGETTO} c'è già — lancia prima --cancella")
             return
 
+        # Un ordinario ha una società (`_valida_societa`): la prima per id,
+        # qualunque sia, perché lo scenario non dipende da quale.
+        societa = session.query(Azienda).order_by(Azienda.id).first()
+        if societa is None:
+            print("  nessuna società in Configurazione: lo scenario non si crea")
+            return
+
         inizio, fine = lun - timedelta(days=7), lun + timedelta(days=13)
         session.add(Progetto(
             id=PROGETTO, nome=NOME_PROGETTO, cliente="[PROVA]",
-            stato="In esecuzione", tipologia="ordinario",
+            stato="In esecuzione", tipologia="ordinario", azienda_id=societa.id,
             data_inizio=inizio, data_fine=fine,
             descrizione="Scenario sintetico per la guardia del ritorno a «Da "
                         "iniziare». Si cancella con e2e/scenario_fasi.py --cancella.",

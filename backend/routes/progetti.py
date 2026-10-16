@@ -41,7 +41,8 @@ DETTAGLIO ENDPOINT
    - Stato di default: "Bozza".
    - Un progetto ordinario o bando senza società è rifiutato con 422
      (`_valida_societa`); un interno può non averla. Vale anche per
-     POST /completo e PUT /{id}/completo.
+     POST /completo, PUT /{id}/completo e PATCH /{id}, dove si valida sui
+     valori risultanti e prima di modificare il progetto.
 
 3. PATCH /api/progetti/{id}
    - Manager-only. Modifica anagrafica e/o stato.
@@ -156,6 +157,17 @@ def _valida_societa(session, tipologia, azienda_id):
         )
 
 
+def _valore_risultante(progetto, dto, campo):
+    """Il valore che `campo` avrà dopo la scrittura: quello inviato, se il
+    body lo contiene, altrimenti quello attuale del progetto. Serve a validare
+    PRIMA di toccare l'oggetto ORM: una validazione che interroga il database
+    dopo i setattr fa partire l'autoflush, e un valore che viola una foreign
+    key arriva come IntegrityError (500) invece che come 422."""
+    if campo in type(dto).model_fields and campo in dto.model_fields_set:
+        return getattr(dto, campo)
+    return getattr(progetto, campo)
+
+
 class ProgettoCreate(BaseModel):
     """Body per POST /api/progetti.
 
@@ -221,6 +233,7 @@ class ProgettoUpdate(BaseModel):
     fase_corrente: Optional[str] = Field(default=None, max_length=80)
     sede: Optional[str] = Field(default=None, max_length=40)
     pm_id: Optional[str] = Field(default=None, max_length=10)
+    azienda_id: Optional[int] = None
     scadenza_bando: Optional[date_type] = None
     motivo_sospensione: Optional[str] = None
     lezioni_apprese: Optional[str] = None
@@ -657,10 +670,12 @@ def completa_progetto(progetto_id: str, req: ProgettoCompletoCreate,
             )
 
         # ── 1. Aggiorna anagrafica: solo i campi inviati ─────────────────
+        # La società si valida sui valori risultanti, prima dei setattr.
+        _valida_societa(session, _valore_risultante(progetto, p, "tipologia"),
+                        _valore_risultante(progetto, p, "azienda_id"))
         for campo in CAMPI_ANAGRAFICA_COMPLETAMENTO:
             if campo in p.model_fields_set:
                 setattr(progetto, campo, getattr(p, campo))
-        _valida_societa(session, progetto.tipologia, progetto.azienda_id)
 
         # ── 2. Cancella le fasi vecchie (i task figli vanno via in cascata,
         #       Fase.task ha cascade="all, delete-orphan"). Sicuro perché
@@ -931,6 +946,9 @@ def aggiorna_progetto(progetto_id: str, req: ProgettoUpdate, _: Utente = Depends
         if not prog:
             raise HTTPException(status_code=404, detail=f"Progetto '{progetto_id}' non trovato")
 
+        # La società si valida sui valori risultanti, prima dei setattr.
+        _valida_societa(session, _valore_risultante(prog, req, "tipologia"),
+                        _valore_risultante(prog, req, "azienda_id"))
         for field, value in req.model_dump(exclude_unset=True).items():
             setattr(prog, field, value)
 
