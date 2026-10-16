@@ -13,8 +13,7 @@ override — «questo pezzo lo fa un altro» — dallo Step 4 (06/08/2026).
 Risoluzione: `sottotask.dipendente_id or task.dipendente_id`.
 
 Step 2 dei sottotask — Cantiere backend (30/07/2026, DESIGN_SOTTOTASK.md).
-Il modello è in `models.Sottotask` (migration f2a3b4c5d6e7) con lo stato di
-pianificazione aggiunto da a3b4c5d6e7f8.
+Il modello è in `models.Sottotask`, con il suo stato di pianificazione.
 
 ENDPOINT ESPOSTI
 ────────────────

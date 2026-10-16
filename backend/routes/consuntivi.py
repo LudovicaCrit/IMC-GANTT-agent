@@ -395,7 +395,7 @@ def consuntivi_settimana_corrente(current_user: Utente = Depends(get_current_use
     # vista. Outer perché una riga a zero ore non ha blocchi, e deve restare
     # (è una dichiarazione-ferma: vedi la regola di scarto più sotto).
     # Il join sulla `settimana` regge perché `consuntivi.settimana` è sempre il
-    # lunedì (`_lunedi` in scrittura, verificato nella migration f1a2b3c4d5e6).
+    # lunedì (`_lunedi` in scrittura).
     #
     # Task e Progetto con JOIN ESPLICITI + `contains_eager`, non `joinedload`:
     # quest'ultimo aggancia le tabelle con alias anonimi, su cui l'ORDER BY più

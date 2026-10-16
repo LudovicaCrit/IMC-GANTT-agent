@@ -250,10 +250,10 @@ vuoto, `alembic upgrade head`, `python seed.py`. Le migration servono ai databas
 che hanno dati propri, cioè quelli del cliente: lì ogni cambio di schema deve
 preservarli.
 
-Alembic genera automaticamente migration scripts confrontando `models.py` con il
-database reale. Ogni script Python ha un ID univoco, sa cosa precede e cosa segue,
-e può essere applicato/annullato con un comando. La storia dello schema diventa
-parte del repository, esattamente come il codice.
+Le migration si scrivono a mano, e ogni riga si rilegge: niente script generati
+dal confronto fra `models.py` e il database. Ogni migration ha un ID univoco, sa
+cosa la precede e si applica con un comando. La storia dello schema diventa parte
+del repository, esattamente come il codice.
 
 Le migration fino al 16 ott 2026 sono state riassunte in una baseline,
 `backend/alembic/versions/0001_baseline.py`, che crea lo stesso schema in un passo
@@ -535,14 +535,20 @@ refactor(backend): estratto router fasi (ULTIMO router del refactoring)
 test certificati, motivazione]
 ```
 
-### Ogni cambio di schema passa da una migration
-Il database di sviluppo si può ricostruire da baseline e seed; quelli del cliente
-no. Per questo ogni cambio di schema:
+### Ogni cambio di schema passa dalle migration
+Le migration si scrivono a mano. Fino alla prima installazione presso un cliente
+le migration sono una baseline unica, `0001_baseline.py`, che si modifica
+direttamente: non esistono dati da convertire (DECISIONI.md). Dalla prima
+installazione in poi ogni cambio di schema è una migration nuova. In entrambi i
+casi:
 1. Modifica `models.py`
-2. `alembic revision --autogenerate -m "messaggio"`
-3. Lettura attenta dello script generato
-4. `alembic upgrade head`
-5. Lo script va in git (è una migration committed)
+2. Modifica la baseline, oppure scrivi la migration nuova, a mano
+3. Verifica che lo schema delle migration sia quello del modello (`alembic check`
+   e il confronto con `create_all`, che vede anche i CHECK)
+4. Ricostruisci il database di sviluppo (schema `public` vuoto,
+   `alembic upgrade head`, `python seed.py`), oppure `alembic upgrade head` su un
+   database con dati
+5. Codice e migration vanno nello stesso commit
 
 ### Header descrittivi nei router
 Ogni router ha un header di 70-140 righe con SCOPO, ENDPOINT ESPOSTI, DETTAGLIO

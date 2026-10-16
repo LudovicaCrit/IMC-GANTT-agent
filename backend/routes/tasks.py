@@ -88,7 +88,7 @@ from utils import get_oggi
 # ── DTO ──────────────────────────────────────────────────────────────────
 class DipendenzaInput(BaseModel):
     """Step 3.1 (25/05/2026): una dipendenza in input — sostituisce il vecchio
-    campo `predecessore` stringa singola. Vedi alembic e5f6a7b8c9d0.
+    campo `predecessore` stringa singola.
 
       - task_predecessore_id: id del task da cui dipende
       - tipo_dipendenza:      uno di TIPI_DIPENDENZA (FS/SS/FF/SF). Default 'FS'.
@@ -109,7 +109,7 @@ def lista_tasks(
 ):
     """Lista task con filtri opzionali (Scenario B in lettura)."""
     # Step 3.1 (25/05/2026): selectinload sulle dipendenze entranti — 1 query
-    # in più, evita N+1 sul nuovo campo `dipendenze` (vedi alembic e5f6a7b8c9d0).
+    # in più, evita N+1 sul nuovo campo `dipendenze`.
     from sqlalchemy.orm import selectinload
     session = get_session()
     # joinedload su progetto + fase_rel: evita N+1 nel render del nome
@@ -178,7 +178,7 @@ class NuovoTaskSingolo(BaseModel):
     dipendente_id: str = ""
     # Step 3.1 (25/05/2026): era `predecessore: str` (singolo, implicitamente
     # FS). Ora lista tipizzata che andrà in `dipendenza_task`. Vedi
-    # DipendenzaInput sopra + alembic e5f6a7b8c9d0.
+    # DipendenzaInput sopra.
     dipendenze: list[DipendenzaInput] = []
     stato: str = "Da iniziare"
 

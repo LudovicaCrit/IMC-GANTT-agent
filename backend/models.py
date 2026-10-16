@@ -71,7 +71,7 @@ Base = declarative_base()
 # ENUM APPLICATIVI — fonte di verità per gli stati ammessi
 # ══════════════════════════════════════════════════════════════════════
 # Step 2.1 D3 (13 mag 2026): CHECK constraint a livello DB allineato a queste
-# costanti. Vedi migration c3d4e5f6a7b8 e handoff v15 §3.3.
+# costanti. Vedi handoff v15 §3.3.
 #
 # Modificare questi tuple richiede UNA migration Alembic che aggiorni il CHECK.
 
@@ -85,7 +85,6 @@ STATI_FASE = ("Da iniziare", "In corso", "Completata", "Sospesa", "Annullata")
 # cliente con fasi pianificate, ma con data_inizio futura (non ancora partito).
 # La transizione "Da iniziare → In esecuzione" è MANUALE: il PM la conferma
 # quando data_inizio <= oggi (handoff §3.5 "controllo non automazione").
-# Vedi migration alembic d4e5f6a7b8c9.
 STATI_PROGETTO = (
     "Bozza",
     "Da iniziare",
@@ -131,7 +130,6 @@ def filtro_stato_progetto(stato):
 # qualsiasi stringa (no CHECK su task.stato). Sospeso e Annullato erano scritti
 # a runtime dalla cascata Fase→Task (Step 2.4-bis B, commit 61795c5) e ora sono
 # formalmente ammessi anche dal DB.
-# Vedi migration alembic d4e5f6a7b8c9.
 STATI_TASK = (
     "Da iniziare",
     "In corso",
@@ -169,8 +167,7 @@ STATI_DICHIARABILI = ("In corso", "Completato", "Bloccato")
 # descrive per Task.stato. "In corso" su una definizione condivisa non
 # significherebbe nulla: in corso per chi?
 #
-# CHECK constraint a livello DB: ck_sottotask_stato_pianificazione, vedi
-# migration alembic a3b4c5d6e7f8.
+# CHECK constraint a livello DB: ck_sottotask_stato_pianificazione, su Sottotask.
 STATI_PIANIFICAZIONE_SOTTOTASK = ("Da iniziare", "Sospeso", "Annullato")
 
 # Step 3.1 (25/05/2026): tipi di dipendenza tra task ammessi.
@@ -180,8 +177,7 @@ STATI_PIANIFICAZIONE_SOTTOTASK = ("Da iniziare", "Sospeso", "Annullato")
 # - SS: Start-to-Start   — il successore inizia quando il predecessore inizia
 # - FF: Finish-to-Finish — il successore finisce quando il predecessore finisce
 # - SF: Start-to-Finish  — il successore finisce quando il predecessore inizia (raro)
-# CHECK constraint a livello DB: vedi migration alembic e5f6a7b8c9d0
-# (ck_dipendenza_task_tipo). Anche nel modello, su DipendenzaTask.
+# CHECK constraint a livello DB: ck_dipendenza_task_tipo, su DipendenzaTask.
 TIPI_DIPENDENZA = ("FS", "SS", "FF", "SF")
 
 # Consuntivazione a ore (14/09/2026): da dove arriva un blocco di ore.
@@ -192,10 +188,8 @@ TIPI_DIPENDENZA = ("FS", "SS", "FF", "SF")
 #            come «lavorato il lunedì».
 # NIENTE 'ia', ed è una decisione, non una dimenticanza: l'IA non scrive mai
 # ore-consuntivo. Lavora sul piano (GANTT, assegnazioni); le ore le dichiara solo
-# chi le ha lavorate. C'era nella prima versione del vincolo ed è stato tolto
-# dalla migration a2b3c4d5e6f8.
-# CHECK a livello DB: ck_blocchi_ore_fonte (migration e9f0a1b2c3d4, ristretto da
-# a2b3c4d5e6f8), su BloccoOre.
+# chi le ha lavorate. C'era nella prima versione del vincolo ed è stato tolto.
+# CHECK a livello DB: ck_blocchi_ore_fonte, su BloccoOre.
 FONTI_BLOCCO_ORE = ("manuale", "storico")
 
 # Urgenza dichiarata dal PM (A1, 03/09/2026). È INPUT UMANO, non un dato d'uso:
@@ -206,7 +200,7 @@ FONTI_BLOCCO_ORE = ("manuale", "storico")
 # 38 progetti su 38 fermi sul default, perché nessuno era costretto a scegliere
 # da che parte stare.
 #
-# Nasce dalla RINOMINA di `Progetto.ritardabilita` (migration f8a9b0c1d2e3), che
+# Nasce dalla RINOMINA di `Progetto.ritardabilita`, che
 # era già questo con il nome sbagliato e per giunta INVERSO: alta ritardabilità
 # significa bassa urgenza. Non convivono: leggerne una per l'altra darebbe la
 # risposta opposta.
@@ -259,8 +253,8 @@ def _check_in(colonna, valori, ammetti_null=False):
 
     I CHECK stanno in `__table_args__` e NON solo nelle migration, ed è una
     correzione: `ck_progetti_stato_ammessi`, `ck_fasi_stato_ammessi` e
-    `ck_task_stato_ammessi` erano creati dalle migration c3d4e5f6a7b8 e
-    d4e5f6a7b8c9 ma NON esistevano nel database — verificato su pg_constraint.
+    `ck_task_stato_ammessi` erano creati dalle migration ma NON esistevano
+    nel database — verificato su pg_constraint.
     `alembic check` non se ne accorgeva perché confronta i MODELLI con lo
     schema, e quei vincoli nel modello non c'erano.
 
@@ -277,8 +271,8 @@ def _check_in(colonna, valori, ammetti_null=False):
 # "Eliminato". Il CHECK è più largo della costante `STATI_TASK`, e non è una
 # svista: il soft-delete scrive `stato = "Eliminato"` (routes/tasks.py, via
 # `modifica_task`) ed è raggiungibile dal cestino nel Cantiere. Un CHECK
-# costruito sulla sola `STATI_TASK` — com'era dichiarato nella migration
-# d4e5f6a7b8c9 — farebbe fallire ogni eliminazione con un IntegrityError.
+# costruito sulla sola `STATI_TASK` — com'era dichiarato in una migration
+# precedente — farebbe fallire ogni eliminazione con un IntegrityError.
 #
 # "Eliminato" NON va aggiunto a `STATI_TASK` perché quella costante alimenta la
 # tendina dello stato nel Cantiere (frontend `_costanti.js`): il PM se lo
@@ -309,8 +303,8 @@ STATI_TASK_IN_DB = STATI_TASK + ("Eliminato",)
 # derivano dalla posizione in una tupla.
 #
 # CHECK a livello DB: `ck_utenti_ruolo_app`, dichiarato in `__table_args__` di
-# `Utente` (non solo nella migration a9b0c1d2e3f4 — vedi `_check_in` per il
-# perché quella distinzione conta).
+# `Utente` (non solo in una migration — vedi `_check_in` per il perché
+# quella distinzione conta).
 RUOLI_APP = ("manager", "pm", "user")
 
 
@@ -335,8 +329,8 @@ RUOLI_APP = ("manager", "pm", "user")
 # una finestra in cui il form lo offre come inquadramento — e basta un
 # salvataggio per creare il dato sbagliato.
 #
-# CHECK a livello DB: `ck_ruoli_tipo`, dichiarato QUI e non solo nella migration
-# d3e4f5a6b7c8 — vedi `_check_in` per il perché quella distinzione conta.
+# CHECK a livello DB: `ck_ruoli_tipo`, dichiarato QUI e non solo in una
+# migration — vedi `_check_in` per il perché quella distinzione conta.
 TIPI_RUOLO = ("base", "funzionale")
 
 
@@ -489,7 +483,7 @@ class Azienda(Base):
     DESIGN_SEED_Innovation_Plaza §1 (26/06/2026). Nel seed modelliamo le 2
     s.r.l. operative vive: IMC-Improve (commesse/progetti) e Innovation Plaza
     (bandi). Struttura estensibile: un ramo futuro = una riga in più, non una
-    migration. Vedi migration alembic a7b8c9d0e1f2 (uq_azienda_nome).
+    migration. Il nome è unico (uq_azienda_nome).
     """
     __tablename__ = "azienda"
 
@@ -507,20 +501,20 @@ class Dipendente(Base):
 
     id = Column(String(10), primary_key=True)
     nome = Column(String(100), nullable=False)
-    # `profilo` (String) rimossa l'08/09/2026 — migration d8e9f0a1b2c3. Era la
+    # `profilo` (String) rimossa l'08/09/2026. Era la
     # copia-stringa di `Ruolo.nome` accanto alla FK `ruolo_id`: due sorgenti per
     # l'inquadramento, allineate solo dal fatto che un unico form le scriveva in
     # coppia. L'inquadramento è `ruolo_id`; chi espone un campo `profilo` in un
     # payload lo legge da `ruolo_rel.nome`. I ruoli ricoperti IN AGGIUNTA stanno
     # in `ruoli_aggiuntivi` (M2M) — vedi `DipendentiRuoliAggiuntivi`.
     # azienda_id: ogni persona appartiene a un'azienda del gruppo (obbligatorio).
-    # Vedi migration a7b8c9d0e1f2 + DESIGN_SEED_Innovation_Plaza §1-§2.
+    # Vedi DESIGN_SEED_Innovation_Plaza §1-§2.
     azienda_id = Column(Integer, ForeignKey("azienda.id", name="fk_dipendenti_azienda_id_azienda"),
                         nullable=False)
     ruolo_id = Column(Integer, ForeignKey("ruoli.id"), nullable=True)
     ore_sett = Column(SmallInteger, nullable=False, default=40)
     costo_ora = Column(Float, nullable=True)
-    # `competenze` (JSON) rimossa l'08/09/2026 — migration d2e3f4a5b6c7. Era la
+    # `competenze` (JSON) rimossa l'08/09/2026. Era la
     # seconda sorgente delle competenze, testo libero accanto alla M2M
     # `dipendenti_competenze`: due verità che nessuno teneva allineate. Le
     # competenze si leggono e si scrivono SOLO via `competenze_rel`.
@@ -561,7 +555,7 @@ class Progetto(Base):
     # Vedi handoff v15 §3.3 + Step 2.7-pre (20/05/2026) per "Da iniziare".
     # Una bozza è un progetto a tutti gli effetti, distinto solo dallo stato
     # (Step 2.0 della roadmap, 13 mag 2026).
-    # CHECK constraint sui valori ammessi: vedi alembic c3d4e5f6a7b8 + d4e5f6a7b8c9.
+    # CHECK constraint sui valori ammessi: ck_progetti_stato_ammessi, qui sotto.
     stato = Column(String(30), nullable=False, default="In esecuzione")
     # tipologia: distingue progetti commerciali da bandi (decisione Francesco 4 mag 2026).
     # Per i bandi, il modello prevede 3 fasi standard fisse (Monitoraggio, Proposal, PM)
@@ -569,7 +563,7 @@ class Progetto(Base):
     # si consuntivano come "Attività commerciale" sotto Attività Interne.
     # Era "tipo" con default "progetto" inutilizzato; rinominato per chiarezza.
     # CHECK sui valori ammessi: ck_progetti_tipologia, in __table_args__ qui sotto
-    # e nella migration f6a7b8c9d0e1 (Step 3.2, 03/06/2026). Valore "interna" aggiunto per le
+    # (Step 3.2, 03/06/2026). Valore "interna" aggiunto per le
     # attività interne non fatturabili (ex contenitore-unico P010, ora
     # spacchettato in N progetti distinti: mansioni continuative, corsi, innovazione).
     tipologia = Column(String(20), nullable=False, default="ordinario")  # "ordinario" | "bando" | "interna"
@@ -582,7 +576,6 @@ class Progetto(Base):
     #   (`fase.urgenza or progetto.urgenza` tornerebbe None). Il default lato DB
     #   serve anche perché tre punti creano Progetto fuori dal DTO (seed.py,
     #   add_p010.py, le due route di creazione).
-    #   Migration f8a9b0c1d2e3.
     urgenza = Column(String(16), nullable=False,
                      default=URGENZA_DEFAULT, server_default=URGENZA_DEFAULT)
     data_inizio = Column(Date, nullable=True)
@@ -599,7 +592,7 @@ class Progetto(Base):
     pm_id = Column(String(10), ForeignKey("dipendenti.id"), nullable=True)
     # azienda_id: nullable. Obbligatoria per commerciali/bandi (garantita nel
     # seed / futuro CHECK condizionato), NULL ammesso per gli interni (attività
-    # trasversale). Vedi migration a7b8c9d0e1f2 + DESIGN §1.
+    # trasversale). Vedi DESIGN §1.
     azienda_id = Column(Integer, ForeignKey("azienda.id", name="fk_progetti_azienda_id_azienda"),
                         nullable=True)
     # area: valorizzata SOLO per i bandi Innovation ("PA" | "Imprese"), NULL
@@ -660,7 +653,7 @@ class Progetto(Base):
 # La sequenza e non il massimo degli id esistenti: due creazioni contemporanee
 # leggerebbero lo stesso massimo, e il massimo di una colonna testo è quello
 # alfabetico («PPROVA» > «P011»). Gli id di altra forma (PC01, PN03, scenari
-# di prova) restano ammessi, ma la sequenza non li vede. Migration c8d9e0f1a2b3.
+# di prova) restano ammessi, ma la sequenza non li vede.
 PREFISSO_ID_PROGETTO = "P"
 CIFRE_ID_PROGETTO = 3
 SEQUENZA_NUMERO_PROGETTO = Sequence(
@@ -737,7 +730,6 @@ class Fase(Base):
     #   progetto — la fase resterebbe ferma al valore di ieri senza che nessuno
     #   l'abbia deciso. È lo stesso ragionamento, parola per parola, del commento
     #   su Sottotask.dipendente_id.
-    #   Migration f8a9b0c1d2e3.
     urgenza = Column(String(16), nullable=True)
     note = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -805,8 +797,8 @@ class Task(Base):
     # C'ERANO ANCHE `ore_consumate` e `ore_rimanenti`, due copie denormalizzate
     # del consumato e del residuo. Nessuno le aggiornava da quando le ore
     # vengono dai blocchi: valevano 0 e «copia di ore_pianificate» su tutti i
-    # task, mentre in database c'erano 17.535 ore. Droppate al passo 5.6
-    # (migration e2f3a4b5c6d7 e f3a4b5c6d7e8). Il consumato si somma dalla
+    # task, mentre in database c'erano 17.535 ore. Droppate al passo 5.6.
+    # Il consumato si somma dalla
     # vista `ore_settimanali`, il residuo si calcola dove serve.
     ore_stimate = Column(Integer, nullable=True)
     ore_pianificate = Column(Float, nullable=True)
@@ -814,7 +806,7 @@ class Task(Base):
     data_fine = Column(Date, nullable=True)
     # stato: vedi STATI_TASK in cima al modulo (Step 2.7-pre, 20/05/2026).
     # Valori: "Da iniziare" | "In corso" | "Completato" | "Bloccato" | "Sospeso" | "Annullato".
-    # CHECK constraint: vedi alembic d4e5f6a7b8c9. Sospeso/Annullato sono scritti
+    # CHECK constraint: ck_task_stato_ammessi. Sospeso/Annullato sono scritti
     # dalla cascata Fase→Task (Step 2.4-bis B, commit 61795c5).
     stato = Column(String(20), nullable=False, default="Da iniziare")
     motivo_blocco = Column(Text, nullable=True)  # "Perché?" quando Bloccato/In ritardo
@@ -825,7 +817,6 @@ class Task(Base):
     # Per leggerle: usare le relationship `dipendenze_entranti` (questo task
     # è successore → i suoi predecessori sono lì) e `dipendenze_uscenti`
     # (questo task è predecessore → lista dei suoi successori).
-    # Vedi alembic e5f6a7b8c9d0.
     ordine = Column(SmallInteger, nullable=True)
     note = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -840,7 +831,7 @@ class Task(Base):
     # `STATI_TASK_IN_DB` e non `STATI_TASK`: il CHECK ammette anche "Eliminato",
     # che il soft-delete scrive e la costante non contiene. Vedi il commento su
     # STATI_TASK_IN_DB in cima al modulo — costruirlo sulla sola STATI_TASK,
-    # com'era dichiarato nella migration d4e5f6a7b8c9, farebbe fallire ogni
+    # com'era dichiarato in una migration precedente, farebbe fallire ogni
     # eliminazione dal Cantiere con un IntegrityError.
     __table_args__ = (
         CheckConstraint(_check_in("stato", STATI_TASK_IN_DB),
@@ -851,7 +842,7 @@ class Task(Base):
     # successore (cioè i suoi predecessori). Dipendenze uscenti: dove è
     # predecessore (cioè i suoi successori). Cascade delete: rimuovendo il
     # task spariscono anche le sue dipendenze, allineato alla FK ON DELETE
-    # CASCADE definita in alembic e5f6a7b8c9d0.
+    # CASCADE di dipendenza_task.
     dipendenze_entranti = relationship(
         "DipendenzaTask",
         foreign_keys="DipendenzaTask.task_successore_id",
@@ -884,7 +875,7 @@ class Task(Base):
 class DipendenzaTask(Base):
     """Dipendenza tra task (modello-grafo).
 
-    Step 3.1 (25/05/2026, alembic e5f6a7b8c9d0): sostituisce la vecchia colonna
+    Step 3.1 (25/05/2026): sostituisce la vecchia colonna
     `Task.predecessore` (stringa singola). Permette dipendenze MULTIPLE e
     tipizzate FS/SS/FF/SF — vedi TIPI_DIPENDENZA in cima al modulo.
 
@@ -892,7 +883,7 @@ class DipendenzaTask(Base):
       - task_successore_id:   il task che dipende
       - tipo_dipendenza:      'FS' (default), 'SS', 'FF', 'SF'
 
-    Vincoli (a livello DB e modello — vedi migration alembic e5f6a7b8c9d0):
+    Vincoli (a livello DB e modello):
       UNIQUE (task_predecessore_id, task_successore_id) → uq_dipendenza_task
       CHECK  (task_predecessore_id != task_successore_id) → ck_dipendenza_task_no_self
       CHECK  (tipo_dipendenza IN TIPI_DIPENDENZA)         → ck_dipendenza_task_tipo
@@ -978,13 +969,12 @@ class Sottotask(Base):
     # colonna «chi fa il lavoro», e le due vanno lette insieme.
     # nullable=True NON è una lacuna da riempire: il NULL È l'informazione
     # («nessun override»), e un default inventato la cancellerebbe.
-    # Migration: alembic b4c5d6e7f8a9.
     dipendente_id = Column(String(10), ForeignKey("dipendenti.id"), nullable=True)
     # stato: PIANIFICAZIONE, non avanzamento. Vedi STATI_PIANIFICAZIONE_SOTTOTASK
     # in cima al modulo — è il PM che sospende o annulla un pezzo del piano.
     # Come il dipendente sta andando su questo sottotask si legge invece dalle
     # sue dichiarazioni (`dichiarazioni[].stato_dichiarato`).
-    # CHECK a livello DB: ck_sottotask_stato_pianificazione (alembic a3b4c5d6e7f8).
+    # CHECK a livello DB: ck_sottotask_stato_pianificazione, in __table_args__.
     stato = Column(String(20), nullable=False, default="Da iniziare")
     # ordine: sequenza logica dei sottotask dentro il task. Stesso tipo di
     # Task.ordine. Il default alla creazione (max(ordine)+1) è responsabilità
@@ -997,10 +987,9 @@ class Sottotask(Base):
     # BERSAGLIO che Postgres esige per la FK composta di `blocchi_ore`: una FK
     # su due colonne deve puntare a una coppia dichiarata unica. È quella FK a
     # garantire che un blocco su un pezzo porti il task giusto.
-    # Migration e9f0a1b2c3d4.
     __table_args__ = (
         UniqueConstraint("id", "task_id", name="uq_sottotask_id_task"),
-        # Esisteva nel DB (migration a3b4c5d6e7f8) ma non qui: la lacuna dei
+        # Esisteva nel DB ma non qui: la lacuna dei
         # CHECK spariti — un `create_all` avrebbe creato `sottotask` senza.
         CheckConstraint(_check_in("stato", STATI_PIANIFICAZIONE_SOTTOTASK),
                         name="ck_sottotask_stato_pianificazione"),
@@ -1067,7 +1056,6 @@ class Consuntivo(Base):
     # Con la Consuntivazione a ore le ore si dichiarano per giorno in
     # `blocchi_ore` e si sommano dalla vista `ore_settimanali`: nessuna delle
     # cinque aveva più uno scrittore (passo 5.4) né un lettore (5.5).
-    # Migration b1c2d3e4f5a6, c2d3e4f5a6b7, d1e2f3a4b5c6.
     #
     # ore_stimate_residue: quante ore MANCANO ancora per finire, secondo chi ci
     #   sta lavorando, dichiarate nella settimana in cui lo dice (04/09/2026).
@@ -1087,7 +1075,7 @@ class Consuntivo(Base):
     #   scriverebbe «ho finito» su ogni riga mai compilata.
     #
     #   Il QUANTO sta qui, il COSA in `nota`: il numero si aggrega, il testo si
-    #   legge. Migration b0c1d2e3f4a5, gemella su ConsuntivoSottotask.
+    #   legge. Gemella su ConsuntivoSottotask.
     ore_stimate_residue = Column(Float, nullable=True)
     # Lo stato che il DIPENDENTE ha dichiarato in questa settimana su questo
     # task. Valori: il sottoinsieme STATI_DICHIARABILI (vincolo nel DTO della
@@ -1096,7 +1084,7 @@ class Consuntivo(Base):
     # prima che la colonna esistesse, o compilazioni di sole ore / sola nota.
     # Non è un doppione di Task.stato: quello è lo stato del task OGGI, a
     # sovrascrittura e senza autore; questo è cosa disse quel dipendente in
-    # quella settimana, e resta. Vedi migration e1f2a3b4c5d6.
+    # quella settimana, e resta.
     stato_dichiarato = Column(String(20), nullable=True)
     # presa_visione: «l'ho guardato, è ancora fermo, non è avanzato» (nodo F-2,
     #   02/09/2026). È una TRACCIA SENZA AVANZAMENTO: fa contare l'unità come
@@ -1105,7 +1093,6 @@ class Consuntivo(Base):
     #   anche per la riga-padre di un task scomposto (derivazione a 0 ore) o per
     #   un pezzo a cui è stata cancellata la nota. Le due devono poter
     #   convivere: si prende visione e poi si scrive anche una nota.
-    #   Vedi migration e7f8a9b0c1d2.
     presa_visione = Column(Boolean, nullable=False, default=False,
                            server_default="false")
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -1143,23 +1130,22 @@ class ConsuntivoSottotask(Base):
     # presa_visione: gemella esatta di Consuntivo.presa_visione — «l'ho
     #   guardato, è ancora fermo». Sta su ENTRAMBE le tabelle perché ogni
     #   colonna della dichiarazione esiste su entrambe: metterla solo qui (o
-    #   solo di là) rifarebbe l'asimmetria task/sottotask che la migration
-    #   d6e7f8a9b0c1 è servita a togliere. Vedi migration e7f8a9b0c1d2.
+    #   solo di là) rifarebbe l'asimmetria task/sottotask che è stata
+    #   tolta apposta.
     presa_visione = Column(Boolean, nullable=False, default=False,
                            server_default="false")
     # QUI C'ERANO `percentuale` e `ore_effettive`, le due colonne del cursore
     # sul pezzo: l'avanzamento 0-100 dichiarato con lo slider, e le ore scritte
     # a mano quando quell'avanzamento non le catturava. Le ore si derivavano
-    # dalla prima e la seconda le sostituiva. Droppate al passo 5.6 (migration
-    # a4b5c6d7e8f9) insieme alle gemelle su `Consuntivo`: nella Consuntivazione
+    # dalla prima e la seconda le sostituiva. Droppate al passo 5.6
+    # insieme alle gemelle su `Consuntivo`: nella Consuntivazione
     # a ore le ore non si derivano da niente, si dichiarano per giorno.
     #
     # ore_stimate_residue: gemella esatta di `Consuntivo.ore_stimate_residue` —
     # «quante ore mancano ancora su questo PEZZO», per settimana. Le stesse
     # ragioni, che là sono scritte per esteso: NULL = non stimato, 0.0 = non
     # manca niente; INERTE (non entra in nessun calcolo di ore); il QUANTO qui,
-    # il COSA in `nota`. Aggiunta dalla stessa migration su entrambe le tabelle
-    # (b0c1d2e3f4a5, un ciclo sui due nomi).
+    # il COSA in `nota`.
     ore_stimate_residue = Column(Float, nullable=True)
     # nota: la nota-sottotask vive TUTTA qui, attaccata al pezzo che descrive.
     # «Obbligatoria se Bloccato» è validazione della route, non della colonna.
@@ -1250,7 +1236,7 @@ class BloccoOre(Base):
 # tenere allineato. `settimana` è il lunedì ISO del giorno — la stessa regola di
 # `_lunedi` in data_db_impl (`date_trunc('week')` in Postgres è ISO: lunedì).
 #
-# PERCHÉ ANCHE QUI E NON SOLO NELLA MIGRATION f0a1b2c3d4e5: è la lezione dei
+# PERCHÉ ANCHE QUI E NON SOLO NELLE MIGRATION: è la lezione dei
 # CHECK spariti (vedi `_check_in`). Un database ricreato con `create_tables()`
 # non saprebbe nulla di una vista dichiarata solo in migration, e ogni lettore
 # delle ore fallirebbe su una relazione inesistente. Gli eventi DDL la legano
@@ -1269,8 +1255,8 @@ event.listen(BloccoOre.__table__, "after_create", DDL(VISTA_ORE_SETTIMANALI))
 event.listen(BloccoOre.__table__, "before_drop", DDL("DROP VIEW IF EXISTS ore_settimanali"))
 
 # La vista come oggetto interrogabile dai lettori (`OreSettimanali.c.ore`).
-# SQLAlchemy la conosce SOLO per leggerla: a crearla e distruggerla sono la
-# migration f0a1b2c3d4e5 (passo 1) e, per `create_all`, gli eventi DDL qui sopra.
+# SQLAlchemy la conosce SOLO per leggerla: a crearla sono la
+# baseline delle migration e, per `create_all` e `drop_all`, gli eventi DDL qui sopra.
 #
 # FUORI DA `Base.metadata` DI PROPOSITO — non spostarla lì. Su quel metadata
 # `create_all` (seed, test) emetterebbe CREATE TABLE ore_settimanali, che
@@ -1338,7 +1324,7 @@ class Intervento(Base):
 # QUI C'ERANO `PresenzaSettimanale` e `Spesa`, due tabelle che non sono mai
 # entrate in funzione: le scriveva solo il vecchio `POST /salva`, il form non
 # gliele ha mai mandate, non le ha lette mai nessuno e in database avevano zero
-# righe. Droppate al passo 5.6 (migration a6b7c8d9e0f1).
+# righe. Droppate al passo 5.6.
 # Se un giorno serviranno le assenze — e probabilmente serviranno, perché una
 # settimana di ferie oggi non si sa dire — andranno ridisegnate con la grana
 # della griglia: a ore e per giorno, non con quella di un form che non c'è più.
@@ -1353,7 +1339,7 @@ class SalSnapshot(Base):
     in un istante (DESIGN_SAL §3). Lo stato (progetto + fasi + task + ore + date
     + dipendenze tipizzate) è serializzato in JSONB; le colonne sono i metadati.
 
-    Durabilità (vedi migration c9d0e1f2a3b4):
+    Durabilità:
       - progetto_id FK senza CASCADE: la storia non si cancella col progetto.
       - consolidato_da è l'id dipendente come stringa SENZA FK: lo snapshot
         resta leggibile anche se quella persona viene rimossa (coerente con i
@@ -1381,7 +1367,7 @@ class BollettinoEconomico(Base):
     del GANTT, il Bollettino l'ECONOMIA. Stessa forma di sal_snapshot (immutabile,
     autocontenuto, JSONB); il JSONB `stato` contiene i margini calcolati + i
     grezzi che li producono (valore, costi, ore, costo_ora), con nomi
-    denormalizzati. Vedi migration d0e1f2a3b4c5.
+    denormalizzati.
     """
     __tablename__ = "bollettino_economico"
 

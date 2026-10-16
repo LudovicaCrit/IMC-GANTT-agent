@@ -9,7 +9,7 @@
 - ✅ CLAUDE.md e DECISIONI.md
 - ✅ pytest e cartella backend/tests/, test puri convertiti
 - ✅ Database di test gantt_test costruito dalle migration, confronto schema con il DB di sviluppo
-- ✅ Modello e migration allineati (migration b7c8d9e0f1a2)
+- ✅ Modello e migration allineati: la FK di task.fase_id è passata a ON DELETE RESTRICT, come nel modello
 - ✅ PIANO.md e BACKLOG.md
 - ✅ Seed su gantt_test e spostamento in backend/tests/ dei test che scrivono sul DB
 - ✅ Ricostruire il DB di sviluppo gantt_db da migration e seed

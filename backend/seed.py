@@ -121,7 +121,7 @@ def seed():
         ruoli_base_obj[nome] = r
         ruoli_obj[nome] = r
     # CERCA PRIMA DI CREARE. Su un database costruito dalle migration il ruolo
-    # PM esiste già: lo inserisce la migration a5b6c7d8e9f0. Su uno creato con
+    # PM esiste già: lo inserisce la baseline. Su uno creato con
     # `create_all` non esiste e lo crea il seed. Se c'è con un tipo diverso da
     # 'funzionale' il dato è incoerente: ci si ferma invece di correggerlo qui.
     for nome, descr in ruoli_funzionali:
@@ -436,8 +436,7 @@ def seed():
             progetto_id=pid,
             fase_id=fase_obj.id if fase_obj else None,
             # `ordine` anche qui (FIX 3): il seed ricostruisce da zero, e senza
-            # questa riga un re-seed riporterebbe la colonna a NULL su tutto —
-            # la migration c1d2e3f4a5b6 è già applicata e non rigira.
+            # questa riga un re-seed riporterebbe la colonna a NULL su tutto.
             ordine=prossimo_ordine(fase_obj.id if fase_obj else None),
             nome=row["nome"],
             ore_stimate=int(row["ore_stimate"]),
@@ -521,8 +520,7 @@ def seed():
     # della consuntivazione a ore i lettori sommano la vista `ore_settimanali`,
     # non `ore_dichiarate`. Un seed che scrivesse solo i consuntivi darebbe un
     # database con 17.535 ore dichiarate e zero ore visibili.
-    # Stessa regola della migration f1a2b3c4d5e6, perché un DB seminato e uno
-    # migrato devono essere indistinguibili: un blocco sul LUNEDÌ della
+    # La regola: un blocco sul LUNEDÌ della
     # settimana, fonte 'storico' (il giorno vero non esiste nei dati), nessun
     # blocco per le righe a zero ore.
     # `ore_dichiarate` NON si semina più (passo 5.5): la colonna era il guscio

@@ -8,11 +8,10 @@
  * (SezioneFasiTask, FaseEditabile, BannerStato, ModaleConfermaCascata, ecc.)
  * e dal file principale.
  *
- * Allineate ai CHECK constraint del DB Postgres. Storico migration:
- *   - c3d4e5f6a7b8 (13 mag 2026): CHECK fasi.stato e progetti.stato (5 stati)
- *   - d4e5f6a7b8c9 (20 mag 2026): CHECK task.stato + "Da iniziare" su progetti
+ * Allineate ai CHECK constraint del DB Postgres (i `ck_*_stato_ammessi` di
+ * models.py).
  *
- * Se cambi qui, cambia anche in models.py e nella migration corrispondente.
+ * Se cambi qui, cambia anche in models.py e il CHECK nelle migration.
  *
  * Il prefisso "_" segnala "modulo interno di sezione cantiere": non importare
  * da altri ambiti (Risorse, Home, ecc.), che hanno costanti proprie.
@@ -33,7 +32,7 @@ export const STATI_TASK = ['Da iniziare', 'In corso', 'Completato', 'Bloccato', 
 
 // Stati di PIANIFICAZIONE del sottotask — quelli che il PM governa sulla
 // DEFINIZIONE del pezzo dal Cantiere. CHECK a livello DB:
-// ck_sottotask_stato_pianificazione (migration a3b4c5d6e7f8).
+// ck_sottotask_stato_pianificazione.
 //
 // NON sono i tre dichiarabili (In corso / Completato / Bloccato): quelli sono
 // l'asse del DIPENDENTE e vivono sulle sue dichiarazioni settimanali, non sulla

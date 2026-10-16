@@ -1407,8 +1407,8 @@ def task_settimana_dipendente(dipendente_id, settimana=None):
     sui task NON scomposti, gemelli esatti fra i due:
       presa_visione (bool)        «l'ho guardato, è ancora fermo». False quando
                                   la riga non c'è: la domanda ha risposta, ed è
-                                  no. Vedi migration e7f8a9b0c1d2 per il perché
-                                  è una colonna sua e non `compilato`.
+                                  no. Perché è una colonna sua e non
+                                  `compilato`: vedi Consuntivo.presa_visione.
       nota_ereditata (str|None)   l'ultima nota non vuota scritta su quell'unità
                                   PRIMA di questa settimana.
       nota_ereditata_da (str|None) la settimana da cui viene, in ISO.
@@ -2029,8 +2029,8 @@ def _next_task_id():
 def contatore_ordine_task(session):
     """Restituisce `prossimo(fase_id)` → la posizione del prossimo task in quella fase.
 
-    Chiude il FIX 3 (migration c1d2e3f4a5b6). Quella ha materializzato
-    `Task.ordine` sui 114 task esistenti, ma nessun punto di creazione lo
+    Chiude il FIX 3. Una migration aveva materializzato
+    `Task.ordine` sui task esistenti, ma nessun punto di creazione lo
     scriveva: ogni task nuovo nasceva NULL e finiva in coda alla sua fase — un
     comportamento ragionevole, ma deciso da nessuno, e che avrebbe fatto tornare
     la colonna piena di buchi una riga alla volta.
