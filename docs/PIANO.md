@@ -17,6 +17,20 @@
 
 **Chiusura**: Code lavora con regole scritte e una rete di test che non tocca il DB di sviluppo.
 
+## Fondamenta per la produzione (prima di chiudere la fase 1)
+*Dall'audit (AUDIT_PRODUZIONE.md) e dalla ricognizione sugli id (RICOGNIZIONE_ID.md). I cambi di schema si fanno nella baseline finché non esiste un'installazione vera.*
+- ☐ A. Baseline a schema identico alle migration attuali, nuova impronta dei dipendenti, README corretto
+- ☐ B. Rifondazione dello schema: id numerici, codice dei progetti, famiglie delle attività interne in tabella, naming convention, tabelle morte via, indici, date con fuso, soldi in Numeric, ore che nessuna cascata può cancellare
+- ☐ C. Strato dati: sessioni sempre chiuse, una transazione per operazione, pool configurato, logging, gestore unico degli errori
+- ☐ D. Validazione e concorrenza: DTO con tipi e limiti, whitelist ovunque, transizioni di stato del progetto nel servizio, lock sul salvataggio delle ore
+- ☐ E. Sicurezza: documentazione API chiusa in produzione, seed che rifiuta la produzione, token invalidato al logout, cookie Secure, host da env
+- ☐ F. Un solo orologio, con il fuso da configurazione
+- ☐ G. Frontend robusto: ErrorBoundary, chiamate con timeout e messaggi del server, stati di caricamento ed errore, niente doppi invii
+- ☐ H. Query che crescono coi dati: niente N+1, ore aggregate senza ricalcolare tutto, liste paginate
+- ☐ SAL: revisione completa di consolidamento, storico e confronto, dopo i blocchi C, D ed E
+
+**Chiusura**: nessun bloccante dell'audit aperto, tranne 7.3 (fase 3) e 7.4 (fase 8).
+
 ## Fase 1 — Ciò che l'utente tocca non si rompe
 - ✅ Modello Gemini da variabile d'ambiente
 - ✅ Pipeline e Tavolo di Lavoro fuori dal menu e dal codice, con i loro endpoint orfani (/api/tasks/applica, /api/agent/* non usati, /api/pianificazione/*), le funzioni morte di api.js e la dipendenza frappe-gantt. Prima si archiviano gli embrioni IA da recuperare. Attenzione: il webServer degli e2e usa /api/agent/status come healthcheck, va sostituito nello stesso passo.

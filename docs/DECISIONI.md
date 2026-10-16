@@ -36,6 +36,7 @@ Saturazione: si mostra sia sul piano sia sulle ore vere, affiancate; lo scarto �
 - Un task è scomposto se ha pezzi non annullati. La definizione è unica, ovunque.
 - Periodi di assenza: servono solo a far funzionare l'app senza disturbare chi è assente, non a gestire le ferie dell'azienda, la cui comunicazione ufficiale resta fuori dall'app. Il dipendente segna il periodo in Consuntivazione; lo approva il management o un PM di uno dei progetti su cui la persona lavora, e basta la prima approvazione. Solo un periodo approvato ha effetto: nei suoi giorni non si chiede consuntivazione e non partono promemoria, e la copertura li conta come resi conto. Le chiusure aziendali usano lo stesso meccanismo, dichiarate dal management e già approvate. Le ferie non si consuntivano.
 - Presenze e rimborsi: costruiti sulla griglia dei giorni; l'amministrazione vede presenze e spese di tutti. Fanno parte del prodotto presentato.
+- Le ore consuntivate non si cancellano mai per effetto di una cascata: un progetto, una fase o un task con ore dichiarate non si elimina e non torna in Bozza.
 
 ## 4. Dal basso verso il piano: un solo meccanismo propone / ratifica
 - Appunto al volo: una casella sempre a portata (Home, griglia, poi avatar vocale). Una riga scritta diventa un pezzo (sottotask) con origine (PM o dipendente), stato di ratifica e, facoltativo, richiesto da. L'IA propone dove collocarlo; senza IA restano due tendine.
@@ -57,6 +58,7 @@ Saturazione: si mostra sia sul piano sia sulle ore vere, affiancate; lo scarto �
 - Permessi: il PM agisce sui suoi progetti (pm_id), il management su tutto. Matrice di accesso pagina per pagina da definire nella fase 3.
 - Account: ogni dipendente ha un account; si crea da Configurazione; ognuno si cambia la password.
 - Attività interne: contano dove conta il tempo delle persone (saturazione, capacità, presenza), non dove conta il progetto-cliente (semaforo, margini, candidati da spostare).
+- I costi orari delle persone li vede solo il management, anche nel bollettino economico.
 
 ## 7. IA
 - I numeri li calcola il codice; l'LLM li riceve già fatti, ragiona e argomenta citandoli. Ogni proposta la decide un umano, e resta registrata.
@@ -73,7 +75,7 @@ Saturazione: si mostra sia sul piano sia sulle ore vere, affiancate; lo scarto �
 
 ## 8. Pagine
 - Home a tre raggi: management, PM, dipendente.
-- GANTT: dettaglio in sola lettura con le schede Design, Criticità e Storia (il SAL). Le viste portafoglio e per-dipendente sono lenti selezionabili nella stessa pagina, non pagine nuove.
+- GANTT: dettaglio in sola lettura con le schede Design, Criticità e Storia (il SAL). Le viste portafoglio e per-dipendente sono lenti selezionabili nella stessa pagina, non pagine nuove. Consolidare un SAL registra il piano senza modificarlo, quindi resta nella scheda Storia del dettaglio.
 - Cantiere: l'unico posto dove il piano si scrive, dalla nascita alla vita del progetto. Due ingressi, un solo editor: il Wizard stende la bozza, con l'IA che attinge dallo storico dell'Archivio, e la bozza si apre nello stesso editor in cui poi si ripianifica. Nel dettaglio di un progetto il PM ripianifica e valuta scenari sui suoi progetti; nella vista d'insieme del Cantiere il management sposta priorità e persone tra progetti, perché quelle decisioni toccano più progetti insieme. Ogni modifica, a mano o proposta da un'IA, passa dalle stesse funzioni di servizio: l'IA propone una differenza prima/dopo, il PM o il management la conferma. La pagina è costruita a componenti con una responsabilità ciascuno.
 - Risorse, Attività interne.
 - Economia: margini, avanzamento, cruscotto con le quattro ore affiancate, delta, testata anagrafica, lente sul costo della dispersione delle persone su troppi progetti.
@@ -94,6 +96,9 @@ Saturazione: si mostra sia sul piano sia sulle ore vere, affiancate; lo scarto �
 - GANTT e PMOGen restano progetti distinti: si possono collegare, mai travasare codice.
 - Leggibilità: il codice è un obiettivo quanto le funzioni. docs/ARCHITETTURA.md è la mappa per chi deve metterci le mani. data_db_impl.py si smonta un dominio alla volta in moduli di servizio, a comportamento invariato e provato dai test, finché non esiste più.
 - Impostabile per altre aziende: un'installazione per cliente, con il suo server e il suo database. Identità dell'azienda (nome, logo) e parametri (ore standard, giorni lavorativi e festività, soglie) si impostano da Configurazione; nel codice non c'è nessun valore di una singola azienda. Niente multi-tenant: separare i dati di più clienti nella stessa installazione è il modello a canone che il prodotto non vuole.
+- Baseline: fino alla prima installazione vera, le migration sono una baseline unica che si modifica direttamente, perché non esistono dati da convertire. Dalla prima installazione in poi, ogni cambio di schema è una migration nuova.
+- Chiavi: nessuna chiave parlante. Gli id sono numerici e generati dal database; dove serve all'utente c'è un codice leggibile separato, che non entra negli URL.
+- Tempo: un solo orologio, get_oggi(), con il fuso orario preso dalla configurazione.
 
 ## 11. Futuro, già deciso nel principio
 - Notifiche (Teams): il giorno stesso in cui un task finisce.
