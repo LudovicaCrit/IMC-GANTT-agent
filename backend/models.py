@@ -25,7 +25,7 @@ load_dotenv()
 from sqlalchemy import (
     create_engine, Column, Integer, String, Float, Boolean, Text, Date,
     DateTime, ForeignKey, UniqueConstraint, CheckConstraint, JSON, SmallInteger,
-    Numeric, ForeignKeyConstraint, func, event, DDL, MetaData, Table,
+    Numeric, ForeignKeyConstraint, func, event, DDL, MetaData, Table, Index,
     BigInteger, Sequence, case, cast, select, text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -714,7 +714,8 @@ class Fase(Base):
     __tablename__ = "fasi"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    progetto_id = Column(String(10), ForeignKey("progetti.id", ondelete="CASCADE"), nullable=False)
+    progetto_id = Column(String(10), ForeignKey("progetti.id", ondelete="CASCADE"), nullable=False,
+                         index=True)
     nome = Column(String(100), nullable=False)
     ordine = Column(SmallInteger, nullable=False, default=1)
     data_inizio = Column(Date, nullable=True)
@@ -788,13 +789,14 @@ class Task(Base):
     __tablename__ = "task"
 
     id = Column(String(10), primary_key=True)
-    progetto_id = Column(String(10), ForeignKey("progetti.id", ondelete="CASCADE"), nullable=False)
+    progetto_id = Column(String(10), ForeignKey("progetti.id", ondelete="CASCADE"), nullable=False,
+                         index=True)
     # fase_id: FK NOT NULL alla tabella `fasi`. Step 2.1 D1 (13 mag 2026):
     # eliminata la doppia rappresentazione (prima esistevano sia fase_id che
     # fase stringa "legacy"). Ora il nome della fase si legge tramite
     # `task.fase_rel.nome` o, nel DataFrame loader, tramite la chiave "fase"
     # (derivata, esposta per retrocompatibilità con i router e il frontend).
-    fase_id = Column(Integer, ForeignKey("fasi.id", ondelete="RESTRICT"), nullable=False)
+    fase_id = Column(Integer, ForeignKey("fasi.id", ondelete="RESTRICT"), nullable=False, index=True)
     nome = Column(String(200), nullable=False)
     # ═════════════════════════════════════════════════════════════════════
     # MODELLO ORE TASK — Step 2.1 D4 (handoff v15 §2.1)
@@ -840,7 +842,7 @@ class Task(Base):
     fase_rel = relationship("Fase", back_populates="task")
     assegnazioni = relationship("Assegnazione", back_populates="task", cascade="all, delete-orphan")
     consuntivi = relationship("Consuntivo", back_populates="task")
-    dipendente_id = Column(String(10), ForeignKey("dipendenti.id"), nullable=True)
+    dipendente_id = Column(String(10), ForeignKey("dipendenti.id"), nullable=True, index=True)
 
     # `STATI_TASK_IN_DB` e non `STATI_TASK`: il CHECK ammette anche "Eliminato",
     # che il soft-delete scrive e la costante non contiene. Vedi il commento su
@@ -911,10 +913,13 @@ class DipendenzaTask(Base):
         ForeignKey("task.id", ondelete="CASCADE"),
         nullable=False,
     )
+    # Indicizzato a parte: la UNIQUE (predecessore, successore) serve già le
+    # ricerche per predecessore, non quelle per successore («da chi dipende»).
     task_successore_id = Column(
         String(10),
         ForeignKey("task.id", ondelete="CASCADE"),
         nullable=False,
+        index=True,
     )
     tipo_dipendenza = Column(String(2), nullable=False, default="FS", server_default="FS")
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -970,7 +975,7 @@ class Sottotask(Base):
     __tablename__ = "sottotask"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    task_id = Column(String(10), ForeignKey("task.id", ondelete="CASCADE"), nullable=False)
+    task_id = Column(String(10), ForeignKey("task.id", ondelete="CASCADE"), nullable=False, index=True)
     nome = Column(String(200), nullable=False)
     ore_stimate = Column(Integer, nullable=True)
     # dipendente_id: OVERRIDE dell'assegnatario del task (Step 4, 06/08/2026).
@@ -981,7 +986,7 @@ class Sottotask(Base):
     # colonna «chi fa il lavoro», e le due vanno lette insieme.
     # nullable=True NON è una lacuna da riempire: il NULL È l'informazione
     # («nessun override»), e un default inventato la cancellerebbe.
-    dipendente_id = Column(String(10), ForeignKey("dipendenti.id"), nullable=True)
+    dipendente_id = Column(String(10), ForeignKey("dipendenti.id"), nullable=True, index=True)
     # stato: PIANIFICAZIONE, non avanzamento. Vedi STATI_PIANIFICAZIONE_SOTTOTASK
     # in cima al modulo — è il PM che sospende o annulla un pezzo del piano.
     # Come il dipendente sta andando su questo sottotask si legge invece dalle
@@ -1111,6 +1116,10 @@ class Consuntivo(Base):
 
     __table_args__ = (
         UniqueConstraint("task_id", "dipendente_id", "settimana"),
+        # La UNIQUE comincia dal task: le letture «la settimana di questa
+        # persona» (/consuntivi/me, la Home) partono invece dal dipendente.
+        # Il nome lo dà la convenzione, dalla prima colonna.
+        Index(None, "dipendente_id", "settimana"),
     )
 
     task = relationship("Task", back_populates="consuntivi")

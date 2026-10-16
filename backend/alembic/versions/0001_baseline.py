@@ -455,6 +455,24 @@ def upgrade() -> None:
         )
         op.create_index(op.f(f"ix_{tabella}_progetto_id"), tabella, ["progetto_id"])
 
+    # ── Indici sulle chiavi più lette (passo B2) ──────────────────────────
+    # Le FK non portano un indice da sole. Questi servono le letture frequenti:
+    # i task e le fasi di un progetto, i task e i pezzi di una persona, «da chi
+    # dipende» un task, la settimana di una persona nei consuntivi. Non c'è un
+    # indice blocchi_ore(dipendente_id, giorno): è il prefisso della UNIQUE, che
+    # lo serve già. Né consuntivo_sottotask(dipendente_id, settimana): ogni
+    # lettura filtra anche per sottotask, la prima colonna della sua UNIQUE.
+    op.create_index(op.f("ix_fasi_progetto_id"), "fasi", ["progetto_id"])
+    op.create_index(op.f("ix_task_progetto_id"), "task", ["progetto_id"])
+    op.create_index(op.f("ix_task_fase_id"), "task", ["fase_id"])
+    op.create_index(op.f("ix_task_dipendente_id"), "task", ["dipendente_id"])
+    op.create_index(op.f("ix_sottotask_task_id"), "sottotask", ["task_id"])
+    op.create_index(op.f("ix_sottotask_dipendente_id"), "sottotask", ["dipendente_id"])
+    op.create_index(op.f("ix_dipendenza_task_task_successore_id"), "dipendenza_task",
+                    ["task_successore_id"])
+    op.create_index(op.f("ix_consuntivi_dipendente_id"), "consuntivi",
+                    ["dipendente_id", "settimana"])
+
     # ── Vista: le ore per settimana, sommate dai blocchi ──────────────────
     # Stesso testo di models.py, che la crea per `create_all`.
     op.execute("""
