@@ -106,13 +106,13 @@ migrazione §6-ter). `gantt_strutturato` era già nativamente su SQLAlchemy.
 from datetime import datetime
 from typing import Optional
 from fastapi import APIRouter, Depends, Response
-from sqlalchemy.orm import joinedload, selectinload
+from sqlalchemy.orm import contains_eager, joinedload, selectinload
 from sqlalchemy import func
 
 from deps import require_manager
 from models import (
     Utente, Progetto, Fase, Task, OreSettimanali, Dipendente, Sottotask,
-    get_session, filtro_stato_progetto, urgenza_fase_risolta,
+    get_session, filtro_stato_progetto, ordine_progetti, urgenza_fase_risolta,
 )
 
 
@@ -402,7 +402,7 @@ def gantt_strutturato(
             joinedload(Progetto.fasi).joinedload(Fase.task)
                 .selectinload(Task.dipendenze_entranti)
         )
-        progetti = _filtra_progetti(q, stato, progetto_id).order_by(Progetto.id).all()
+        progetti = _filtra_progetti(q, stato, progetto_id).order_by(*ordine_progetti()).all()
 
         # ── 2. Tutti i consuntivi in una query ────────────────────────
         # Aggrego per task_id per non fare N+1 nel loop sotto.
@@ -711,17 +711,21 @@ def _carica_task_export(stato: Optional[str], progetto_id: Optional[str],
                         profilo: Optional[str]) -> list[dict]:
     """Carica i task dell'export Excel, senza gli «Eliminato», con i filtri
     della pagina GANTT: i progetti come /strutturato (`_filtra_progetti`), i
-    task sul profilo richiesto, come il filtro profilo della pagina."""
+    task sul profilo richiesto, come il filtro profilo della pagina.
+    In ordine di progetto (`ordine_progetti`, come /strutturato) e, dentro il
+    progetto, per data d'inizio, con i task senza data in fondo."""
     session = get_session()
     try:
         progetti = _filtra_progetti(session.query(Progetto.id), stato, progetto_id)
         q = (session.query(Task)
-             .options(joinedload(Task.progetto), joinedload(Task.fase_rel))
+             .join(Task.progetto)  # interna: task.progetto_id è NOT NULL
+             .options(contains_eager(Task.progetto), joinedload(Task.fase_rel))
              .filter(Task.progetto_id.in_(progetti.scalar_subquery()))
              .filter(Task.stato != "Eliminato"))
         if profilo:
             q = q.filter(Task.profilo_richiesto == profilo)
-        tasks = q.all()
+        tasks = q.order_by(*ordine_progetti(), Task.data_inizio.asc().nulls_last(),
+                           Task.id).all()
     finally:
         session.close()
 
@@ -887,16 +891,10 @@ def export_gantt_excel(
                 )
                 ws_gantt.cell(row=1, column=col).font = Font(color="FFFFFF", bold=True, size=8)
 
-            # Righe task — sort Python-side per (progetto_id, data_inizio).
-            # Task senza data_inizio → in fondo al loro progetto (datetime.max),
-            # altrimenti sorted() solleva TypeError confrontando None vs datetime.
-            records_ordinati = sorted(
-                records,
-                key=lambda r: (r["progetto_id"], r["data_inizio"] or datetime.max)
-            )
+            # Righe task nell'ordine di `_carica_task_export`.
             row = 2
             current_project = ""
-            for r in records_ordinati:
+            for r in records:
                 dip = get_dipendente(r["dipendente_id"])
                 proj_nome = r["progetto_nome"]
 

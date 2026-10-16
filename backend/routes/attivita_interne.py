@@ -110,7 +110,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import joinedload
 
 from deps import get_current_user
-from models import Utente, Progetto, Task, Dipendente, get_session
+from models import Utente, Progetto, Task, Dipendente, get_session, ordine_progetti
 from data import modifica_task
 
 
@@ -153,7 +153,7 @@ def lista_attivita_interne(_: Utente = Depends(get_current_user)):
         progetti = (
             session.query(Progetto)
             .filter(Progetto.tipologia == "interna")
-            .order_by(Progetto.id)
+            .order_by(*ordine_progetti())
             .all()
         )
         ids = [p.id for p in progetti]

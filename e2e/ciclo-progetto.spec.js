@@ -7,17 +7,14 @@
  * GANTT, sia nel disegno sia nella tendina dei progetti. Prima del passo 5
  * della fase 1 nasceva senza società e non compariva in nessuno dei due.
  *
- * L'ID SI FISSA NELLA RICHIESTA. Il Wizard lo lascia generare al server
- * (`_next_progetto_id`), che prende il massimo TESTUALE degli id: sui dati di
- * sviluppo è «PPROVA» o «PN03», non numerico, e ricade su «P001», che esiste.
- * La creazione da interfaccia oggi prende quindi 409 per una ragione che con
- * questo passo non c'entra (segnalata, non corretta qui). Il test intercetta
- * la POST e aggiunge solo l'id; tutto il resto del body è quello del Wizard,
- * e la risposta è quella vera del backend.
+ * L'id lo dà il server, dalla sequenza dei progetti (passo 6a): il test lo
+ * legge dalla risposta della creazione e lo usa per ritrovarlo e toglierlo.
+ * Ogni giro consuma un numero, e la numerazione ha quindi dei buchi: è il
+ * comportamento voluto di una sequenza.
  *
  * Il progetto si toglie per id alla fine: il DELETE ammette solo le bozze,
  * quindi prima lo si riporta a «Bozza». Se un giro precedente è morto a metà,
- * lo si ritrova all'inizio.
+ * il suo id non lo si conosce più: lo si ritrova all'inizio per nome esatto.
  */
 process.env.TZ = 'Europe/Rome'
 
@@ -27,23 +24,24 @@ import { isoLocale } from '../frontend/src/components/_shared/ganttSvg.js'
 
 test.describe.configure({ mode: 'serial' })
 
-const ID = 'PCICLO'
 const NOME = '[PROVA] Ciclo di vita'
 const fraGiorni = (n) => { const d = new Date(); d.setDate(d.getDate() + n); return isoLocale(d) }
 const INIZIO = fraGiorni(30)
 const FINE = fraGiorni(60)
 
-async function togliProgettiDiProva(request) {
+async function togliProgetto(request, p) {
+  if (p.stato !== 'Bozza') {
+    const patch = await request.patch(`/api/progetti/${p.id}`, { data: { stato: 'Bozza' } })
+    expect(patch.ok(), await patch.text()).toBeTruthy()
+  }
+  const del = await request.delete(`/api/progetti/${p.id}`)
+  expect(del.status(), await del.text()).toBe(204)
+}
+
+async function progettiDiProva(request, filtro) {
   const r = await request.get('/api/progetti?stato=all')
   expect(r.ok()).toBeTruthy()
-  for (const p of (await r.json()).filter((p) => p.id === ID)) {
-    if (p.stato !== 'Bozza') {
-      const patch = await request.patch(`/api/progetti/${p.id}`, { data: { stato: 'Bozza' } })
-      expect(patch.ok(), await patch.text()).toBeTruthy()
-    }
-    const del = await request.delete(`/api/progetti/${p.id}`)
-    expect(del.status(), await del.text()).toBe(204)
-  }
+  return (await r.json()).filter(filtro)
 }
 
 const campo = (page, etichetta, tag) =>
@@ -53,17 +51,13 @@ test.describe('un progetto Da iniziare, dal Wizard al GANTT', () => {
   test.use({ storageState: statoAuth(UTENTI.ludovica) })
 
   let progettoId = null
-  test.beforeEach(async ({ page }) => {
-    await page.route('**/api/progetti/completo', (route) => {
-      if (route.request().method() !== 'POST') return route.continue()
-      const body = route.request().postDataJSON()
-      body.progetto.id = ID
-      return route.continue({ postData: JSON.stringify(body) })
-    })
+  test.beforeAll(async ({ request }) => {
+    for (const p of await progettiDiProva(request, (p) => p.nome === NOME)) await togliProgetto(request, p)
   })
-
-  test.beforeAll(async ({ request }) => { await togliProgettiDiProva(request) })
-  test.afterAll(async ({ request }) => { await togliProgettiDiProva(request) })
+  test.afterAll(async ({ request }) => {
+    if (progettoId === null) return
+    for (const p of await progettiDiProva(request, (p) => p.id === progettoId)) await togliProgetto(request, p)
+  })
 
   test('il Wizard chiede la società e crea il progetto con quella', async ({ page, request }) => {
     const aziende = await (await request.get('/api/config/aziende')).json()
@@ -98,7 +92,7 @@ test.describe('un progetto Da iniziare, dal Wizard al GANTT', () => {
     const risposta = await creazione
     expect(risposta.status(), await risposta.text()).toBe(201)
     progettoId = (await risposta.json()).id
-    expect(progettoId).toBe(ID)
+    expect(progettoId).toMatch(/^P\d{3,}$/)
 
     const [creato] = await (await request.get(`/api/gantt/strutturato?progetto_id=${progettoId}`)).json()
     expect(creato.stato).toBe('Da iniziare')

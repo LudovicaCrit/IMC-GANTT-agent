@@ -9,6 +9,7 @@ from decimal import Decimal
 from models import (
     get_session, Dipendente, Progetto, Task,
     Consuntivo, Segnalazione,
+    SEQUENZA_NUMERO_PROGETTO, formatta_id_progetto,
     Competenza, DipendentiCompetenze,
     OreSettimanali,
 )
@@ -2119,13 +2120,15 @@ def genera_id_task_multipli(n, session=None):
 
 
 def _next_progetto_id():
+    """L'id del prossimo progetto, dalla sequenza (vedi SEQUENZA_NUMERO_PROGETTO
+    in models.py). nextval non torna indietro col rollback: una creazione che
+    fallisce lascia un buco nella numerazione, ed è il prezzo dell'unicità."""
     session = get_session()
-    from sqlalchemy import func
-    max_id = session.query(func.max(Progetto.id)).scalar()
-    session.close()
-    if max_id and max_id.startswith("P") and max_id[1:].isdigit():
-        return f"P{int(max_id[1:]) + 1:03d}"
-    return "P001"
+    try:
+        numero = session.execute(SEQUENZA_NUMERO_PROGETTO.next_value().select()).scalar()
+    finally:
+        session.close()
+    return formatta_id_progetto(numero)
 
 
 def aggiungi_task(progetto_id, nome, fase, ore_stimate, data_inizio, data_fine,

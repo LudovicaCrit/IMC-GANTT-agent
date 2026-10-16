@@ -26,6 +26,7 @@ from sqlalchemy import (
     create_engine, Column, Integer, String, Float, Boolean, Text, Date,
     DateTime, ForeignKey, UniqueConstraint, CheckConstraint, JSON, SmallInteger,
     Numeric, ForeignKeyConstraint, func, event, DDL, MetaData, Table, Index,
+    BigInteger, Sequence, case, cast, select, text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
@@ -651,6 +652,54 @@ class Progetto(Base):
         if "In corso" in stati:
             return "In esecuzione"
         return "Sospeso"
+
+
+# ── Id dei progetti ──
+# Un progetto nuovo prende l'id «P» + il numero successivo della sequenza
+# `progetti_numero_seq`, con almeno CIFRE_ID_PROGETTO cifre (P012, P1000).
+# La sequenza e non il massimo degli id esistenti: due creazioni contemporanee
+# leggerebbero lo stesso massimo, e il massimo di una colonna testo è quello
+# alfabetico («PPROVA» > «P011»). Gli id di altra forma (PC01, PN03, scenari
+# di prova) restano ammessi, ma la sequenza non li vede. Migration c8d9e0f1a2b3.
+PREFISSO_ID_PROGETTO = "P"
+CIFRE_ID_PROGETTO = 3
+SEQUENZA_NUMERO_PROGETTO = Sequence(
+    "progetti_numero_seq", start=1, minvalue=1, data_type=BigInteger,
+    metadata=Base.metadata,
+)
+# Gli id della forma generata: il prefisso seguito da sole cifre.
+_ID_NUMERICO = Progetto.id.op("~")(f"^{PREFISSO_ID_PROGETTO}[0-9]+$")
+_NUMERO_ID = cast(func.substr(Progetto.id, len(PREFISSO_ID_PROGETTO) + 1), BigInteger)
+
+
+def formatta_id_progetto(numero: int) -> str:
+    return f"{PREFISSO_ID_PROGETTO}{numero:0{CIFRE_ID_PROGETTO}d}"
+
+
+def riallinea_numero_progetti(session) -> int:
+    """Porta la sequenza al numero più alto fra gli id generati presenti, così
+    il prossimo è quello dopo. Serve dopo aver inserito progetti con id
+    espliciti (il seed). Restituisce il numero che verrà dato al prossimo."""
+    massimo = session.execute(
+        select(func.max(_NUMERO_ID)).where(_ID_NUMERICO)
+    ).scalar()
+    nome = SEQUENZA_NUMERO_PROGETTO.name
+    if not massimo:  # nessun id generato, o solo «P000»
+        session.execute(text(f"SELECT setval('{nome}', 1, false)"))
+        return 1
+    session.execute(text(f"SELECT setval('{nome}', :n, true)"), {"n": massimo})
+    return massimo + 1
+
+
+def ordine_progetti():
+    """L'ORDER BY delle liste di progetti: prima gli id generati per numero
+    (P999 prima di P1000, che come testo verrebbe prima), poi quelli di altra
+    forma in ordine alfabetico, e l'id in coda come spareggio."""
+    return (
+        case((_ID_NUMERICO, 0), else_=1),
+        case((_ID_NUMERICO, _NUMERO_ID)),
+        Progetto.id,
+    )
 
 
 class Fase(Base):

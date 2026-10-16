@@ -14,7 +14,7 @@ from models import (
     create_tables, get_session,
     Azienda, Dipendente, Progetto, Task, DipendenzaTask, Consuntivo, BloccoOre,
     Segnalazione, Ruolo, Competenza, DipendentiCompetenze, FaseStandard,
-    Fase, Utente, DipendentiRuoliAggiuntivi,
+    Fase, Utente, DipendentiRuoliAggiuntivi, riallinea_numero_progetti,
 )
 from data_db_impl import contatore_ordine_task
 from auth import hash_password
@@ -377,7 +377,11 @@ def seed():
             descrizione=row["descrizione"],
             fase_corrente=row["fase_corrente"],
         ))
-    print(f"  ✓ {len(PROGETTI)} progetti")
+    session.flush()
+    # Gli id del seed sono espliciti: la sequenza va portata oltre il più alto,
+    # o il primo progetto creato dal Wizard prenderebbe un id già usato.
+    prossimo = riallinea_numero_progetti(session)
+    print(f"  ✓ {len(PROGETTI)} progetti (il prossimo prenderà il numero {prossimo})")
 
     # ══════════════════════════════════════════════════════════════
     # 7. FASI PER PROGETTO (generate dai task esistenti)

@@ -93,7 +93,7 @@ from deps import require_manager
 from models import (
     get_session, Utente, Progetto, Fase, Task, DipendenzaTask, Azienda,
     STATI_PROGETTO, STATI_PROGETTO_IN_PIANO, URGENZA_DEFAULT, LIVELLI_URGENZA,
-    filtro_stato_progetto,
+    filtro_stato_progetto, ordine_progetti,
 )
 from data import ore_consuntivate_progetto, tasso_compilazione_progetto
 from data_db_impl import (_next_progetto_id, genera_id_task_multipli, _to_dt,
@@ -353,7 +353,7 @@ def lista_progetti(stato: Optional[str] = None, _: Utente = Depends(require_mana
     if condizione is not None:
         q = q.filter(condizione)
 
-    progetti = q.order_by(Progetto.id).all()
+    progetti = q.order_by(*ordine_progetti()).all()
 
     # Aggregati task in UNA sola query (GROUP BY progetto_id) per evitare
     # un filter DataFrame N+1 nella serializzazione.

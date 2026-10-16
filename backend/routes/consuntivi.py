@@ -147,7 +147,7 @@ from sqlalchemy.orm import joinedload, contains_eager
 from deps import get_current_user
 from models import (
     Utente, Dipendente, Task, Progetto, Consuntivo, OreSettimanali, get_session,
-    STATI_DICHIARABILI,
+    STATI_DICHIARABILI, ordine_progetti,
 )
 from data import (
     get_dipendente,
@@ -435,10 +435,11 @@ def consuntivi_settimana_corrente(current_user: Utente = Depends(get_current_use
     # VistaManagement rendono `ore_per_task` così come arriva, senza sort lato
     # client (VistaPM lo divide in «con segnale» / «sole ore», e dentro ciascun
     # gruppo l'ordine resta questo). I task finiscono raggruppati sotto
-    # l'etichetta-progetto che ogni riga mostra. Il progetto per `id`, come
-    # `gantt_strutturato`. `Task.id` in coda solo come spareggio fra omonimi.
+    # l'etichetta-progetto che ogni riga mostra. I progetti con
+    # `ordine_progetti`, come `gantt_strutturato`. `Task.id` in coda solo come
+    # spareggio fra omonimi.
     # L'ordine delle PERSONE non dipende da qui: lo fissa il `sorted` finale.
-    cons_sett = q_cons.order_by(Progetto.id, Task.nome, Task.id).all()
+    cons_sett = q_cons.order_by(*ordine_progetti(), Task.nome, Task.id).all()
 
     # Raggruppa per dipendente_id (mantiene l'ordine di arrivo, come
     # `unique()` su pandas Series).
