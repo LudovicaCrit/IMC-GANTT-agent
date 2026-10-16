@@ -82,11 +82,14 @@ def due_seed():
             for schema in riferimenti:
                 conn.execute(text(f"CREATE SCHEMA {schema}"))
         url = os.environ["DATABASE_URL"]
+        caricati = {}
         for schema, lunedi in riferimenti.items():
+            # «Oggi» è l'ancoraggio spostato: la stessa fotografia, settimane dopo.
+            oggi = ANCORAGGIO + timedelta(weeks=settimane_di_spostamento(lunedi))
             applica_migration(url, schema=schema)
-            carica_seed(url, lunedi, schema=schema)
-        yield {schema: (lunedi, ANCORAGGIO + timedelta(weeks=settimane_di_spostamento(lunedi)))
-               for schema, lunedi in riferimenti.items()}
+            carica_seed(url, lunedi, oggi, schema=schema)
+            caricati[schema] = (lunedi, oggi)
+        yield caricati
     finally:
         togli_schemi()
 

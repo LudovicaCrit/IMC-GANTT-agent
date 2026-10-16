@@ -48,8 +48,9 @@ di tutti quelli che lavorano, quindi non la si cerca nei dati: la si costruisce.
 
   T908  dentro la settimana, assegnato a un dipendente scelto con una query
         (attivo, senza un utente, senza consuntivi né blocchi nella settimana),
-        che per la verifica riceve un utente di prova, UTENTE_INTONSA. Il
-        dipendente non si tocca: si aggiungono solo il suo task e il suo accesso.
+        che per la verifica riceve un utente di prova (`intonsa` in
+        utenti_prova.json). Il dipendente non si tocca: si aggiungono solo il
+        suo task e il suo accesso.
 
 `--pulisci` rimuove i task di prova E tutto ciò che le verifiche hanno scritto su
 di loro (blocchi, consuntivi): il resto del database dev'essere byte per byte
@@ -64,6 +65,8 @@ import sys
 import os
 import argparse
 import hashlib
+import json
+from pathlib import Path
 from datetime import date, timedelta
 
 RADICE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -120,11 +123,13 @@ TASK_PROVA = [
     ("T907", "P002", 8, "[prova e2e] Completato fuori orizzonte", _LUN - timedelta(days=60), _LUN - timedelta(days=45), "Completato"),
 ]
 
-# La settimana intonsa: lo stesso indirizzo e la stessa password stanno in
-# utenti.js, da dove apparecchia.js fa il login. Utente usa-e-getta, tolto da
-# `--pulisci` per indirizzo esatto.
+# La settimana intonsa. Indirizzo e password dell'utente stanno in
+# utenti_prova.json, che legge anche utenti.js per il login. Utente
+# usa-e-getta, tolto da `--pulisci` per indirizzo esatto.
 TASK_INTONSA = ("T908", "P002", 8, "[prova e2e] Settimana intonsa", _LUN - timedelta(days=7), _LUN + timedelta(days=13), _DA_INIZIARE)
-UTENTE_INTONSA = ("e2e-settimana-intonsa@prova.invalid", "prova-e2e-intonsa")
+UTENTI_PROVA = json.loads(
+    (Path(__file__).resolve().parent / "utenti_prova.json").read_text(encoding="utf-8"))["utenti"]
+UTENTE_INTONSA = UTENTI_PROVA["intonsa"]
 
 
 def _dipendente_senza_dichiarazioni(session):
@@ -155,10 +160,10 @@ def _crea_settimana_intonsa(session):
     session.add(Task(id=tid, progetto_id=pid, fase_id=fase_id, nome=nome, stato=stato,
                      dipendente_id=dip.id, data_inizio=inizio, data_fine=fine,
                      ore_stimate=8, ore_pianificate=8))
-    email, password = UTENTE_INTONSA
-    session.add(Utente(email=email, password_hash=hash_password(password),
+    session.add(Utente(email=UTENTE_INTONSA["email"],
+                       password_hash=hash_password(UTENTE_INTONSA["password"]),
                        ruolo_app="user", dipendente_id=dip.id))
-    print(f"  {tid} creato per {dip.nome}, con l'utente {email}")
+    print(f"  {tid} creato per {dip.nome}, con l'utente {UTENTE_INTONSA['email']}")
 
 
 def crea():
@@ -188,7 +193,7 @@ def pulisci():
         n_b = session.query(BloccoOre).filter(BloccoOre.task_id.in_(ids)).delete(synchronize_session=False)
         n_c = session.query(Consuntivo).filter(Consuntivo.task_id.in_(ids)).delete(synchronize_session=False)
         n_t = session.query(Task).filter(Task.id.in_(ids)).delete(synchronize_session=False)
-        n_u = session.query(Utente).filter(Utente.email == UTENTE_INTONSA[0]).delete(synchronize_session=False)
+        n_u = session.query(Utente).filter(Utente.email == UTENTE_INTONSA["email"]).delete(synchronize_session=False)
         session.commit()
         print(f"  tolti: {n_t} task, {n_b} blocchi, {n_c} consuntivi, {n_u} utenti")
     finally:

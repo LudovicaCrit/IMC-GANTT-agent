@@ -2703,8 +2703,9 @@ def _valida_unita_blocchi(session, dipendente_id, lun, unita):
     # stessa unità. La UNIQUE (dipendente, giorno, task, sottotask) non include
     # la fonte, e la sostituzione non cancella lo storico: senza questo
     # controllo l'inserimento fallirebbe con un IntegrityError, cioè un 500.
-    # Oggi non può capitare dal form (lo storico finisce al 20/07/2026 e le
-    # settimane scrivibili sono le ultime due), ma la regola non deve dipendere
+    # Capita solo dove c'è storico, cioè ore importate da consuntivi settimanali
+    # veri: il seed scrive ore `manuale`. Dal form può succedere appena una
+    # settimana importata è fra quelle scrivibili, quindi la regola non dipende
     # dal calendario.
     for u in unita:
         chiave = chiavi.get((u["tipo"], u["id"]))

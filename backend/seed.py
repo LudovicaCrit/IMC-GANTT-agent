@@ -7,7 +7,7 @@ Eseguire UNA VOLTA per inizializzare il db.
 import argparse
 import json
 import math
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -115,11 +115,16 @@ def distribuisci_settimana(ore_per_task):
     return pezzi
 
 
-def seed(lunedi_riferimento=None):
+def seed(lunedi_riferimento=None, oggi=None):
     """Popola il database. Le date si spostano al lunedì di riferimento; se
-    manca, al lunedì della settimana corrente secondo `get_oggi()`."""
+    manca, al lunedì della settimana corrente secondo `get_oggi()`.
+
+    `oggi` (assente: `get_oggi()`) è il giorno in cui il database si fotografa:
+    non si crea niente che sia già successo dopo. Vedi la sezione CONSUNTIVI."""
+    if oggi is None:
+        oggi = get_oggi().date()
     if lunedi_riferimento is None:
-        lunedi_riferimento = lunedi_di(get_oggi().date())
+        lunedi_riferimento = lunedi_di(oggi)
     settimane = settimane_di_spostamento(lunedi_riferimento)
     spostamento = timedelta(weeks=settimane)
     DIPENDENTI = _dataframe("DIPENDENTI", spostamento)
@@ -583,28 +588,29 @@ def seed(lunedi_riferimento=None):
     # della consuntivazione a ore i lettori sommano la vista `ore_settimanali`,
     # non `ore_dichiarate`. Un seed che scrivesse solo i consuntivi darebbe un
     # database con 17.535 ore dichiarate e zero ore visibili.
-    # La regola: fonte 'storico' (il giorno vero non esiste nei dati), le ore
-    # della persona in quella settimana spalmate da lunedì a venerdì con
-    # `distribuisci_settimana`, nessun blocco per le righe a zero ore. Il
-    # consuntivo resta sul lunedì: è la chiave della settimana.
+    # La regola: le ore della persona in quella settimana spalmate da lunedì a
+    # venerdì con `distribuisci_settimana`, nessun blocco per le righe a zero ore.
+    # Il consuntivo resta sul lunedì: è la chiave della settimana.
+    # FONTE 'manuale': sono ore come quelle che si compilano dalla griglia, e
+    # la griglia le deve poter modificare. 'storico' resta per l'import di
+    # consuntivi settimanali veri, che il form mostra in sola lettura.
+    # NIENTE DOPO OGGI: il seed è una fotografia presa `oggi`. Non nascono
+    # consuntivi di settimane successive né blocchi nei giorni successivi; una
+    # compilazione datata dopo oggi si riporta a oggi, e un consuntivo le cui
+    # ore cadevano tutte dopo oggi risulta non ancora compilato.
     # `ore_dichiarate` NON si semina più (passo 5.5): la colonna era il guscio
     # scritto-ma-non-letto del passo 2 ed esce al 5.6. Il campo omonimo di
     # `seed_data.json` resta e resta necessario — è da lì che escono le ore dei
     # blocchi qui sotto. Sparisce la colonna, non il dato.
-    # {(dipendente, settimana): {task: (ore, data di compilazione)}}
+    # {(dipendente, settimana): {task: ore}}
     ore_settimana = {}
+    righe = []
     for _, row in CONSUNTIVI.iterrows():
         settimana = row["settimana"].date() if hasattr(row["settimana"], "date") else row["settimana"]
+        if settimana > oggi:
+            continue
         ore = float(row["ore_dichiarate"])
-        data_compilazione = row["data_compilazione"] if row["compilato"] else None
-        session.add(Consuntivo(
-            task_id=row["task_id"],
-            dipendente_id=row["dipendente_id"],
-            settimana=settimana,
-            compilato=bool(row["compilato"]),
-            data_compilazione=data_compilazione,
-            nota=row["nota"] if row["nota"] else None,
-        ))
+        righe.append((row, settimana, ore))
         if ore > 0:
             # I giorni dei blocchi si contano dal lunedì: se la settimana non lo
             # fosse, i blocchi cadrebbero a cavallo di due settimane e la vista
@@ -614,25 +620,49 @@ def seed(lunedi_riferimento=None):
                     f"seed_data.json: consuntivo {row['task_id']}/{row['dipendente_id']} "
                     f"con settimana {settimana} che non è un lunedì."
                 )
-            ore_settimana.setdefault((row["dipendente_id"], settimana), {})[row["task_id"]] = (
-                ore, data_compilazione)
+            ore_settimana.setdefault((row["dipendente_id"], settimana), {})[row["task_id"]] = ore
 
-    n_blocchi = 0
-    for (dipendente_id, settimana), per_task in sorted(ore_settimana.items()):
-        ore_per_task = {t: ore for t, (ore, _) in per_task.items()}
-        for task_id, giorno, ore in distribuisci_settimana(ore_per_task):
-            session.add(BloccoOre(
-                dipendente_id=dipendente_id,
-                giorno=settimana + timedelta(days=giorno),
-                task_id=task_id,
-                ore=ore,
-                fonte="storico",
-                # La data vera della dichiarazione se c'è. Un `None` esplicito
-                # scavalcherebbe il default della colonna.
-                created_at=per_task[task_id][1] or datetime.utcnow(),
-            ))
-            n_blocchi += 1
-    print(f"  ✓ {len(CONSUNTIVI)} consuntivi, {n_blocchi} blocchi ore 'storico'")
+    # I blocchi che esistono a `oggi`: la settimana si distribuisce intera, poi
+    # i giorni successivi non sono ancora successi.
+    blocchi = [
+        (dipendente_id, settimana + timedelta(days=giorno), task_id, ore, settimana)
+        for (dipendente_id, settimana), ore_per_task in sorted(ore_settimana.items())
+        for task_id, giorno, ore in distribuisci_settimana(ore_per_task)
+        if settimana + timedelta(days=giorno) <= oggi
+    ]
+    con_ore = {(task_id, dip, sett) for dip, _, task_id, _, sett in blocchi}
+
+    compilazione = {}
+    for row, settimana, ore in righe:
+        chiave = (row["task_id"], row["dipendente_id"], settimana)
+        compilato = bool(row["compilato"])
+        data_compilazione = row["data_compilazione"] if compilato else None
+        if ore > 0 and chiave not in con_ore:
+            compilato, data_compilazione = False, None
+        elif data_compilazione is not None and data_compilazione.date() > oggi:
+            data_compilazione = datetime.combine(oggi, time())
+        compilazione[chiave] = data_compilazione
+        session.add(Consuntivo(
+            task_id=row["task_id"],
+            dipendente_id=row["dipendente_id"],
+            settimana=settimana,
+            compilato=compilato,
+            data_compilazione=data_compilazione,
+            nota=row["nota"] if row["nota"] else None,
+        ))
+    for dipendente_id, giorno, task_id, ore, settimana in blocchi:
+        session.add(BloccoOre(
+            dipendente_id=dipendente_id,
+            giorno=giorno,
+            task_id=task_id,
+            ore=ore,
+            fonte="manuale",
+            # La data della dichiarazione se c'è. Un `None` esplicito
+            # scavalcherebbe il default della colonna.
+            created_at=compilazione[(task_id, dipendente_id, settimana)] or datetime.utcnow(),
+        ))
+    print(f"  ✓ {len(righe)} consuntivi e {len(blocchi)} blocchi ore fino a oggi ({oggi}); "
+          f"{len(CONSUNTIVI) - len(righe)} consuntivi di settimane successive non creati")
 
     # ══════════════════════════════════════════════════════════════
     # 11. SEGNALAZIONI DEFAULT
@@ -702,7 +732,9 @@ def seed(lunedi_riferimento=None):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Popola il database con i dati sintetici.")
     parser.add_argument("--lunedi", type=date.fromisoformat,
-                        help="lunedì di riferimento (AAAA-MM-GG); assente: quello della settimana corrente")
+                        help="lunedì di riferimento (AAAA-MM-GG); assente: quello della settimana di oggi")
+    parser.add_argument("--oggi", type=date.fromisoformat,
+                        help="il giorno della fotografia (AAAA-MM-GG): niente ore né consuntivi dopo; assente: get_oggi()")
     argomenti = parser.parse_args()
     print("Popolamento database IMC-Group R1...")
-    seed(argomenti.lunedi)
+    seed(argomenti.lunedi, argomenti.oggi)

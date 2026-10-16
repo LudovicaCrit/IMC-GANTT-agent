@@ -97,9 +97,10 @@ def db_test():
     la chiedono e girano anche senza database.
 
     Per tutta la sessione `get_oggi()` restituisce la data d'ancoraggio del
-    seed spostata delle stesse settimane delle date: i dati stanno rispetto a
-    «oggi» sempre nello stesso punto, qualunque sia il giorno in cui girano i
-    test. Restituisce quella data, che i test usano come «oggi».
+    seed spostata delle stesse settimane delle date, e la stessa data è l'«oggi»
+    del seed, dopo il quale non nascono ore: i dati stanno rispetto a «oggi»
+    sempre nello stesso punto, qualunque sia il giorno in cui girano i test.
+    Restituisce quella data, che i test usano come «oggi».
     """
     from sqlalchemy import text
     import models
@@ -112,8 +113,10 @@ def db_test():
 
     models.engine.dispose()
     lunedi = lunedi_corrente()
+    oggi_del_seed = ANCORAGGIO + timedelta(weeks=settimane_di_spostamento(lunedi))
     try:
-        ricostruisci(os.environ["DATABASE_URL"], conferma=DB_TEST, lunedi_riferimento=lunedi)
+        ricostruisci(os.environ["DATABASE_URL"], conferma=DB_TEST,
+                     lunedi_riferimento=lunedi, oggi=oggi_del_seed)
     except Exception as e:
         pytest.fail(f"ricostruzione di {DB_TEST} fallita: {e}")
 
@@ -122,7 +125,6 @@ def db_test():
         assert conn.execute(text("SELECT count(*) FROM dipendenti")).scalar() > 0, \
             "seed non caricato su gantt_test"
 
-    oggi_del_seed = ANCORAGGIO + timedelta(weeks=settimane_di_spostamento(lunedi))
     with pytest.MonkeyPatch.context() as mp:
         sostituisci_get_oggi(mp, oggi_del_seed)
         yield oggi_del_seed

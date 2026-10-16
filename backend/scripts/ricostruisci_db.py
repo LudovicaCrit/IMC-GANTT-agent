@@ -2,8 +2,9 @@
 ricostruisci_db.py — ricostruisce da zero un database del GANTT.
 
 La procedura è una sola, e vive qui: schema `public` vuoto, `alembic upgrade
-head`, `seed.py` con il lunedì della settimana corrente, così le date del seed
-slittano a oggi (vedi seed.py). La usano chi lavora (da riga di comando) e i test
+head`, `seed.py` con il lunedì della settimana corrente e la data di oggi: le
+date del seed slittano a questa settimana e non nasce niente dopo oggi (vedi
+seed.py). La usano chi lavora (da riga di comando) e i test
 (`tests/conftest.py`, fixture `db_test`), così non esistono due copie che
 possano divergere.
 
@@ -110,23 +111,31 @@ def applica_migration(url: str, schema: str | None = None) -> None:
     _esegui(url, "-m", "alembic", "upgrade", "head", schema=schema)
 
 
+def lunedi_di(giorno: date) -> date:
+    return giorno - timedelta(days=giorno.weekday())
+
+
 def lunedi_corrente() -> date:
-    oggi = date.today()
-    return oggi - timedelta(days=oggi.weekday())
+    return lunedi_di(date.today())
 
 
-def carica_seed(url: str, lunedi_riferimento: date, schema: str | None = None) -> str:
-    """`seed.py` sul database di `url`, con le date spostate al lunedì dato.
-    Restituisce la riga in cui il seed dice di quanto le ha spostate."""
-    uscita = _esegui(url, "seed.py", "--lunedi", lunedi_riferimento.isoformat(), schema=schema)
-    return next((r.strip() for r in uscita.splitlines() if "date spostate" in r), "")
+def carica_seed(url: str, lunedi_riferimento: date, oggi: date,
+                schema: str | None = None) -> str:
+    """`seed.py` sul database di `url`, con le date spostate al lunedì dato e
+    niente dopo `oggi`. Restituisce le righe in cui il seed dice di quanto ha
+    spostato le date e fin dove ha caricato le ore."""
+    uscita = _esegui(url, "seed.py", "--lunedi", lunedi_riferimento.isoformat(),
+                     "--oggi", oggi.isoformat(), schema=schema)
+    return " | ".join(r.strip() for r in uscita.splitlines()
+                      if "date spostate" in r or "fino a oggi" in r)
 
 
-def ricostruisci(url: str, conferma: str,
-                 lunedi_riferimento: date | None = None) -> tuple[str | None, str | None, str]:
-    """Svuota lo schema public, applica le migration e carica il seed con le
-    date spostate al lunedì di riferimento (assente: quello corrente).
-    Restituisce l'impronta dei dipendenti prima e dopo, e lo spostamento."""
+def ricostruisci(url: str, conferma: str, lunedi_riferimento: date | None = None,
+                 oggi: date | None = None) -> tuple[str | None, str | None, str]:
+    """Svuota lo schema public, applica le migration e carica il seed: date
+    spostate al lunedì di riferimento, niente dopo `oggi`. Assenti: la data
+    reale e il suo lunedì. Restituisce l'impronta dei dipendenti prima e dopo,
+    e il resoconto del seed."""
     nome = controlla_nome(url, conferma)
     prima = impronta_dipendenti(url)
 
@@ -147,7 +156,8 @@ def ricostruisci(url: str, conferma: str,
         engine.dispose()
 
     applica_migration(url)
-    spostamento = carica_seed(url, lunedi_riferimento or lunedi_corrente())
+    oggi = oggi or date.today()
+    spostamento = carica_seed(url, lunedi_riferimento or lunedi_di(oggi), oggi)
     return prima, impronta_dipendenti(url), spostamento
 
 

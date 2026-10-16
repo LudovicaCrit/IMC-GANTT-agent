@@ -1,0 +1,9 @@
+{
+  "descrizione": "Utenti creati dalle verifiche e2e e tolti alla fine (dati_prova.py). Unica fonte di indirizzo e password: la leggono dati_prova.py, che crea l'utente, e utenti.js, da cui apparecchia.js fa il login. Credenziali usa-e-getta, valide solo durante una verifica sul database di sviluppo.",
+  "utenti": {
+    "intonsa": {
+      "email": "e2e-settimana-intonsa@prova.invalid",
+      "password": "prova-e2e-intonsa"
+    }
+  }
+}
