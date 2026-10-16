@@ -93,11 +93,11 @@ def _to_dt(d):
 #     lavoro. Qui il semaforo DIVERGE da `_in_ritardo`, che non lo esclude:
 #     quella closure gira su una query che ha già filtrato gli annullati a
 #     monte, il semaforo no e deve difendersi da sé.
-#   - Eliminato: soft delete. NON è uno stato ammesso per i task (il CHECK
-#     `ck_task_stato_ammessi` è costruito su STATI_TASK, che non lo contiene) e
-#     `gantt_strutturato` lo filtra comunque prima di arrivare qui. Lo teniamo
-#     per difesa: se rientrasse da un percorso non previsto dev'essere chiuso,
-#     mai rosso.
+#   - Eliminato: soft delete. Il CHECK `ck_task_stato_ammessi` lo ammette
+#     (è costruito su STATI_TASK_IN_DB, perché il cestino lo scrive), ma non è
+#     uno stato del piano: `gantt_strutturato` lo filtra prima di arrivare qui.
+#     Lo teniamo per difesa: se rientrasse da un percorso non previsto
+#     dev'essere chiuso, mai rosso.
 # "Bozza" (progetto) e "Da iniziare" NON sono qui: sono lavoro vivo che non è
 # ancora partito, e un lavoro non partito con la data di fine alle spalle è
 # esattamente il caso che il rosso deve gridare.

@@ -25,7 +25,7 @@ load_dotenv()
 from sqlalchemy import (
     create_engine, Column, Integer, String, Float, Boolean, Text, Date,
     DateTime, ForeignKey, UniqueConstraint, CheckConstraint, JSON, SmallInteger,
-    Numeric, ForeignKeyConstraint, func, event, DDL, MetaData, Table, Index,
+    Numeric, ForeignKeyConstraint, func, event, DDL, MetaData, Table,
     BigInteger, Sequence, case, cast, select, text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -64,7 +64,20 @@ if not DATABASE_URL:
 
 engine = create_engine(DATABASE_URL, echo=False)
 SessionLocal = sessionmaker(bind=engine)
-Base = declarative_base()
+
+# NOMI DEI VINCOLI DA UNA CONVENZIONE (decisione D2, quella raccomandata da
+# SQLAlchemy): ogni PK, FK, UNIQUE, CHECK e indice ha un nome prevedibile, e
+# nessuno lo sceglie a mano. I CHECK portano solo un nome breve (`name="tipo"`),
+# da cui la convenzione ricava `ck_<tabella>_tipo`. La baseline delle migration
+# scrive gli stessi nomi; il test di allineamento verifica che coincidano.
+CONVENZIONE_NOMI = {
+    "pk": "pk_%(table_name)s",
+    "fk": "fk_%(table_name)s_%(column_0_name)s_%(referred_table_name)s",
+    "uq": "uq_%(table_name)s_%(column_0_N_name)s",
+    "ck": "ck_%(table_name)s_%(constraint_name)s",
+    "ix": "ix_%(column_0_label)s",
+}
+Base = declarative_base(metadata=MetaData(naming_convention=CONVENZIONE_NOMI))
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -347,7 +360,7 @@ class Ruolo(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     __table_args__ = (
-        CheckConstraint(_check_in("tipo", TIPI_RUOLO), name="ck_ruoli_tipo"),
+        CheckConstraint(_check_in("tipo", TIPI_RUOLO), name="tipo"),
     )
 
     # `dipendenti` = chi ha questo ruolo come INQUADRAMENTO (via ruolo_id).
@@ -380,7 +393,7 @@ class DipendentiCompetenze(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     __table_args__ = (
-        UniqueConstraint("dipendente_id", "competenza_id", name="uq_dip_comp"),
+        UniqueConstraint("dipendente_id", "competenza_id"),
     )
 
     dipendente = relationship("Dipendente", back_populates="competenze_rel")
@@ -423,7 +436,7 @@ class DipendentiRuoliAggiuntivi(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     __table_args__ = (
-        UniqueConstraint("dipendente_id", "ruolo_id", name="uq_dip_ruolo_agg"),
+        UniqueConstraint("dipendente_id", "ruolo_id"),
     )
 
     dipendente = relationship("Dipendente", back_populates="ruoli_aggiuntivi")
@@ -468,7 +481,7 @@ class Utente(Base):
     # sugli stati erano spariti dal database (vedi `_check_in`).
     __table_args__ = (
         CheckConstraint(_check_in("ruolo_app", RUOLI_APP),
-                        name="ck_utenti_ruolo_app"),
+                        name="ruolo_app"),
     )
 
     dipendente = relationship("Dipendente", back_populates="utente")
@@ -491,7 +504,7 @@ class Azienda(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     nome = Column(String(100), nullable=False)
 
-    __table_args__ = (UniqueConstraint("nome", name="uq_azienda_nome"),)
+    __table_args__ = (UniqueConstraint("nome"),)
 
     dipendenti = relationship("Dipendente", back_populates="azienda_rel")
     progetti = relationship("Progetto", back_populates="azienda_rel")
@@ -510,7 +523,7 @@ class Dipendente(Base):
     # in `ruoli_aggiuntivi` (M2M) — vedi `DipendentiRuoliAggiuntivi`.
     # azienda_id: ogni persona appartiene a un'azienda del gruppo (obbligatorio).
     # Vedi DESIGN_SEED_Innovation_Plaza §1-§2.
-    azienda_id = Column(Integer, ForeignKey("azienda.id", name="fk_dipendenti_azienda_id_azienda"),
+    azienda_id = Column(Integer, ForeignKey("azienda.id"),
                         nullable=False)
     ruolo_id = Column(Integer, ForeignKey("ruoli.id"), nullable=True)
     ore_sett = Column(SmallInteger, nullable=False, default=40)
@@ -594,7 +607,7 @@ class Progetto(Base):
     # azienda_id: nullable. Obbligatoria per commerciali/bandi (garantita nel
     # seed / futuro CHECK condizionato), NULL ammesso per gli interni (attività
     # trasversale). Vedi DESIGN §1.
-    azienda_id = Column(Integer, ForeignKey("azienda.id", name="fk_progetti_azienda_id_azienda"),
+    azienda_id = Column(Integer, ForeignKey("azienda.id"),
                         nullable=True)
     # area: valorizzata SOLO per i bandi Innovation ("PA" | "Imprese"), NULL
     # altrove. Spezza Innovation tra le due aree (Ida=PA, Domenica=Imprese).
@@ -610,11 +623,11 @@ class Progetto(Base):
     # modulo per il perché (i tre sugli stati erano dichiarati e assenti).
     __table_args__ = (
         CheckConstraint(_check_in("stato", STATI_PROGETTO),
-                        name="ck_progetti_stato_ammessi"),
+                        name="stato_ammessi"),
         CheckConstraint(_check_in("urgenza", LIVELLI_URGENZA),
-                        name="ck_progetti_urgenza"),
+                        name="urgenza"),
         CheckConstraint(_check_in("tipologia", ("ordinario", "bando", "interna")),
-                        name="ck_progetti_tipologia"),
+                        name="tipologia"),
     )
 
     azienda_rel = relationship("Azienda", back_populates="progetti")
@@ -738,10 +751,10 @@ class Fase(Base):
 
     __table_args__ = (
         CheckConstraint(_check_in("stato", STATI_FASE),
-                        name="ck_fasi_stato_ammessi"),
+                        name="stato_ammessi"),
         # `ammetti_null`: sulla fase il NULL è legittimo e significa «eredita».
         CheckConstraint(_check_in("urgenza", LIVELLI_URGENZA, ammetti_null=True),
-                        name="ck_fasi_urgenza"),
+                        name="urgenza"),
     )
 
     progetto = relationship("Progetto", back_populates="fasi")
@@ -836,7 +849,7 @@ class Task(Base):
     # eliminazione dal Cantiere con un IntegrityError.
     __table_args__ = (
         CheckConstraint(_check_in("stato", STATI_TASK_IN_DB),
-                        name="ck_task_stato_ammessi"),
+                        name="stato_ammessi"),
     )
 
     # Dipendenze entranti: righe di DipendenzaTask in cui questo task è
@@ -885,7 +898,8 @@ class DipendenzaTask(Base):
       - tipo_dipendenza:      'FS' (default), 'SS', 'FF', 'SF'
 
     Vincoli (a livello DB e modello):
-      UNIQUE (task_predecessore_id, task_successore_id) → uq_dipendenza_task
+      UNIQUE (task_predecessore_id, task_successore_id)
+             → uq_dipendenza_task_task_predecessore_id_task_successore_id
       CHECK  (task_predecessore_id != task_successore_id) → ck_dipendenza_task_no_self
       CHECK  (tipo_dipendenza IN TIPI_DIPENDENZA)         → ck_dipendenza_task_tipo
     """
@@ -906,17 +920,14 @@ class DipendenzaTask(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     __table_args__ = (
-        UniqueConstraint(
-            "task_predecessore_id", "task_successore_id",
-            name="uq_dipendenza_task",
-        ),
+        UniqueConstraint("task_predecessore_id", "task_successore_id"),
         CheckConstraint(
             "task_predecessore_id <> task_successore_id",
-            name="ck_dipendenza_task_no_self",
+            name="no_self",
         ),
         CheckConstraint(
             "tipo_dipendenza IN (" + ", ".join(f"'{t}'" for t in TIPI_DIPENDENZA) + ")",
-            name="ck_dipendenza_task_tipo",
+            name="tipo",
         ),
     )
 
@@ -989,11 +1000,11 @@ class Sottotask(Base):
     # su due colonne deve puntare a una coppia dichiarata unica. È quella FK a
     # garantire che un blocco su un pezzo porti il task giusto.
     __table_args__ = (
-        UniqueConstraint("id", "task_id", name="uq_sottotask_id_task"),
+        UniqueConstraint("id", "task_id"),
         # Esisteva nel DB ma non qui: la lacuna dei
         # CHECK spariti — un `create_all` avrebbe creato `sottotask` senza.
         CheckConstraint(_check_in("stato", STATI_PIANIFICAZIONE_SOTTOTASK),
-                        name="ck_sottotask_stato_pianificazione"),
+                        name="stato_pianificazione"),
     )
 
     task = relationship("Task", back_populates="sottotask")
@@ -1032,7 +1043,7 @@ class Assegnazione(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     __table_args__ = (
-        UniqueConstraint("task_id", "dipendente_id", name="uq_assegnazione"),
+        UniqueConstraint("task_id", "dipendente_id"),
     )
 
     task = relationship("Task", back_populates="assegnazioni")
@@ -1099,7 +1110,7 @@ class Consuntivo(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     __table_args__ = (
-        UniqueConstraint("task_id", "dipendente_id", "settimana", name="uq_consuntivo"),
+        UniqueConstraint("task_id", "dipendente_id", "settimana"),
     )
 
     task = relationship("Task", back_populates="consuntivi")
@@ -1156,12 +1167,9 @@ class ConsuntivoSottotask(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     __table_args__ = (
-        UniqueConstraint(
-            "sottotask_id", "dipendente_id", "settimana",
-            name="uq_consuntivo_sottotask",
-        ),
+        UniqueConstraint("sottotask_id", "dipendente_id", "settimana"),
         CheckConstraint(_check_in("stato_dichiarato", STATI_DICHIARABILI, ammetti_null=True),
-                        name="ck_consuntivo_sottotask_stato"),
+                        name="stato"),
     )
 
     sottotask = relationship("Sottotask", back_populates="dichiarazioni")
@@ -1217,17 +1225,17 @@ class BloccoOre(Base):
         # sottotask_id NULL non scatta (MATCH SIMPLE), che è il caso-task.
         ForeignKeyConstraint(
             ["sottotask_id", "task_id"], ["sottotask.id", "sottotask.task_id"],
-            ondelete="CASCADE", name="fk_blocchi_ore_sottotask_task",
+            ondelete="CASCADE",
         ),
         # Un blocco per (persona, giorno, unità). NULLS NOT DISTINCT: senza,
         # due blocchi sullo stesso TASK (sottotask_id NULL) lo stesso giorno
         # passerebbero entrambi, perché per Postgres NULL <> NULL.
         UniqueConstraint(
             "dipendente_id", "giorno", "task_id", "sottotask_id",
-            name="uq_blocchi_ore", postgresql_nulls_not_distinct=True,
+            postgresql_nulls_not_distinct=True,
         ),
-        CheckConstraint("ore > 0", name="ck_blocchi_ore_positive"),
-        CheckConstraint(_check_in("fonte", FONTI_BLOCCO_ORE), name="ck_blocchi_ore_fonte"),
+        CheckConstraint("ore > 0", name="positive"),
+        CheckConstraint(_check_in("fonte", FONTI_BLOCCO_ORE), name="fonte"),
     )
 
 
@@ -1349,16 +1357,11 @@ class SalSnapshot(Base):
     __tablename__ = "sal_snapshot"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    progetto_id = Column(String(10), ForeignKey("progetti.id", name="fk_sal_snapshot_progetto_id"),
-                         nullable=False)
+    progetto_id = Column(String(10), ForeignKey("progetti.id"), nullable=False, index=True)
     data_snapshot = Column(DateTime, nullable=False, server_default=func.now())
     consolidato_da = Column(String(10), nullable=True)  # id dipendente, no FK (durabilità)
     nota = Column(Text, nullable=True)
     stato = Column(JSONB, nullable=False)  # stato completo serializzato
-
-    __table_args__ = (
-        Index("ix_sal_snapshot_progetto_id", "progetto_id"),
-    )
 
 
 class BollettinoEconomico(Base):
@@ -1373,16 +1376,11 @@ class BollettinoEconomico(Base):
     __tablename__ = "bollettino_economico"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    progetto_id = Column(String(10), ForeignKey("progetti.id", name="fk_bollettino_economico_progetto_id"),
-                         nullable=False)
+    progetto_id = Column(String(10), ForeignKey("progetti.id"), nullable=False, index=True)
     data_snapshot = Column(DateTime, nullable=False, server_default=func.now())
     consolidato_da = Column(String(10), nullable=True)  # id dipendente, no FK (durabilità)
     nota = Column(Text, nullable=True)
     stato = Column(JSONB, nullable=False)  # economia serializzata (margini + grezzi)
-
-    __table_args__ = (
-        Index("ix_bollettino_economico_progetto_id", "progetto_id"),
-    )
 
 
 # ══════════════════════════════════════════════════════════════════════

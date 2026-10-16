@@ -368,7 +368,7 @@ def _valida_override_assegnatario(session, dipendente_id: str) -> None:
     È l'UNICA validazione di FK del CRUD sottotask, ed è deliberato. Le altre
     colonne o non sono FK, o — come `task_id` — sono già presidiate a monte
     (`_task_o_404`). Senza questo check un id inesistente arriverebbe alla FK
-    `sottotask_dipendente_id_fkey` come IntegrityError al commit, cioè un 500
+    `fk_sottotask_dipendente_id_dipendenti` come IntegrityError al commit, cioè un 500
     opaco su un errore del client: la stessa ragione per cui `crea_fase`
     verifica il progetto padre invece di affidarsi al vincolo.
 

@@ -2,10 +2,18 @@
 
 Sostituisce le 41 migration che portavano dal primo schema (e733e23ae7a1) a
 c8d9e0f1a2b3. Quelle restano nella storia di git; qui c'è lo schema a cui
-arrivavano, IDENTICO: stesse tabelle, colonne, tipi, default, vincoli con gli
-stessi nomi, indici, la vista e la sequenza dei progetti. Verificato sul
-catalogo contro lo schema prodotto dalla catena e contro `create_all` del
-modello (passo A1).
+arrivavano: stesse tabelle, colonne, tipi, default, vincoli, indici, la vista
+e la sequenza dei progetti (passo A1). Fino alla prima installazione presso un
+cliente si modifica questo file invece di aggiungere migration (DECISIONI.md).
+
+I NOMI DEI VINCOLI E DEGLI INDICI seguono la convenzione del modello
+(`models.CONVENZIONE_NOMI`, passo B1): pk_<tabella>, fk_<tabella>_<colonna>_
+<tabella riferita>, uq_<tabella>_<colonne>, ck_<tabella>_<nome breve>,
+ix_<tabella>_<colonna>. Qui sono scritti per intero dentro `op.f()`, che li
+marca come già convertiti: alembic applica la convenzione di `target_metadata`
+anche agli oggetti di questa migration, e un nome di CHECK passato senza
+`op.f()` diventerebbe ck_<tabella>_ck_<tabella>_…. Il test di allineamento
+(tests/test_schema_allineato.py) verifica che coincidano con quelli del modello.
 
 Le migration vecchie trasformavano database esistenti, con backfill e
 travasi di dati. Un database nuovo non ne ha bisogno: parte da qui, e i dati
@@ -53,8 +61,8 @@ def upgrade() -> None:
         "azienda",
         sa.Column("id", sa.Integer, nullable=False),
         sa.Column("nome", sa.String(100), nullable=False),
-        sa.PrimaryKeyConstraint("id", name="azienda_pkey"),
-        sa.UniqueConstraint("nome", name="uq_azienda_nome"),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_azienda")),
+        sa.UniqueConstraint("nome", name=op.f("uq_azienda_nome")),
     )
     op.create_table(
         "ruoli",
@@ -64,9 +72,9 @@ def upgrade() -> None:
         sa.Column("attivo", sa.Boolean, nullable=False),
         sa.Column("created_at", sa.DateTime),
         sa.Column("tipo", sa.String(20), nullable=False, server_default="base"),
-        sa.PrimaryKeyConstraint("id", name="ruoli_pkey"),
-        sa.UniqueConstraint("nome", name="ruoli_nome_key"),
-        sa.CheckConstraint(_in("tipo", ("base", "funzionale")), name="ck_ruoli_tipo"),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_ruoli")),
+        sa.UniqueConstraint("nome", name=op.f("uq_ruoli_nome")),
+        sa.CheckConstraint(_in("tipo", ("base", "funzionale")), name=op.f("ck_ruoli_tipo")),
     )
     op.create_table(
         "competenze",
@@ -74,8 +82,8 @@ def upgrade() -> None:
         sa.Column("nome", sa.String(80), nullable=False),
         sa.Column("attivo", sa.Boolean, nullable=False),
         sa.Column("created_at", sa.DateTime),
-        sa.PrimaryKeyConstraint("id", name="competenze_pkey"),
-        sa.UniqueConstraint("nome", name="competenze_nome_key"),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_competenze")),
+        sa.UniqueConstraint("nome", name=op.f("uq_competenze_nome")),
     )
     op.create_table(
         "fasi_standard",
@@ -85,7 +93,7 @@ def upgrade() -> None:
         sa.Column("ordine", sa.SmallInteger, nullable=False),
         sa.Column("percentuale_ore", sa.Float),
         sa.Column("created_at", sa.DateTime),
-        sa.PrimaryKeyConstraint("id", name="fasi_standard_pkey"),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_fasi_standard")),
     )
     op.create_table(
         "dipendenti",
@@ -102,11 +110,11 @@ def upgrade() -> None:
         sa.Column("created_at", sa.DateTime),
         sa.Column("updated_at", sa.DateTime),
         sa.Column("azienda_id", sa.Integer, nullable=False),
-        sa.PrimaryKeyConstraint("id", name="dipendenti_pkey"),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_dipendenti")),
         sa.ForeignKeyConstraint(["ruolo_id"], ["ruoli.id"],
-                                name="dipendenti_ruolo_id_fkey"),
+                                name=op.f("fk_dipendenti_ruolo_id_ruoli")),
         sa.ForeignKeyConstraint(["azienda_id"], ["azienda.id"],
-                                name="fk_dipendenti_azienda_id_azienda"),
+                                name=op.f("fk_dipendenti_azienda_id_azienda")),
     )
     op.create_table(
         "utenti",
@@ -119,12 +127,12 @@ def upgrade() -> None:
         sa.Column("ultimo_login", sa.DateTime),
         sa.Column("created_at", sa.DateTime),
         sa.Column("updated_at", sa.DateTime),
-        sa.PrimaryKeyConstraint("id", name="utenti_pkey"),
-        sa.UniqueConstraint("email", name="utenti_email_key"),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_utenti")),
+        sa.UniqueConstraint("email", name=op.f("uq_utenti_email")),
         sa.ForeignKeyConstraint(["dipendente_id"], ["dipendenti.id"],
-                                name="utenti_dipendente_id_fkey"),
+                                name=op.f("fk_utenti_dipendente_id_dipendenti")),
         sa.CheckConstraint(_in("ruolo_app", ("manager", "pm", "user")),
-                           name="ck_utenti_ruolo_app"),
+                           name=op.f("ck_utenti_ruolo_app")),
     )
     op.create_table(
         "dipendenti_competenze",
@@ -132,12 +140,12 @@ def upgrade() -> None:
         sa.Column("dipendente_id", sa.String(10), nullable=False),
         sa.Column("competenza_id", sa.Integer, nullable=False),
         sa.Column("created_at", sa.DateTime),
-        sa.PrimaryKeyConstraint("id", name="dipendenti_competenze_pkey"),
-        sa.UniqueConstraint("dipendente_id", "competenza_id", name="uq_dip_comp"),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_dipendenti_competenze")),
+        sa.UniqueConstraint("dipendente_id", "competenza_id", name=op.f("uq_dipendenti_competenze_dipendente_id_competenza_id")),
         sa.ForeignKeyConstraint(["dipendente_id"], ["dipendenti.id"], ondelete="CASCADE",
-                                name="dipendenti_competenze_dipendente_id_fkey"),
+                                name=op.f("fk_dipendenti_competenze_dipendente_id_dipendenti")),
         sa.ForeignKeyConstraint(["competenza_id"], ["competenze.id"], ondelete="CASCADE",
-                                name="dipendenti_competenze_competenza_id_fkey"),
+                                name=op.f("fk_dipendenti_competenze_competenza_id_competenze")),
     )
     op.create_table(
         "dipendenti_ruoli_aggiuntivi",
@@ -145,12 +153,12 @@ def upgrade() -> None:
         sa.Column("dipendente_id", sa.String(10), nullable=False),
         sa.Column("ruolo_id", sa.Integer, nullable=False),
         sa.Column("created_at", sa.DateTime),
-        sa.PrimaryKeyConstraint("id", name="dipendenti_ruoli_aggiuntivi_pkey"),
-        sa.UniqueConstraint("dipendente_id", "ruolo_id", name="uq_dip_ruolo_agg"),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_dipendenti_ruoli_aggiuntivi")),
+        sa.UniqueConstraint("dipendente_id", "ruolo_id", name=op.f("uq_dipendenti_ruoli_aggiuntivi_dipendente_id_ruolo_id")),
         sa.ForeignKeyConstraint(["dipendente_id"], ["dipendenti.id"], ondelete="CASCADE",
-                                name="dipendenti_ruoli_aggiuntivi_dipendente_id_fkey"),
+                                name=op.f("fk_dipendenti_ruoli_aggiuntivi_dipendente_id_dipendenti")),
         sa.ForeignKeyConstraint(["ruolo_id"], ["ruoli.id"], ondelete="CASCADE",
-                                name="dipendenti_ruoli_aggiuntivi_ruolo_id_fkey"),
+                                name=op.f("fk_dipendenti_ruoli_aggiuntivi_ruolo_id_ruoli")),
     )
 
     # ── Progetti, fasi, task, sottotask ───────────────────────────────────
@@ -180,16 +188,16 @@ def upgrade() -> None:
         sa.Column("updated_at", sa.DateTime),
         sa.Column("area", sa.String(20)),
         sa.Column("azienda_id", sa.Integer),
-        sa.PrimaryKeyConstraint("id", name="progetti_pkey"),
-        sa.ForeignKeyConstraint(["pm_id"], ["dipendenti.id"], name="progetti_pm_id_fkey"),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_progetti")),
+        sa.ForeignKeyConstraint(["pm_id"], ["dipendenti.id"], name=op.f("fk_progetti_pm_id_dipendenti")),
         sa.ForeignKeyConstraint(["azienda_id"], ["azienda.id"],
-                                name="fk_progetti_azienda_id_azienda"),
+                                name=op.f("fk_progetti_azienda_id_azienda")),
         sa.CheckConstraint(_in("stato", ("Bozza", "Da iniziare", "In esecuzione",
                                          "Sospeso", "Completato", "Annullato")),
-                           name="ck_progetti_stato_ammessi"),
+                           name=op.f("ck_progetti_stato_ammessi")),
         sa.CheckConstraint(_in("tipologia", ("ordinario", "bando", "interna")),
-                           name="ck_progetti_tipologia"),
-        sa.CheckConstraint(_in("urgenza", URGENZE), name="ck_progetti_urgenza"),
+                           name=op.f("ck_progetti_tipologia")),
+        sa.CheckConstraint(_in("urgenza", URGENZE), name=op.f("ck_progetti_urgenza")),
     )
     op.create_table(
         "fasi",
@@ -206,14 +214,14 @@ def upgrade() -> None:
         sa.Column("created_at", sa.DateTime),
         sa.Column("updated_at", sa.DateTime),
         sa.Column("urgenza", sa.String(16)),
-        sa.PrimaryKeyConstraint("id", name="fasi_pkey"),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_fasi")),
         sa.ForeignKeyConstraint(["progetto_id"], ["progetti.id"], ondelete="CASCADE",
-                                name="fasi_progetto_id_fkey"),
+                                name=op.f("fk_fasi_progetto_id_progetti")),
         sa.CheckConstraint(_in("stato", ("Da iniziare", "In corso", "Completata",
                                          "Sospesa", "Annullata")),
-                           name="ck_fasi_stato_ammessi"),
+                           name=op.f("ck_fasi_stato_ammessi")),
         sa.CheckConstraint(_in("urgenza", URGENZE, ammetti_null=True),
-                           name="ck_fasi_urgenza"),
+                           name=op.f("ck_fasi_urgenza")),
     )
     op.create_table(
         "task",
@@ -233,17 +241,17 @@ def upgrade() -> None:
         sa.Column("created_at", sa.DateTime),
         sa.Column("updated_at", sa.DateTime),
         sa.Column("dipendente_id", sa.String(10)),
-        sa.PrimaryKeyConstraint("id", name="task_pkey"),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_task")),
         sa.ForeignKeyConstraint(["progetto_id"], ["progetti.id"], ondelete="CASCADE",
-                                name="task_progetto_id_fkey"),
+                                name=op.f("fk_task_progetto_id_progetti")),
         sa.ForeignKeyConstraint(["fase_id"], ["fasi.id"], ondelete="RESTRICT",
-                                name="task_fase_id_fkey"),
+                                name=op.f("fk_task_fase_id_fasi")),
         sa.ForeignKeyConstraint(["dipendente_id"], ["dipendenti.id"],
-                                name="task_dipendente_id_fkey"),
+                                name=op.f("fk_task_dipendente_id_dipendenti")),
         sa.CheckConstraint(_in("stato", ("Da iniziare", "In corso", "Completato",
                                          "Bloccato", "Sospeso", "Annullato",
                                          "Eliminato")),
-                           name="ck_task_stato_ammessi"),
+                           name=op.f("ck_task_stato_ammessi")),
     )
     op.create_table(
         "sottotask",
@@ -256,16 +264,16 @@ def upgrade() -> None:
         sa.Column("updated_at", sa.DateTime),
         sa.Column("stato", sa.String(20), nullable=False),
         sa.Column("dipendente_id", sa.String(10)),
-        sa.PrimaryKeyConstraint("id", name="sottotask_pkey"),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_sottotask")),
         # Bersaglio della FK composta di blocchi_ore: un blocco su un
         # sottotask deve stare sullo stesso task del sottotask.
-        sa.UniqueConstraint("id", "task_id", name="uq_sottotask_id_task"),
+        sa.UniqueConstraint("id", "task_id", name=op.f("uq_sottotask_id_task_id")),
         sa.ForeignKeyConstraint(["task_id"], ["task.id"], ondelete="CASCADE",
-                                name="sottotask_task_id_fkey"),
+                                name=op.f("fk_sottotask_task_id_task")),
         sa.ForeignKeyConstraint(["dipendente_id"], ["dipendenti.id"],
-                                name="sottotask_dipendente_id_fkey"),
+                                name=op.f("fk_sottotask_dipendente_id_dipendenti")),
         sa.CheckConstraint(_in("stato", ("Da iniziare", "Sospeso", "Annullato")),
-                           name="ck_sottotask_stato_pianificazione"),
+                           name=op.f("ck_sottotask_stato_pianificazione")),
     )
     op.create_table(
         "dipendenza_task",
@@ -274,17 +282,17 @@ def upgrade() -> None:
         sa.Column("task_successore_id", sa.String(10), nullable=False),
         sa.Column("tipo_dipendenza", sa.String(2), nullable=False, server_default="FS"),
         sa.Column("created_at", sa.DateTime),
-        sa.PrimaryKeyConstraint("id", name="dipendenza_task_pkey"),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_dipendenza_task")),
         sa.UniqueConstraint("task_predecessore_id", "task_successore_id",
-                            name="uq_dipendenza_task"),
+                            name=op.f("uq_dipendenza_task_task_predecessore_id_task_successore_id")),
         sa.ForeignKeyConstraint(["task_predecessore_id"], ["task.id"], ondelete="CASCADE",
-                                name="dipendenza_task_task_predecessore_id_fkey"),
+                                name=op.f("fk_dipendenza_task_task_predecessore_id_task")),
         sa.ForeignKeyConstraint(["task_successore_id"], ["task.id"], ondelete="CASCADE",
-                                name="dipendenza_task_task_successore_id_fkey"),
+                                name=op.f("fk_dipendenza_task_task_successore_id_task")),
         sa.CheckConstraint("task_predecessore_id <> task_successore_id",
-                           name="ck_dipendenza_task_no_self"),
+                           name=op.f("ck_dipendenza_task_no_self")),
         sa.CheckConstraint(_in("tipo_dipendenza", ("FS", "SS", "FF", "SF")),
-                           name="ck_dipendenza_task_tipo"),
+                           name=op.f("ck_dipendenza_task_tipo")),
     )
     op.create_table(
         "assegnazioni",
@@ -294,12 +302,12 @@ def upgrade() -> None:
         sa.Column("ore_assegnate", sa.Integer),
         sa.Column("ruolo", sa.String(20)),
         sa.Column("created_at", sa.DateTime),
-        sa.PrimaryKeyConstraint("id", name="assegnazioni_pkey"),
-        sa.UniqueConstraint("task_id", "dipendente_id", name="uq_assegnazione"),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_assegnazioni")),
+        sa.UniqueConstraint("task_id", "dipendente_id", name=op.f("uq_assegnazioni_task_id_dipendente_id")),
         sa.ForeignKeyConstraint(["task_id"], ["task.id"], ondelete="CASCADE",
-                                name="assegnazioni_task_id_fkey"),
+                                name=op.f("fk_assegnazioni_task_id_task")),
         sa.ForeignKeyConstraint(["dipendente_id"], ["dipendenti.id"],
-                                name="assegnazioni_dipendente_id_fkey"),
+                                name=op.f("fk_assegnazioni_dipendente_id_dipendenti")),
     )
 
     # ── Consuntivazione ───────────────────────────────────────────────────
@@ -316,12 +324,12 @@ def upgrade() -> None:
         sa.Column("stato_dichiarato", sa.String(20)),
         sa.Column("presa_visione", sa.Boolean, nullable=False, server_default=sa.false()),
         sa.Column("ore_stimate_residue", sa.Float),
-        sa.PrimaryKeyConstraint("id", name="consuntivi_pkey"),
-        sa.UniqueConstraint("task_id", "dipendente_id", "settimana", name="uq_consuntivo"),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_consuntivi")),
+        sa.UniqueConstraint("task_id", "dipendente_id", "settimana", name=op.f("uq_consuntivi_task_id_dipendente_id_settimana")),
         sa.ForeignKeyConstraint(["task_id"], ["task.id"], ondelete="CASCADE",
-                                name="consuntivi_task_id_fkey"),
+                                name=op.f("fk_consuntivi_task_id_task")),
         sa.ForeignKeyConstraint(["dipendente_id"], ["dipendenti.id"],
-                                name="consuntivi_dipendente_id_fkey"),
+                                name=op.f("fk_consuntivi_dipendente_id_dipendenti")),
     )
     op.create_table(
         "consuntivo_sottotask",
@@ -336,16 +344,16 @@ def upgrade() -> None:
         sa.Column("created_at", sa.DateTime),
         sa.Column("presa_visione", sa.Boolean, nullable=False, server_default=sa.false()),
         sa.Column("ore_stimate_residue", sa.Float),
-        sa.PrimaryKeyConstraint("id", name="consuntivo_sottotask_pkey"),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_consuntivo_sottotask")),
         sa.UniqueConstraint("sottotask_id", "dipendente_id", "settimana",
-                            name="uq_consuntivo_sottotask"),
+                            name=op.f("uq_consuntivo_sottotask_sottotask_id_dipendente_id_settimana")),
         sa.ForeignKeyConstraint(["sottotask_id"], ["sottotask.id"], ondelete="CASCADE",
-                                name="consuntivo_sottotask_sottotask_id_fkey"),
+                                name=op.f("fk_consuntivo_sottotask_sottotask_id_sottotask")),
         sa.ForeignKeyConstraint(["dipendente_id"], ["dipendenti.id"],
-                                name="consuntivo_sottotask_dipendente_id_fkey"),
+                                name=op.f("fk_consuntivo_sottotask_dipendente_id_dipendenti")),
         sa.CheckConstraint(_in("stato_dichiarato", ("In corso", "Completato", "Bloccato"),
                                ammetti_null=True),
-                           name="ck_consuntivo_sottotask_stato"),
+                           name=op.f("ck_consuntivo_sottotask_stato")),
     )
     op.create_table(
         "blocchi_ore",
@@ -358,24 +366,24 @@ def upgrade() -> None:
         sa.Column("fonte", sa.String(10), nullable=False),
         sa.Column("created_at", sa.DateTime),
         sa.Column("updated_at", sa.DateTime),
-        sa.PrimaryKeyConstraint("id", name="blocchi_ore_pkey"),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_blocchi_ore")),
         # NULLS NOT DISTINCT: un blocco sul task (sottotask NULL) e lo stesso
         # giorno vanno contati come duplicati, non come righe diverse.
         sa.UniqueConstraint("dipendente_id", "giorno", "task_id", "sottotask_id",
-                            name="uq_blocchi_ore", postgresql_nulls_not_distinct=True),
+                            name=op.f("uq_blocchi_ore_dipendente_id_giorno_task_id_sottotask_id"), postgresql_nulls_not_distinct=True),
         sa.ForeignKeyConstraint(["dipendente_id"], ["dipendenti.id"],
-                                name="blocchi_ore_dipendente_id_fkey"),
+                                name=op.f("fk_blocchi_ore_dipendente_id_dipendenti")),
         sa.ForeignKeyConstraint(["task_id"], ["task.id"], ondelete="CASCADE",
-                                name="blocchi_ore_task_id_fkey"),
+                                name=op.f("fk_blocchi_ore_task_id_task")),
         sa.ForeignKeyConstraint(["sottotask_id", "task_id"],
                                 ["sottotask.id", "sottotask.task_id"], ondelete="CASCADE",
-                                name="fk_blocchi_ore_sottotask_task"),
+                                name=op.f("fk_blocchi_ore_sottotask_id_sottotask")),
         sa.CheckConstraint(_in("fonte", ("manuale", "storico")),
-                           name="ck_blocchi_ore_fonte"),
-        sa.CheckConstraint("ore > 0", name="ck_blocchi_ore_positive"),
+                           name=op.f("ck_blocchi_ore_fonte")),
+        sa.CheckConstraint("ore > 0", name=op.f("ck_blocchi_ore_positive")),
     )
-    op.create_index("ix_blocchi_ore_task_id", "blocchi_ore", ["task_id"])
-    op.create_index("ix_blocchi_ore_sottotask_id", "blocchi_ore", ["sottotask_id"])
+    op.create_index(op.f("ix_blocchi_ore_task_id"), "blocchi_ore", ["task_id"])
+    op.create_index(op.f("ix_blocchi_ore_sottotask_id"), "blocchi_ore", ["sottotask_id"])
 
     # ── Segnalazioni, interventi, note ────────────────────────────────────
     op.create_table(
@@ -391,11 +399,11 @@ def upgrade() -> None:
         sa.Column("destinatario", sa.String(60)),
         sa.Column("created_at", sa.DateTime),
         sa.Column("updated_at", sa.DateTime),
-        sa.PrimaryKeyConstraint("id", name="segnalazioni_pkey"),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_segnalazioni")),
         sa.ForeignKeyConstraint(["dipendente_id"], ["dipendenti.id"],
-                                name="segnalazioni_dipendente_id_fkey"),
+                                name=op.f("fk_segnalazioni_dipendente_id_dipendenti")),
         sa.ForeignKeyConstraint(["progetto_id"], ["progetti.id"],
-                                name="segnalazioni_progetto_id_fkey"),
+                                name=op.f("fk_segnalazioni_progetto_id_progetti")),
     )
     op.create_table(
         "interventi",
@@ -408,11 +416,11 @@ def upgrade() -> None:
         sa.Column("esito", sa.String(40)),
         sa.Column("nota", sa.Text),
         sa.Column("created_at", sa.DateTime),
-        sa.PrimaryKeyConstraint("id", name="interventi_pkey"),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_interventi")),
         sa.ForeignKeyConstraint(["segnalazione_id"], ["segnalazioni.id"],
-                                name="interventi_segnalazione_id_fkey"),
+                                name=op.f("fk_interventi_segnalazione_id_segnalazioni")),
         sa.ForeignKeyConstraint(["approvato_da"], ["dipendenti.id"],
-                                name="interventi_approvato_da_fkey"),
+                                name=op.f("fk_interventi_approvato_da_dipendenti")),
     )
     op.create_table(
         "note_progetto",
@@ -423,11 +431,11 @@ def upgrade() -> None:
         sa.Column("testo", sa.Text, nullable=False),
         sa.Column("tipo", sa.String(40)),
         sa.Column("created_at", sa.DateTime),
-        sa.PrimaryKeyConstraint("id", name="note_progetto_pkey"),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_note_progetto")),
         sa.ForeignKeyConstraint(["progetto_id"], ["progetti.id"], ondelete="CASCADE",
-                                name="note_progetto_progetto_id_fkey"),
+                                name=op.f("fk_note_progetto_progetto_id_progetti")),
         sa.ForeignKeyConstraint(["autore_id"], ["dipendenti.id"],
-                                name="note_progetto_autore_id_fkey"),
+                                name=op.f("fk_note_progetto_autore_id_dipendenti")),
     )
 
     # ── Fotografie economiche (SAL e bollettino) ──────────────────────────
@@ -441,11 +449,11 @@ def upgrade() -> None:
             sa.Column("consolidato_da", sa.String(10)),
             sa.Column("nota", sa.Text),
             sa.Column("stato", postgresql.JSONB, nullable=False),
-            sa.PrimaryKeyConstraint("id", name=f"{tabella}_pkey"),
+            sa.PrimaryKeyConstraint("id", name=op.f(f"pk_{tabella}")),
             sa.ForeignKeyConstraint(["progetto_id"], ["progetti.id"],
-                                    name=f"fk_{tabella}_progetto_id"),
+                                    name=op.f(f"fk_{tabella}_progetto_id_progetti")),
         )
-        op.create_index(f"ix_{tabella}_progetto_id", tabella, ["progetto_id"])
+        op.create_index(op.f(f"ix_{tabella}_progetto_id"), tabella, ["progetto_id"])
 
     # ── Vista: le ore per settimana, sommate dai blocchi ──────────────────
     # Stesso testo di models.py, che la crea per `create_all`.
