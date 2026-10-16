@@ -20,6 +20,7 @@
 ## Fondamenta per la produzione (prima di chiudere la fase 1)
 *Dall'audit (AUDIT_PRODUZIONE.md) e dalla ricognizione sugli id (RICOGNIZIONE_ID.md). I cambi di schema si fanno nella baseline finché non esiste un'installazione vera.*
 - ☐ A. Baseline a schema identico alle migration attuali, nuova impronta dei dipendenti, README corretto
+- ✅ Seed che slitta alla settimana corrente: dati di sviluppo e di test sempre attuali
 - ☐ B. Rifondazione dello schema: id numerici, codice dei progetti, famiglie delle attività interne in tabella, naming convention, tabelle morte via, indici, date con fuso, soldi in Numeric, ore che nessuna cascata può cancellare
 - ☐ C. Strato dati: sessioni sempre chiuse, una transazione per operazione, pool configurato, logging, gestore unico degli errori
 - ☐ D. Validazione e concorrenza: DTO con tipi e limiti, whitelist ovunque, transizioni di stato del progetto nel servizio, lock sul salvataggio delle ore

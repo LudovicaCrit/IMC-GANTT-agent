@@ -9,7 +9,9 @@
  * attraversa tutte e due.
  *
  * I task su cui scrive sono T902 e T903 (`dati_prova.py`), dentro la settimana
- * e assegnati a Helena: le ore vere non si toccano.
+ * e assegnati a Helena: le ore vere non si toccano. La settimana intonsa la
+ * costruisce `dati_prova.py` (T908 e l'utente di prova `intonsa`): non dipende
+ * da come il seed riempie le settimane.
  */
 import { test, expect } from '@playwright/test'
 import { UTENTI, statoAuth } from './utenti.js'
@@ -19,6 +21,7 @@ test.describe.configure({ mode: 'serial' })
 
 const DA_STATO = 'T902'     // si spiega con lo stato, senza ore
 const DA_ORE = 'T903'       // si spiega mettendoci le ore
+const INTONSO = 'T908'      // l'unica riga di prova della settimana intonsa
 
 const banner = (page) => page.locator('[data-banner-scoperti]')
 
@@ -31,19 +34,24 @@ const elencati = async (page) => {
     .evaluateAll((n) => n.map((x) => x.innerText.replace(' →', '').trim()))
 }
 
-test.describe('il banner delle attività senza spiegazione', () => {
-  test.use({ storageState: statoAuth(UTENTI.helena) })
+test.describe('su una settimana ancora intonsa', () => {
+  test.use({ storageState: statoAuth(UTENTI.intonsa) })
 
-  test('su una settimana ancora vuota non compare', async ({ page }) => {
+  test('il banner non compare', async ({ page }) => {
     // Ogni riga di una settimana intonsa è senza ore e senza stato: elencarle
     // tutte all'apertura non è un promemoria, è un rimprovero. Il banner
     // aspetta che nella settimana ci sia qualcosa.
     await page.goto(GRIGLIA)
     await expect(page.locator('[data-sintesi]')).toBeVisible()
-    await page.getByRole('button', { name: /Settimana scorsa/ }).click()
+    // La settimana ha righe — almeno quella di prova — e nessuna dichiarazione.
+    await expect(riga(page, 'task', INTONSO)).toBeVisible()
     await expect(page.locator('[data-totale-settimana="0"]')).toBeVisible()
     await expect(banner(page)).toHaveCount(0)
   })
+})
+
+test.describe('il banner delle attività senza spiegazione', () => {
+  test.use({ storageState: statoAuth(UTENTI.helena) })
 
   test('un’attività senza ore né stato è nell’elenco, e il suo bottone ci porta', async ({ page }) => {
     await page.goto(GRIGLIA)

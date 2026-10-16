@@ -21,10 +21,9 @@ I moduli dell'applicazione stanno direttamente in backend/ e si importano
 dalla posizione di questo file, da qualunque cartella si lanci pytest.
 """
 
-import json
 import os
 import sys
-from datetime import date, datetime, time
+from datetime import datetime, time, timedelta
 from pathlib import Path
 
 import pytest
@@ -65,40 +64,56 @@ if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
 
-def _data_del_seed():
-    """La data a cui il seed è ancorato (`_meta.ancorato_a` di seed_data.json).
-    Le date del seed sono assolute: «oggi», per i test su questi dati, è
-    questo giorno, non quello dell'orologio."""
-    with open(BACKEND / "seed_data.json", encoding="utf-8") as f:
-        return date.fromisoformat(json.load(f)["_meta"]["ancorato_a"])
+def sostituisci_get_oggi(mp, giorno):
+    """Fa restituire a `get_oggi()` il giorno dato (a mezzanotte: get_oggi
+    restituisce un datetime), per la durata di `mp`. I moduli fanno
+    `from utils import get_oggi`, cioè tengono un riferimento proprio alla
+    funzione: si sostituisce in `utils` e in ogni modulo già importato che
+    tiene quella in uso ora, e chi viene importato dopo la riceve già
+    sostituita. Il codice che legge `date.today()` per conto suo non è coperto."""
+    import utils
+
+    in_uso = utils.get_oggi
+
+    def get_oggi_fisso():
+        return datetime.combine(giorno, time())
+
+    mp.setattr(utils, "get_oggi", get_oggi_fisso)
+    for modulo in list(sys.modules.values()):
+        try:
+            tiene_quella_in_uso = getattr(modulo, "get_oggi", None) is in_uso
+        except Exception:
+            continue
+        if tiene_quella_in_uso:
+            mp.setattr(modulo, "get_oggi", get_oggi_fisso)
 
 
 @pytest.fixture(scope="session")
 def db_test():
     """gantt_test ricostruito da zero, una volta per sessione, con la stessa
     procedura di chi lavora: `scripts/ricostruisci_db.py` (schema public
-    svuotato, `alembic upgrade head`, seed). La usano solo i test che toccano
-    il database; i test puri non la chiedono e girano anche senza database.
+    svuotato, `alembic upgrade head`, seed con le date slittate al lunedì
+    corrente). La usano solo i test che toccano il database; i test puri non
+    la chiedono e girano anche senza database.
 
-    Per tutta la sessione `utils.get_oggi()` restituisce la data del seed (a
-    mezzanotte: get_oggi restituisce un datetime). I moduli fanno
-    `from utils import get_oggi`, cioè tengono un riferimento proprio alla
-    funzione: si sostituisce in `utils` e in ogni modulo già importato che la
-    tiene, e chi viene importato dopo la riceve già sostituita. Il codice che
-    legge `date.today()` per conto suo non è coperto da questo patch.
-    Restituisce la data, che i test usano come «oggi».
+    Per tutta la sessione `get_oggi()` restituisce la data d'ancoraggio del
+    seed spostata delle stesse settimane delle date: i dati stanno rispetto a
+    «oggi» sempre nello stesso punto, qualunque sia il giorno in cui girano i
+    test. Restituisce quella data, che i test usano come «oggi».
     """
     from sqlalchemy import text
     import models
-    from scripts.ricostruisci_db import ricostruisci
+    from scripts.ricostruisci_db import lunedi_corrente, ricostruisci
+    from seed import ANCORAGGIO, settimane_di_spostamento
 
     if models.engine.url.database != DB_TEST:
         pytest.exit(f"GUARDIA: l'engine punta a «{models.engine.url.database}».",
                     returncode=3)
 
     models.engine.dispose()
+    lunedi = lunedi_corrente()
     try:
-        ricostruisci(os.environ["DATABASE_URL"], conferma=DB_TEST)
+        ricostruisci(os.environ["DATABASE_URL"], conferma=DB_TEST, lunedi_riferimento=lunedi)
     except Exception as e:
         pytest.fail(f"ricostruzione di {DB_TEST} fallita: {e}")
 
@@ -107,22 +122,9 @@ def db_test():
         assert conn.execute(text("SELECT count(*) FROM dipendenti")).scalar() > 0, \
             "seed non caricato su gantt_test"
 
-    import utils
-    oggi_del_seed = _data_del_seed()
-    originale = utils.get_oggi
-
-    def get_oggi_del_seed():
-        return datetime.combine(oggi_del_seed, time())
-
+    oggi_del_seed = ANCORAGGIO + timedelta(weeks=settimane_di_spostamento(lunedi))
     with pytest.MonkeyPatch.context() as mp:
-        mp.setattr(utils, "get_oggi", get_oggi_del_seed)
-        for modulo in list(sys.modules.values()):
-            try:
-                tiene_originale = getattr(modulo, "get_oggi", None) is originale
-            except Exception:
-                continue
-            if tiene_originale:
-                mp.setattr(modulo, "get_oggi", get_oggi_del_seed)
+        sostituisci_get_oggi(mp, oggi_del_seed)
         yield oggi_del_seed
 
 

@@ -20,9 +20,13 @@
  * di login, per un motivo che non ha niente a che vedere con quello che stanno
  * provando.
  */
+process.env.TZ = 'Europe/Rome'
+
 import { test, expect } from '@playwright/test'
 import { UTENTI, statoAuth } from './utenti.js'
 import { GRIGLIA, riga as rigaUnita, totaleRiga, metti, apriPannello } from './griglia.js'
+import { orizzonteMese, nellOrizzonte } from '../frontend/src/components/consuntivazione/AggiungiRiga.jsx'
+import { isoLocale } from '../frontend/src/components/_shared/ganttSvg.js'
 
 test.describe.configure({ mode: 'serial' })
 
@@ -36,11 +40,16 @@ const T_OFFERTO = 'T904'    // da offrire: fuori dalla griglia, dentro l'orizzon
 // vivo (T906). Task di prova con date relative: quelli veri del seed, con le
 // date fisse, uscivano dall'orizzonte col passare delle settimane.
 const GIA_IN_GRIGLIA = ['T905', 'T906']
-// Suoi, non in griglia, e con la finestra chiusa prima dell'orizzonte del mese:
-// se non compaiono è per l'orizzonte. T907 è di prova; gli altri sono task del
-// seed Completati in primavera, che non tornano né in griglia (Completati) né
-// nell'orizzonte (finiti, e l'orizzonte si sposta solo in avanti).
-const FUORI_ORIZZONTE = ['T907', 'T004', 'T020', 'T030', 'T043', 'T104', 'T109']
+// Suo, non in griglia, Completato e finito prima dell'orizzonte del mese: se non
+// compare è per l'orizzonte. È di prova, con date relative al lunedì.
+const FUORI_ORIZZONTE = 'T907'
+
+/** Il lunedì della settimana corrente, che è quella che la griglia apre. */
+function lunediCorrente() {
+  const d = new Date()
+  d.setDate(d.getDate() - ((d.getDay() + 6) % 7))
+  return isoLocale(d)
+}
 
 // Qui tutte le righe sono task: l'aiutante condiviso vuole anche il tipo.
 const riga = (page, taskId) => rigaUnita(page, 'task', taskId)
@@ -64,11 +73,21 @@ test.describe('da utente normale (Helena)', () => {
       await expect(riga(page, id), `${id} deve essere in griglia`).toBeVisible()
       await expect(page.locator(`[data-aggiungi-task="${id}"]`), `${id} è già in griglia`).toHaveCount(0)
     }
-    // L'orizzonte del mese tiene fuori lo storico: suoi, non in griglia, finiti prima.
-    for (const id of FUORI_ORIZZONTE) {
-      await expect(riga(page, id), `${id} non deve essere in griglia`).toHaveCount(0)
-      await expect(page.locator(`[data-aggiungi-task="${id}"]`), `${id} è fuori orizzonte`).toHaveCount(0)
-    }
+    // L'orizzonte del mese tiene fuori lo storico. Il caso costruito: T907, suo,
+    // non in griglia, finito prima dell'orizzonte.
+    await expect(riga(page, FUORI_ORIZZONTE), `${FUORI_ORIZZONTE} non deve essere in griglia`).toHaveCount(0)
+    await expect(page.locator(`[data-aggiungi-task="${FUORI_ORIZZONTE}"]`),
+      `${FUORI_ORIZZONTE} è fuori orizzonte`).toHaveCount(0)
+    // E su tutti i suoi task, qualunque cosa contenga il seed: nessun task offerto
+    // ha la finestra fuori dall'orizzonte, con la stessa regola della lista.
+    const suoi = await page.evaluate(async () =>
+      (await (await fetch('/api/tasks', { credentials: 'include' })).json()))
+    const { da, a } = orizzonteMese(lunediCorrente())
+    const fuori = suoi.filter((t) => !nellOrizzonte(t, da, a)).map((t) => t.id)
+    expect(fuori).toContain(FUORI_ORIZZONTE)
+    const offerti = await page.locator('[data-aggiungi-task]').evaluateAll(
+      (nodi) => nodi.map((n) => n.getAttribute('data-aggiungi-task')))
+    expect(offerti.filter((id) => fuori.includes(id))).toEqual([])
 
     // Progetto + nome, non il solo nome del task.
     const lista = page.locator('[data-aggiungi-lista]')

@@ -42,6 +42,15 @@ griglia). Questi le hanno relative, e restano ciò che il test dichiara:
   T907  FUORI ORIZZONTE: Completato, finito prima del lunedì-30. Non è in
         griglia, quindi se non è offerto è per l'orizzonte.
 
+Per la «settimana intonsa» del banner — serve una persona che nella settimana
+abbia righe ma non abbia ancora dichiarato niente. Il seed riempie le settimane
+di tutti quelli che lavorano, quindi non la si cerca nei dati: la si costruisce.
+
+  T908  dentro la settimana, assegnato a un dipendente scelto con una query
+        (attivo, senza un utente, senza consuntivi né blocchi nella settimana),
+        che per la verifica riceve un utente di prova, UTENTE_INTONSA. Il
+        dipendente non si tocca: si aggiungono solo il suo task e il suo accesso.
+
 `--pulisci` rimuove i task di prova E tutto ciò che le verifiche hanno scritto su
 di loro (blocchi, consuntivi): il resto del database dev'essere byte per byte
 quello di prima, ed è ciò che l'impronta md5 in fondo al README controlla.
@@ -65,7 +74,8 @@ load_dotenv(os.path.join(RADICE, "backend", ".env"))
 
 from sqlalchemy import text  # noqa: E402
 from data_db_impl import get_session  # noqa: E402
-from models import Task, BloccoOre, Consuntivo  # noqa: E402
+from models import Task, BloccoOre, Consuntivo, Dipendente, Utente  # noqa: E402
+from auth import hash_password  # noqa: E402
 from scenario_sottotask import TASK as TASK_SCENARIO  # noqa: E402
 from scenario_fasi import TASK as TASK_FASI  # noqa: E402
 
@@ -110,6 +120,46 @@ TASK_PROVA = [
     ("T907", "P002", 8, "[prova e2e] Completato fuori orizzonte", _LUN - timedelta(days=60), _LUN - timedelta(days=45), "Completato"),
 ]
 
+# La settimana intonsa: lo stesso indirizzo e la stessa password stanno in
+# utenti.js, da dove apparecchia.js fa il login. Utente usa-e-getta, tolto da
+# `--pulisci` per indirizzo esatto.
+TASK_INTONSA = ("T908", "P002", 8, "[prova e2e] Settimana intonsa", _LUN - timedelta(days=7), _LUN + timedelta(days=13), _DA_INIZIARE)
+UTENTE_INTONSA = ("e2e-settimana-intonsa@prova.invalid", "prova-e2e-intonsa")
+
+
+def _dipendente_senza_dichiarazioni(session):
+    """Il primo dipendente attivo, per nome, senza un utente e senza consuntivi
+    né blocchi nella settimana corrente."""
+    fine = _LUN + timedelta(days=6)
+    return session.query(Dipendente).filter(
+        Dipendente.attivo.is_(True),
+        ~session.query(Utente).filter(Utente.dipendente_id == Dipendente.id).exists(),
+        ~session.query(Consuntivo).filter(
+            Consuntivo.dipendente_id == Dipendente.id,
+            Consuntivo.settimana == _LUN).exists(),
+        ~session.query(BloccoOre).filter(
+            BloccoOre.dipendente_id == Dipendente.id,
+            BloccoOre.giorno.between(_LUN, fine)).exists(),
+    ).order_by(Dipendente.nome, Dipendente.id).first()
+
+
+def _crea_settimana_intonsa(session):
+    tid, pid, fase_id, nome, inizio, fine, stato = TASK_INTONSA
+    if session.query(Task).filter(Task.id == tid).first():
+        print(f"  {tid} c'è già")
+        return
+    dip = _dipendente_senza_dichiarazioni(session)
+    if dip is None:
+        raise SystemExit("nessun dipendente attivo senza utente e senza dichiarazioni "
+                         "in questa settimana: la settimana intonsa non si può costruire")
+    session.add(Task(id=tid, progetto_id=pid, fase_id=fase_id, nome=nome, stato=stato,
+                     dipendente_id=dip.id, data_inizio=inizio, data_fine=fine,
+                     ore_stimate=8, ore_pianificate=8))
+    email, password = UTENTE_INTONSA
+    session.add(Utente(email=email, password_hash=hash_password(password),
+                       ruolo_app="user", dipendente_id=dip.id))
+    print(f"  {tid} creato per {dip.nome}, con l'utente {email}")
+
 
 def crea():
     session = get_session()
@@ -125,20 +175,22 @@ def crea():
                 ore_stimate=8, ore_pianificate=8,
             ))
             print(f"  {tid} creato ({pid}, {inizio} → {fine})")
+        _crea_settimana_intonsa(session)
         session.commit()
     finally:
         session.close()
 
 
 def pulisci():
-    ids = [t[0] for t in TASK_PROVA]
+    ids = [t[0] for t in TASK_PROVA] + [TASK_INTONSA[0]]
     session = get_session()
     try:
         n_b = session.query(BloccoOre).filter(BloccoOre.task_id.in_(ids)).delete(synchronize_session=False)
         n_c = session.query(Consuntivo).filter(Consuntivo.task_id.in_(ids)).delete(synchronize_session=False)
         n_t = session.query(Task).filter(Task.id.in_(ids)).delete(synchronize_session=False)
+        n_u = session.query(Utente).filter(Utente.email == UTENTE_INTONSA[0]).delete(synchronize_session=False)
         session.commit()
-        print(f"  tolti: {n_t} task, {n_b} blocchi, {n_c} consuntivi")
+        print(f"  tolti: {n_t} task, {n_b} blocchi, {n_c} consuntivi, {n_u} utenti")
     finally:
         session.close()
 
@@ -152,7 +204,7 @@ def impronta():
     verifica in corso, cioè quando lo scenario è in piedi: è l'unico modo perché
     «md5 PRIMA» e «md5 DOPO» misurino la stessa cosa.
     """
-    ids = tuple(t[0] for t in TASK_PROVA) + TASK_SCENARIO + TASK_FASI
+    ids = tuple(t[0] for t in TASK_PROVA) + (TASK_INTONSA[0],) + TASK_SCENARIO + TASK_FASI
     session = get_session()
     try:
         blocchi = session.execute(text(

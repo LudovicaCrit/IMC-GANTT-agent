@@ -182,10 +182,10 @@ TIPI_DIPENDENZA = ("FS", "SS", "FF", "SF")
 
 # Consuntivazione a ore (14/09/2026): da dove arriva un blocco di ore.
 # - manuale: scritto dal dipendente nella griglia della settimana
-# - storico: migrato dai consuntivi SETTIMANALI di prima dei blocchi. Il giorno
-#            vero non esiste: il blocco sta sul lunedì per convenzione, ed è
-#            questa fonte a dirlo — una vista per giorno non deve leggerlo
-#            come «lavorato il lunedì».
+# - storico: ore dichiarate per SETTIMANA, senza il giorno vero (i consuntivi
+#            di prima dei blocchi, e il seed, che le spalma su lunedì-venerdì).
+#            Il giorno del blocco è una convenzione, ed è questa fonte a dirlo:
+#            una vista per giorno non deve leggerlo come «lavorato quel giorno».
 # NIENTE 'ia', ed è una decisione, non una dimenticanza: l'IA non scrive mai
 # ore-consuntivo. Lavora sul piano (GANTT, assegnazioni); le ore le dichiara solo
 # chi le ha lavorate. C'era nella prima versione del vincolo ed è stato tolto.

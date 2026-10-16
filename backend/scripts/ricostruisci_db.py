@@ -2,7 +2,8 @@
 ricostruisci_db.py — ricostruisce da zero un database del GANTT.
 
 La procedura è una sola, e vive qui: schema `public` vuoto, `alembic upgrade
-head`, `seed.py`. La usano chi lavora (da riga di comando) e i test
+head`, `seed.py` con il lunedì della settimana corrente, così le date del seed
+slittano a oggi (vedi seed.py). La usano chi lavora (da riga di comando) e i test
 (`tests/conftest.py`, fixture `db_test`), così non esistono due copie che
 possano divergere.
 
@@ -25,6 +26,7 @@ import argparse
 import os
 import subprocess
 import sys
+from datetime import date, timedelta
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -82,7 +84,7 @@ def impronta_dipendenti(url: str) -> str | None:
         engine.dispose()
 
 
-def _esegui(url: str, *argomenti: str, schema: str | None = None) -> None:
+def _esegui(url: str, *argomenti: str, schema: str | None = None) -> str:
     """Un comando Python del backend in un processo figlio, con DATABASE_URL
     puntato al database da ricostruire. Processo separato perché alembic
     riconfigura il logging alla sua maniera, e il chiamante non deve subirlo.
@@ -99,6 +101,7 @@ def _esegui(url: str, *argomenti: str, schema: str | None = None) -> None:
     )
     if esito.returncode != 0:
         raise RuntimeError(f"`{' '.join(argomenti)}` fallito:\n{esito.stdout}\n{esito.stderr}")
+    return esito.stdout
 
 
 def applica_migration(url: str, schema: str | None = None) -> None:
@@ -107,9 +110,23 @@ def applica_migration(url: str, schema: str | None = None) -> None:
     _esegui(url, "-m", "alembic", "upgrade", "head", schema=schema)
 
 
-def ricostruisci(url: str, conferma: str) -> tuple[str | None, str | None]:
-    """Svuota lo schema public, applica le migration e carica il seed.
-    Restituisce l'impronta dei dipendenti prima e dopo."""
+def lunedi_corrente() -> date:
+    oggi = date.today()
+    return oggi - timedelta(days=oggi.weekday())
+
+
+def carica_seed(url: str, lunedi_riferimento: date, schema: str | None = None) -> str:
+    """`seed.py` sul database di `url`, con le date spostate al lunedì dato.
+    Restituisce la riga in cui il seed dice di quanto le ha spostate."""
+    uscita = _esegui(url, "seed.py", "--lunedi", lunedi_riferimento.isoformat(), schema=schema)
+    return next((r.strip() for r in uscita.splitlines() if "date spostate" in r), "")
+
+
+def ricostruisci(url: str, conferma: str,
+                 lunedi_riferimento: date | None = None) -> tuple[str | None, str | None, str]:
+    """Svuota lo schema public, applica le migration e carica il seed con le
+    date spostate al lunedì di riferimento (assente: quello corrente).
+    Restituisce l'impronta dei dipendenti prima e dopo, e lo spostamento."""
     nome = controlla_nome(url, conferma)
     prima = impronta_dipendenti(url)
 
@@ -130,8 +147,8 @@ def ricostruisci(url: str, conferma: str) -> tuple[str | None, str | None]:
         engine.dispose()
 
     applica_migration(url)
-    _esegui(url, "seed.py")
-    return prima, impronta_dipendenti(url)
+    spostamento = carica_seed(url, lunedi_riferimento or lunedi_corrente())
+    return prima, impronta_dipendenti(url), spostamento
 
 
 def main() -> int:
@@ -154,11 +171,12 @@ def main() -> int:
         conferma = input(f"Il database «{nome}» verrà svuotato e ricostruito. "
                          f"Scrivi il suo nome per confermare: ").strip()
     try:
-        prima, dopo = ricostruisci(url, conferma)
+        prima, dopo, spostamento = ricostruisci(url, conferma)
     except RicostruzioneRifiutata as e:
         print(f"RIFIUTATO: {e}")
         return 3
     print(f"«{nome}» ricostruito.")
+    print(f"  seed: {spostamento}")
     print(f"  impronta dei dipendenti prima: {prima or '— (nessuna tabella dipendenti)'}")
     print(f"  impronta dei dipendenti dopo:  {dopo}")
     if prima is not None and prima != dopo:

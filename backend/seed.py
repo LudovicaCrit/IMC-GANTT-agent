@@ -4,8 +4,11 @@ Ruoli, Competenze, FasiStandard, Fasi per progetto, Utenti.
 Eseguire UNA VOLTA per inizializzare il db.
 """
 
+import argparse
 import json
-from datetime import datetime
+import math
+from datetime import date, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 
 import pandas as pd
@@ -18,6 +21,7 @@ from models import (
 )
 from data_db_impl import contatore_ordine_task
 from auth import hash_password
+from utils import get_oggi
 
 
 # ── Dati sintetici del seed ───────────────────────────────────────────────
@@ -35,37 +39,96 @@ from auth import hash_password
 # senza cambiare la forma tiene il diff su una manciata di righe invece che
 # sull'intero seed.
 #
-# NB: le date qui sono ASSOLUTE, congelate al giorno dell'estrazione
-# (`_meta.ancorato_a` nel JSON). `data_legacy.py` le ri-ancorava a
-# `date.today()` a ogni import, così il seed restava sempre "attuale"; un file
-# statico non può farlo. Per dati sintetici e usa-e-getta va bene, ma se un
-# domani il seed dovesse tornare a produrre un db temporalmente centrato su
-# oggi, la strada è salvare offset in giorni invece di date assolute.
+# LE DATE SLITTANO ALLA SETTIMANA DI RIFERIMENTO. Nel JSON sono assolute,
+# fotografate il giorno `_meta.ancorato_a`: caricate così, ogni settimana che
+# passa il database invecchia, i progetti escono dalla finestra del GANTT e il
+# semaforo cambia colore da solo. Il seed le sposta tutte, mentre legge il JSON,
+# della distanza fra il lunedì della data d'ancoraggio e un lunedì di
+# riferimento: così i dati stanno sempre nello stesso punto rispetto a «oggi».
+# Lo spostamento è di settimane intere, quindi un lunedì resta un lunedì: è la
+# convenzione su cui si reggono `consuntivi.settimana` e i blocchi di ore.
+# Le colonne da spostare le elenca il JSON stesso (`_meta.colonne_data`).
 _SEED_DATA = Path(__file__).parent / "seed_data.json"
 
 with open(_SEED_DATA, encoding="utf-8") as _f:
     _BLOB = json.load(_f)
 
 _COLONNE_DATA = _BLOB["_meta"]["colonne_data"]
+ANCORAGGIO = date.fromisoformat(_BLOB["_meta"]["ancorato_a"])
 
 
-def _dataframe(nome):
+def lunedi_di(giorno):
+    return giorno - timedelta(days=giorno.weekday())
+
+
+def settimane_di_spostamento(lunedi_riferimento):
+    """Le settimane fra il lunedì dell'ancoraggio e il lunedì di riferimento."""
+    if lunedi_riferimento.weekday() != 0:
+        raise ValueError(f"il riferimento {lunedi_riferimento} non è un lunedì")
+    return (lunedi_riferimento - lunedi_di(ANCORAGGIO)).days // 7
+
+
+def _dataframe(nome, spostamento):
     """Ricostruisce un DataFrame dal JSON, riportando le colonne-data a
     `datetime64` — JSON non ha un tipo data, e il resto del seed le passa a
-    SQLAlchemy aspettandosi dei Timestamp."""
+    SQLAlchemy aspettandosi dei Timestamp — e spostandole di `spostamento`.
+    È l'unico punto in cui le date del seed si spostano."""
     df = pd.DataFrame(_BLOB[nome])
     for col in _COLONNE_DATA.get(nome, []):
-        df[col] = pd.to_datetime(df[col])
+        df[col] = pd.to_datetime(df[col]) + spostamento
     return df
 
 
-DIPENDENTI = _dataframe("DIPENDENTI")
-PROGETTI = _dataframe("PROGETTI")
-TASKS = _dataframe("TASKS")
-CONSUNTIVI = _dataframe("CONSUNTIVI")
+# Le ore di una settimana si spalmano su lunedì-venerdì: sono i giorni che
+# /salva-blocchi accetta (N2), e nessun giorno supera così il tetto delle 24h
+# (N14) finché la settimana resta sotto le 120 ore.
+GIORNI_LAVORATIVI = 5
+PASSO_ORE = Decimal("0.5")
 
 
-def seed():
+def distribuisci_settimana(ore_per_task):
+    """Le ore di una persona in una settimana, {task_id: ore}, spalmate sui
+    giorni lavorativi: [(task_id, indice del giorno 0-4, ore)].
+
+    Deterministica, senza caso: ogni giorno si riempie fino a una quota uguale
+    per tutti (il totale diviso per cinque, arrotondato per eccesso alla mezz'ora),
+    passando i task in ordine di id. Un task può dividersi su più giorni, ma su
+    ogni giorno ha al più un blocco (la UNIQUE di blocchi_ore). Il totale di ogni
+    task resta esatto: ore intere o mezze ore restano multipli di mezz'ora, e un
+    eventuale resto più fine finisce nell'ultimo pezzo del task."""
+    totale = sum(Decimal(str(o)) for o in ore_per_task.values())
+    if totale <= 0:
+        return []
+    quota = Decimal(math.ceil(totale / GIORNI_LAVORATIVI / PASSO_ORE)) * PASSO_ORE
+    pezzi = []
+    giorno, pieno = 0, Decimal(0)
+    for task_id in sorted(ore_per_task):
+        resto = Decimal(str(ore_per_task[task_id]))
+        while resto > 0:
+            if pieno >= quota and giorno < GIORNI_LAVORATIVI - 1:
+                giorno, pieno = giorno + 1, Decimal(0)
+            spazio = quota - pieno if giorno < GIORNI_LAVORATIVI - 1 else resto
+            preso = min(resto, spazio)
+            pezzi.append((task_id, giorno, preso))
+            resto -= preso
+            pieno += preso
+    return pezzi
+
+
+def seed(lunedi_riferimento=None):
+    """Popola il database. Le date si spostano al lunedì di riferimento; se
+    manca, al lunedì della settimana corrente secondo `get_oggi()`."""
+    if lunedi_riferimento is None:
+        lunedi_riferimento = lunedi_di(get_oggi().date())
+    settimane = settimane_di_spostamento(lunedi_riferimento)
+    spostamento = timedelta(weeks=settimane)
+    DIPENDENTI = _dataframe("DIPENDENTI", spostamento)
+    PROGETTI = _dataframe("PROGETTI", spostamento)
+    TASKS = _dataframe("TASKS", spostamento)
+    CONSUNTIVI = _dataframe("CONSUNTIVI", spostamento)
+    print(f"  date spostate di {settimane} settimane: ancoraggio {ANCORAGGIO} "
+          f"(lunedì {lunedi_di(ANCORAGGIO)}) → lunedì {lunedi_riferimento}")
+
     create_tables()
     session = get_session()
 
@@ -520,14 +583,16 @@ def seed():
     # della consuntivazione a ore i lettori sommano la vista `ore_settimanali`,
     # non `ore_dichiarate`. Un seed che scrivesse solo i consuntivi darebbe un
     # database con 17.535 ore dichiarate e zero ore visibili.
-    # La regola: un blocco sul LUNEDÌ della
-    # settimana, fonte 'storico' (il giorno vero non esiste nei dati), nessun
-    # blocco per le righe a zero ore.
+    # La regola: fonte 'storico' (il giorno vero non esiste nei dati), le ore
+    # della persona in quella settimana spalmate da lunedì a venerdì con
+    # `distribuisci_settimana`, nessun blocco per le righe a zero ore. Il
+    # consuntivo resta sul lunedì: è la chiave della settimana.
     # `ore_dichiarate` NON si semina più (passo 5.5): la colonna era il guscio
     # scritto-ma-non-letto del passo 2 ed esce al 5.6. Il campo omonimo di
     # `seed_data.json` resta e resta necessario — è da lì che escono le ore dei
     # blocchi qui sotto. Sparisce la colonna, non il dato.
-    n_blocchi = 0
+    # {(dipendente, settimana): {task: (ore, data di compilazione)}}
+    ore_settimana = {}
     for _, row in CONSUNTIVI.iterrows():
         settimana = row["settimana"].date() if hasattr(row["settimana"], "date") else row["settimana"]
         ore = float(row["ore_dichiarate"])
@@ -541,23 +606,30 @@ def seed():
             nota=row["nota"] if row["nota"] else None,
         ))
         if ore > 0:
-            # La convenzione «blocco sul lunedì» regge solo se la settimana È un
-            # lunedì: altrimenti la vista (che normalizza al lunedì) e la riga
-            # del consuntivo parlerebbero di due settimane diverse.
+            # I giorni dei blocchi si contano dal lunedì: se la settimana non lo
+            # fosse, i blocchi cadrebbero a cavallo di due settimane e la vista
+            # (che normalizza al lunedì) non li ritroverebbe sotto il consuntivo.
             if settimana.weekday() != 0:
                 raise ValueError(
                     f"seed_data.json: consuntivo {row['task_id']}/{row['dipendente_id']} "
                     f"con settimana {settimana} che non è un lunedì."
                 )
+            ore_settimana.setdefault((row["dipendente_id"], settimana), {})[row["task_id"]] = (
+                ore, data_compilazione)
+
+    n_blocchi = 0
+    for (dipendente_id, settimana), per_task in sorted(ore_settimana.items()):
+        ore_per_task = {t: ore for t, (ore, _) in per_task.items()}
+        for task_id, giorno, ore in distribuisci_settimana(ore_per_task):
             session.add(BloccoOre(
-                dipendente_id=row["dipendente_id"],
-                giorno=settimana,
-                task_id=row["task_id"],
+                dipendente_id=dipendente_id,
+                giorno=settimana + timedelta(days=giorno),
+                task_id=task_id,
                 ore=ore,
                 fonte="storico",
-                # Come la migration: la data vera della dichiarazione se c'è.
-                # Un `None` esplicito scavalcherebbe il default della colonna.
-                created_at=data_compilazione or datetime.utcnow(),
+                # La data vera della dichiarazione se c'è. Un `None` esplicito
+                # scavalcherebbe il default della colonna.
+                created_at=per_task[task_id][1] or datetime.utcnow(),
             ))
             n_blocchi += 1
     print(f"  ✓ {len(CONSUNTIVI)} consuntivi, {n_blocchi} blocchi ore 'storico'")
@@ -628,5 +700,9 @@ def seed():
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Popola il database con i dati sintetici.")
+    parser.add_argument("--lunedi", type=date.fromisoformat,
+                        help="lunedì di riferimento (AAAA-MM-GG); assente: quello della settimana corrente")
+    argomenti = parser.parse_args()
     print("Popolamento database IMC-Group R1...")
-    seed()
+    seed(argomenti.lunedi)

@@ -250,6 +250,8 @@ vuoto, `alembic upgrade head`, `python seed.py`. Le migration servono ai databas
 che hanno dati propri, cioè quelli del cliente: lì ogni cambio di schema deve
 preservarli.
 
+Il seed sposta tutte le sue date di settimane intere, dal lunedì d'ancoraggio di `seed_data.json` al lunedì della settimana corrente (o a quello dato con `python seed.py --lunedi AAAA-MM-GG`), così i dati di sviluppo e di test stanno sempre nello stesso punto rispetto a oggi.
+
 Le migration si scrivono a mano, e ogni riga si rilegge: niente script generati
 dal confronto fra `models.py` e il database. Ogni migration ha un ID univoco, sa
 cosa la precede e si applica con un comando. La storia dello schema diventa parte

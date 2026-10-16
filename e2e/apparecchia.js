@@ -16,7 +16,7 @@ const QUI = path.dirname(fileURLToPath(import.meta.url))
  * `/api/auth/login` ha un rate limit di 5 al minuto per IP (auth_routes.py), e
  * una verifica che accede a ogni test lo sfonda appena cresce — il quinto test
  * resta sulla pagina di login e fallisce per un motivo che non c'entra niente
- * con quello che stava provando. Qui si accede due volte e basta.
+ * con quello che stava provando. Qui si accede una volta per utente di UTENTI.
  */
 export default async function apparecchia() {
   console.log('\n── dati di prova ──')
