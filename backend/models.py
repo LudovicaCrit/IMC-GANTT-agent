@@ -24,7 +24,7 @@ from dotenv import load_dotenv
 load_dotenv()
 from sqlalchemy import (
     create_engine, Column, Integer, String, Float, Boolean, Text, Date,
-    DateTime, ForeignKey, UniqueConstraint, CheckConstraint, JSON, SmallInteger,
+    DateTime, ForeignKey, UniqueConstraint, CheckConstraint, SmallInteger,
     Numeric, ForeignKeyConstraint, func, event, DDL, MetaData, Table, Index,
     BigInteger, Sequence, case, cast, select, text,
 )
@@ -231,37 +231,6 @@ LIVELLI_URGENZA = ("Bassa", "Medio-Bassa", "Medio-Alta", "Alta")
 # perché si arrotonda VERSO IL BASSO: promuovere un default a "Medio-Alta"
 # attribuirebbe al PM una dichiarazione che non ha mai fatto.
 URGENZA_DEFAULT = "Medio-Bassa"
-
-
-def urgenza_fase_risolta(fase, progetto):
-    """L'urgenza EFFETTIVA di una fase: la sua, o quella del progetto.
-
-        fase.urgenza or progetto.urgenza
-
-    UNA REGOLA, UN POSTO. È una riga sola, e proprio per questo è il tipo di
-    regola che si riscrive volentieri in ogni lettore — e che poi diverge. Il
-    precedente in casa lo dimostra: la risoluzione gemella dell'assegnatario
-    (`sottotask.dipendente_id or task.dipendente_id`) è documentata in QUATTRO
-    punti (models, routes/sottotask, data_db_impl ×2) ma implementata inline,
-    quindi ogni nuovo lettore la ricopia a memoria. Qui si parte con la funzione,
-    prima che i lettori siano più di uno.
-
-    IL PATTERN — `or` e non `if is None`. Un override a stringa vuota (che il
-    CHECK ck_fasi_urgenza rifiuta, ma che un client distratto potrebbe tentare)
-    deve ricadere sull'eredità come farebbe un NULL: è la stessa scelta, con la
-    stessa motivazione, del commento in `task_settimana_dipendente` sulla
-    risoluzione dell'assegnatario.
-
-    NON PUÒ TORNARE None: `Progetto.urgenza` è NOT NULL proprio perché è la
-    radice dell'eredità. Se un giorno tornasse nullable, questa funzione
-    comincerebbe a restituire None in silenzio e il chiamante lo scoprirebbe
-    altrove — è la ragione per cui quel NOT NULL non è un dettaglio.
-
-    Pura: due oggetti, nessuna query. Chi la chiama ha già la fase e il suo
-    progetto sotto mano (la relationship `Fase.progetto` o il loop che li
-    attraversa entrambi).
-    """
-    return fase.urgenza or progetto.urgenza
 
 
 def _check_in(colonna, valori, ammetti_null=False):
@@ -536,9 +505,7 @@ class Dipendente(Base):
     # competenze si leggono e si scrivono SOLO via `competenze_rel`.
     sede = Column(String(40), nullable=True)
     email = Column(String(120), nullable=True)
-    data_assunzione = Column(Date, nullable=True)
     attivo = Column(Boolean, nullable=False, default=True)
-    note = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -551,7 +518,6 @@ class Dipendente(Base):
     ruolo_rel = relationship("Ruolo", back_populates="dipendenti")
     ruoli_aggiuntivi = relationship("DipendentiRuoliAggiuntivi", back_populates="dipendente")
     competenze_rel = relationship("DipendentiCompetenze", back_populates="dipendente")
-    assegnazioni = relationship("Assegnazione", back_populates="dipendente")
     consuntivi = relationship("Consuntivo", back_populates="dipendente")
     consuntivi_sottotask = relationship("ConsuntivoSottotask", back_populates="dipendente")
     utente = relationship("Utente", back_populates="dipendente", uselist=False)
@@ -587,9 +553,8 @@ class Progetto(Base):
     # urgenza: quanto questo progetto non può aspettare. Vedi LIVELLI_URGENZA.
     #   Fino al 03/09/2026 si chiamava `ritardabilita` ed era il suo INVERSO —
     #   stesso dato, nome sbagliato, mai letto da nessuna logica.
-    #   NOT NULL con default: il progetto è la RADICE dell'eredità, e una radice
-    #   NULL renderebbe irrisolvibile l'urgenza di tutte le sue fasi
-    #   (`fase.urgenza or progetto.urgenza` tornerebbe None). Il default lato DB
+    #   NOT NULL con default: le fasi non hanno un'urgenza propria e valgono
+    #   quella del progetto (DECISIONI §5), quindi qui serve sempre. Il default lato DB
     #   serve anche perché tre punti creano Progetto fuori dal DTO (seed.py,
     #   add_p010.py, le due route di creazione).
     urgenza = Column(String(16), nullable=False,
@@ -597,11 +562,11 @@ class Progetto(Base):
     data_inizio = Column(Date, nullable=True)
     data_fine = Column(Date, nullable=True)
     budget_ore = Column(Integer, nullable=True)
-    giornate_vendute = Column(Float, nullable=True)
+    # Niente `giornate_vendute`: era un doppione delle ore vendute (budget_ore e
+    # Fase.ore_vendute), mai letto da nessun calcolo. Tolta al passo B3.
     valore_contratto = Column(Float, nullable=True)
     descrizione = Column(Text, nullable=True)
     fase_corrente = Column(String(80), nullable=True)
-    sede = Column(String(40), nullable=True)
     # pm_id: il Project Manager del progetto. FK a Dipendente, nullable.
     # Era "responsabile_id"; rinominato per coerenza con linguaggio Vincenzo/Francesco
     # e prep R2 (ABAC: solo il PM potrà modificare il proprio progetto).
@@ -614,10 +579,10 @@ class Progetto(Base):
     # area: valorizzata SOLO per i bandi Innovation ("PA" | "Imprese"), NULL
     # altrove. Spezza Innovation tra le due aree (Ida=PA, Domenica=Imprese).
     area = Column(String(20), nullable=True)
-    scadenza_bando = Column(Date, nullable=True)
-    motivo_sospensione = Column(Text, nullable=True)
-    lezioni_apprese = Column(Text, nullable=True)
-    note = Column(Text, nullable=True)
+    # Tolte al passo B3, perché scritte dai DTO ma mai lette per decidere o
+    # mostrare niente: sede, scadenza_bando, motivo_sospensione,
+    # lezioni_apprese, note. Una funzione futura che ne avesse bisogno le
+    # riporta con il suo passo, insieme a chi le legge.
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -737,17 +702,9 @@ class Fase(Base):
     ore_vendute = Column(Float, nullable=True)
     ore_pianificate = Column(Float, nullable=True)
     stato = Column(String(20), nullable=False, default="Da iniziare")
-    # urgenza: OVERRIDE dell'urgenza del progetto (A1, 03/09/2026).
-    #   NULL — il caso normale — vuol dire «eredita dal progetto». La
-    #   risoluzione è `fase.urgenza or progetto.urgenza`, gemella esatta di
-    #   `sottotask.dipendente_id or task.dipendente_id`.
-    #   nullable=True e SENZA default NON è una lacuna da riempire: il NULL È
-    #   l'informazione. Un valore copiato dal progetto alla creazione sembrerebbe
-    #   identico oggi e DIVERGEREBBE domani, appena il PM cambia l'urgenza del
-    #   progetto — la fase resterebbe ferma al valore di ieri senza che nessuno
-    #   l'abbia deciso. È lo stesso ragionamento, parola per parola, del commento
-    #   su Sottotask.dipendente_id.
-    urgenza = Column(String(16), nullable=True)
+    # Niente urgenza propria: la fase eredita quella del progetto (DECISIONI
+    # §5). La colonna di override è stata tolta al passo B3; chi vuole
+    # l'urgenza di una fase legge `fase.progetto.urgenza`.
     note = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -755,9 +712,6 @@ class Fase(Base):
     __table_args__ = (
         CheckConstraint(_check_in("stato", STATI_FASE),
                         name="stato_ammessi"),
-        # `ammetti_null`: sulla fase il NULL è legittimo e significa «eredita».
-        CheckConstraint(_check_in("urgenza", LIVELLI_URGENZA, ammetti_null=True),
-                        name="urgenza"),
     )
 
     progetto = relationship("Progetto", back_populates="fasi")
@@ -827,7 +781,8 @@ class Task(Base):
     # CHECK constraint: ck_task_stato_ammessi. Sospeso/Annullato sono scritti
     # dalla cascata Fase→Task (Step 2.4-bis B, commit 61795c5).
     stato = Column(String(20), nullable=False, default="Da iniziare")
-    motivo_blocco = Column(Text, nullable=True)  # "Perché?" quando Bloccato/In ritardo
+    # Niente `motivo_blocco` né `note` (tolte al passo B3): il perché di un
+    # fermo lo scrive chi lavora, nella nota della sua dichiarazione settimanale.
     profilo_richiesto = Column(String(60), nullable=True)
     # Step 3.1 (25/05/2026): rimossa colonna `predecessore` String singola.
     # Le dipendenze tra task vivono ora nella tabella `dipendenza_task`
@@ -836,13 +791,11 @@ class Task(Base):
     # è successore → i suoi predecessori sono lì) e `dipendenze_uscenti`
     # (questo task è predecessore → lista dei suoi successori).
     ordine = Column(SmallInteger, nullable=True)
-    note = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     progetto = relationship("Progetto", back_populates="task")
     fase_rel = relationship("Fase", back_populates="task")
-    assegnazioni = relationship("Assegnazione", back_populates="task", cascade="all, delete-orphan")
     consuntivi = relationship("Consuntivo", back_populates="task")
     dipendente_id = Column(String(10), ForeignKey("dipendenti.id"), nullable=True, index=True)
 
@@ -1023,38 +976,10 @@ class Sottotask(Base):
 # RELAZIONI OPERATIVE
 # ══════════════════════════════════════════════════════════════════════
 
-class Assegnazione(Base):
-    """MONCONE — fuori dal giro dallo Step 4 sottotask (06/08/2026).
-
-    Era la seconda sorgente di «chi fa questo lavoro», accanto a
-    `Task.dipendente_id`. Due sorgenti per un fatto solo, e solo una mantenuta:
-    `modifica_task` aggiorna la colonna sul task e non ha mai toccato questa
-    tabella, quindi ogni riassegnazione dal Cantiere la faceva divergere.
-
-    Oggi `Task.dipendente_id` è l'unica verità. Nessuno legge più questa
-    tabella (l'unico lettore era `progetti_attivi_visibili`, spostato) e
-    nessuno la scrive più (`aggiungi_task`, i tre punti del wizard in
-    routes/progetti.py e il seed, tutti potati).
-
-    Le righe storiche restano dove sono, morte e innocue. Il DROP della
-    tabella — con la migration che serve — è rimandato a una sessione di
-    pulizia monconi dedicata: non tenerla in vita, non usarla per niente.
-    """
-    __tablename__ = "assegnazioni"
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    task_id = Column(String(10), ForeignKey("task.id", ondelete="CASCADE"), nullable=False)
-    dipendente_id = Column(String(10), ForeignKey("dipendenti.id"), nullable=False)
-    ore_assegnate = Column(Integer, nullable=True)
-    ruolo = Column(String(20), default="responsabile")
-    created_at = Column(DateTime, default=datetime.utcnow)
-
-    __table_args__ = (
-        UniqueConstraint("task_id", "dipendente_id"),
-    )
-
-    task = relationship("Task", back_populates="assegnazioni")
-    dipendente = relationship("Dipendente", back_populates="assegnazioni")
+# QUI C'ERA `Assegnazione` (tabella `assegnazioni`): la seconda sorgente di
+# «chi fa questo lavoro» accanto a `Task.dipendente_id`, senza più lettori né
+# scrittori dallo Step 4 sottotask. Tolta al passo B3: l'assegnatario è
+# `Task.dipendente_id`, con l'override di `Sottotask.dipendente_id`.
 
 
 class Consuntivo(Base):
@@ -1315,30 +1240,8 @@ class Segnalazione(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
-class NotaProgetto(Base):
-    __tablename__ = "note_progetto"
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    progetto_id = Column(String(10), ForeignKey("progetti.id", ondelete="CASCADE"), nullable=False)
-    autore_id = Column(String(10), ForeignKey("dipendenti.id"), nullable=True)
-    titolo = Column(String(200), nullable=True)
-    testo = Column(Text, nullable=False)
-    tipo = Column(String(40), default="nota")
-    created_at = Column(DateTime, default=datetime.utcnow)
-
-
-class Intervento(Base):
-    __tablename__ = "interventi"
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    segnalazione_id = Column(String(10), ForeignKey("segnalazioni.id"), nullable=True)
-    opzione_scelta = Column(String(10), nullable=True)
-    descrizione_opzione = Column(Text, nullable=True)
-    azioni_applicate = Column(JSON, nullable=True)
-    approvato_da = Column(String(10), ForeignKey("dipendenti.id"), nullable=True)
-    esito = Column(String(40), nullable=True)
-    nota = Column(Text, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+# QUI C'ERANO `NotaProgetto` (note_progetto) e `Intervento` (interventi):
+# mai lette né scritte da nessun percorso, zero righe. Tolte al passo B3.
 
 
 # QUI C'ERANO `PresenzaSettimanale` e `Spesa`, due tabelle che non sono mai

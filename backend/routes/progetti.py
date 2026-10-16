@@ -189,15 +189,11 @@ class ProgettoCreate(BaseModel):
     data_inizio: Optional[date_type] = None
     data_fine: Optional[date_type] = None
     budget_ore: Optional[int] = Field(default=None, ge=0)
-    giornate_vendute: Optional[float] = Field(default=None, ge=0)
     valore_contratto: Optional[float] = Field(default=None, ge=0)
     descrizione: Optional[str] = None
     fase_corrente: Optional[str] = Field(default=None, max_length=80)
-    sede: Optional[str] = Field(default=None, max_length=40)
     pm_id: Optional[str] = Field(default=None, max_length=10)
     azienda_id: Optional[int] = None
-    scadenza_bando: Optional[date_type] = None
-    note: Optional[str] = None
 
     @model_validator(mode="after")
     def _urgenza_ammessa(self):
@@ -210,9 +206,9 @@ class ProgettoCreate(BaseModel):
 # un campo nuovo del DTO non diventa scrivibile senza passare di qui.
 CAMPI_ANAGRAFICA_COMPLETAMENTO = (
     "nome", "cliente", "stato", "tipologia", "priorita", "urgenza",
-    "data_inizio", "data_fine", "budget_ore", "giornate_vendute",
-    "valore_contratto", "descrizione", "fase_corrente", "sede", "pm_id",
-    "azienda_id", "scadenza_bando", "note",
+    "data_inizio", "data_fine", "budget_ore",
+    "valore_contratto", "descrizione", "fase_corrente", "pm_id",
+    "azienda_id",
 )
 
 
@@ -227,17 +223,11 @@ class ProgettoUpdate(BaseModel):
     data_inizio: Optional[date_type] = None
     data_fine: Optional[date_type] = None
     budget_ore: Optional[int] = Field(default=None, ge=0)
-    giornate_vendute: Optional[float] = Field(default=None, ge=0)
     valore_contratto: Optional[float] = Field(default=None, ge=0)
     descrizione: Optional[str] = None
     fase_corrente: Optional[str] = Field(default=None, max_length=80)
-    sede: Optional[str] = Field(default=None, max_length=40)
     pm_id: Optional[str] = Field(default=None, max_length=10)
     azienda_id: Optional[int] = None
-    scadenza_bando: Optional[date_type] = None
-    motivo_sospensione: Optional[str] = None
-    lezioni_apprese: Optional[str] = None
-    note: Optional[str] = None
 
     @model_validator(mode="after")
     def _urgenza_ammessa(self):
@@ -419,15 +409,11 @@ def crea_progetto(req: ProgettoCreate, _: Utente = Depends(require_manager)):
             data_inizio=req.data_inizio,
             data_fine=req.data_fine,
             budget_ore=req.budget_ore,
-            giornate_vendute=req.giornate_vendute,
             valore_contratto=req.valore_contratto,
             descrizione=req.descrizione,
             fase_corrente=req.fase_corrente,
-            sede=req.sede,
             pm_id=req.pm_id,
             azienda_id=req.azienda_id,
-            scadenza_bando=req.scadenza_bando,
-            note=req.note,
         )
         session.add(nuovo)
         session.commit()
@@ -496,10 +482,9 @@ def crea_progetto_completo(req: ProgettoCompletoCreate, _: Utente = Depends(requ
             id=progetto_id, nome=p.nome, cliente=p.cliente, stato=p.stato,
             tipologia=p.tipologia, priorita=p.priorita, urgenza=p.urgenza,
             data_inizio=p.data_inizio, data_fine=p.data_fine, budget_ore=p.budget_ore,
-            giornate_vendute=p.giornate_vendute, valore_contratto=p.valore_contratto,
-            descrizione=p.descrizione, fase_corrente=p.fase_corrente, sede=p.sede,
+            valore_contratto=p.valore_contratto,
+            descrizione=p.descrizione, fase_corrente=p.fase_corrente,
             pm_id=p.pm_id, azienda_id=p.azienda_id,
-            scadenza_bando=p.scadenza_bando, note=p.note,
         )
         session.add(nuovo)
 
@@ -617,7 +602,7 @@ def completa_progetto(progetto_id: str, req: ProgettoCompletoCreate,
         ha dati reali: cancellarne le fasi sarebbe distruttivo).
 
     Dell'anagrafica si scrivono SOLO i campi presenti nel body
-    (`model_fields_set`): il Wizard non manda descrizione, note, valore del
+    (`model_fields_set`): il Wizard non manda descrizione, valore del
     contratto, urgenza e altri, e assegnarli tutti li azzerava o li riportava
     ai default del DTO.
 

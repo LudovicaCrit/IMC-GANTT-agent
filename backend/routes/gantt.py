@@ -112,7 +112,7 @@ from sqlalchemy import func
 from deps import require_manager
 from models import (
     Utente, Progetto, Fase, Task, OreSettimanali, Dipendente, Sottotask,
-    get_session, filtro_stato_progetto, ordine_progetti, urgenza_fase_risolta,
+    get_session, filtro_stato_progetto, ordine_progetti,
 )
 
 
@@ -649,18 +649,6 @@ def gantt_strutturato(
                     "ore_vendute": ore_vendute_fase,
                     "ore_pianificate": float(f.ore_pianificate or 0),
                     "ore_consumate": round(ore_consumate_fase, 2),
-                    # URGENZA — GREZZA e RISOLTA, due campi distinti (A1).
-                    # `urgenza` null = «eredita dal progetto», ed è il caso
-                    # normale; `urgenza_risolta` è il valore che vale davvero.
-                    # Si espongono ENTRAMBE perché il Cantiere deve poter
-                    # mostrare «(dal progetto)» invece di un livello scelto:
-                    # appiattire tutto sul risolto nasconderebbe al PM quali
-                    # fasi ha deciso lui. È la stessa scelta, con la stessa
-                    # motivazione, di `lista_sottotask_task` sull'assegnatario.
-                    # La risoluzione NON si riscrive qui: `urgenza_fase_risolta`
-                    # è la regola, e sta in models.
-                    "urgenza": f.urgenza,
-                    "urgenza_risolta": urgenza_fase_risolta(f, p),
                     # Semaforo di fase: il peggio fra il proprio calendario e i
                     # task. `figli_rossi` = quanti task rossi ha dentro.
                     "semaforo": _semaforo_payload(semaforo_fasi.get(f.id)),

@@ -128,3 +128,62 @@ def test_baseline_e_modello_producono_lo_stesso_schema(due_schemi):
         da_migration, da_modello, "migration", "modello", lineterm="", n=0))
     assert not differenze, (
         "Baseline e modello descrivono schemi diversi:\n" + "\n".join(differenze))
+
+
+# ── I nomi seguono la convenzione ────────────────────────────────────────────
+# Il confronto qui sopra vede due schemi uguali, ma non che i nomi siano quelli
+# della convenzione (models.CONVENZIONE_NOMI): se modello e baseline sbagliassero
+# un nome nello stesso modo, sarebbero uguali e fuori regola. Qui il nome atteso
+# si ricalcola dal catalogo, da tabella e colonne, sullo schema che la baseline
+# costruisce in gantt_test. Fuori dal conto: i NOT NULL, che Postgres nomina da
+# sé e su cui la convenzione non ha voce, e `alembic_version`, che è di alembic.
+NOMI_FUORI_CONVENZIONE = """
+WITH v AS (
+  SELECT c.contype::text AS tipo, c.conname AS nome,
+         CASE c.contype
+           WHEN 'p' THEN 'pk_' || t.relname
+           WHEN 'f' THEN 'fk_' || t.relname || '_' ||
+                         (SELECT a.attname FROM pg_attribute a
+                          WHERE a.attrelid = c.conrelid AND a.attnum = c.conkey[1])
+                         || '_' || r.relname
+           WHEN 'u' THEN 'uq_' || t.relname || '_' ||
+                         (SELECT string_agg(a.attname, '_' ORDER BY k.ord)
+                          FROM unnest(c.conkey) WITH ORDINALITY k(attnum, ord)
+                          JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.attnum)
+           WHEN 'c' THEN 'ck_' || t.relname || '_'
+         END AS atteso
+  FROM pg_constraint c
+  JOIN pg_class t ON t.oid = c.conrelid
+  LEFT JOIN pg_class r ON r.oid = c.confrelid
+  WHERE c.connamespace = current_schema()::regnamespace
+    AND c.contype IN ('p', 'f', 'u', 'c') AND t.relname <> 'alembic_version'
+  UNION ALL
+  SELECT 'i', i.relname,
+         'ix_' || t.relname || '_' ||
+         (SELECT string_agg(a.attname, '_' ORDER BY k.ord)
+          FROM unnest(x.indkey::int2[]) WITH ORDINALITY k(attnum, ord)
+          JOIN pg_attribute a ON a.attrelid = x.indrelid AND a.attnum = k.attnum)
+  FROM pg_index x
+  JOIN pg_class i ON i.oid = x.indexrelid
+  JOIN pg_class t ON t.oid = x.indrelid
+  WHERE t.relnamespace = current_schema()::regnamespace AND t.relname <> 'alembic_version'
+    AND NOT EXISTS (SELECT 1 FROM pg_constraint c WHERE c.conindid = x.indexrelid)
+)
+SELECT tipo, nome, atteso, (SELECT count(*) FROM v) AS totale FROM v
+WHERE CASE WHEN tipo = 'c' THEN left(nome, length(atteso)) <> atteso ELSE nome <> atteso END
+UNION ALL
+SELECT 'totale', '', '', count(*) FROM v
+ORDER BY 1, 2
+"""
+
+
+def test_i_nomi_di_vincoli_e_indici_seguono_la_convenzione(db_test):
+    import models
+
+    with models.engine.connect() as conn:
+        assert conn.execute(text("SELECT current_database()")).scalar() == "gantt_test"
+        righe = conn.execute(text(NOMI_FUORI_CONVENZIONE)).all()
+    totale = next(r.totale for r in righe if r.tipo == "totale")
+    fuori = [f"{r.tipo} {r.nome} (atteso {r.atteso}…)" for r in righe if r.tipo != "totale"]
+    assert totale > 50, f"il catalogo ha solo {totale} vincoli e indici: schema vuoto?"
+    assert not fuori, "Nomi fuori convenzione:\n" + "\n".join(fuori)

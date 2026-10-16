@@ -71,7 +71,7 @@ def una_societa():
 
 def _payload_wizard(pid, stato, azienda_id, tipologia="ordinario"):
     """Il body che manda il Wizard (WizardCreazioneProgetto.handleSubmit):
-    né descrizione, né note, né valore del contratto, né urgenza."""
+    né descrizione, né valore del contratto, né urgenza."""
     progetto = {
         "id": pid, "nome": f"[TEST] {pid}", "cliente": "Cliente di prova",
         "tipologia": tipologia, "stato": stato, "pm_id": None,
@@ -156,9 +156,8 @@ def test_completare_una_bozza_conserva_i_campi_che_il_wizard_non_manda(
         "id": "PT510", "nome": "[TEST] bozza ricca", "stato": "Bozza",
         "tipologia": "ordinario", "azienda_id": una_societa,
         "descrizione": "Descrizione scritta a mano", "valore_contratto": 12345.5,
-        "urgenza": URGENZA_NON_DEFAULT, "priorita": "alta", "note": "Una nota",
-        "sede": "Milano", "giornate_vendute": 5, "fase_corrente": "Analisi",
-        "scadenza_bando": FRA_DUE_MESI.isoformat(),
+        "urgenza": URGENZA_NON_DEFAULT, "priorita": "alta",
+        "fase_corrente": "Analisi",
     })
     assert r.status_code == 201, r.text
 
@@ -175,11 +174,7 @@ def test_completare_una_bozza_conserva_i_campi_che_il_wizard_non_manda(
         assert p.valore_contratto == 12345.5
         assert p.urgenza == URGENZA_NON_DEFAULT
         assert p.priorita == "alta"
-        assert p.note == "Una nota"
-        assert p.sede == "Milano"
-        assert p.giornate_vendute == 5
         assert p.fase_corrente == "Analisi"
-        assert p.scadenza_bando == FRA_DUE_MESI
     finally:
         session.close()
 

@@ -3020,16 +3020,17 @@ def _serializza_stato_progetto(pid):
             # ce ne fossero state, sarebbe servito alzare `schema_version`.
             "priorita": p.priorita, "urgenza": p.urgenza,
             "data_inizio": _iso(p.data_inizio), "data_fine": _iso(p.data_fine),
-            "fase_corrente": p.fase_corrente, "sede": p.sede,
+            "fase_corrente": p.fase_corrente,
             "pm_id": p.pm_id, "pm_nome": _nome_dip(session, p.pm_id),
             "azienda_id": p.azienda_id, "azienda_nome": azienda_nome, "area": p.area,
-            "scadenza_bando": _iso(p.scadenza_bando),
-            # NB: i campi ECONOMICI (budget_ore, valore_contratto, giornate_vendute)
-            # NON stanno nel SAL: il SAL fotografa SOLO la struttura del GANTT.
-            # L'economia ha il suo archivio separato (Bollettino economico).
-            # narrativa per IA-Archivio (il "perché")
-            "descrizione": p.descrizione, "motivo_sospensione": p.motivo_sospensione,
-            "lezioni_apprese": p.lezioni_apprese,
+            # NB: i campi ECONOMICI (budget_ore, valore_contratto) NON stanno
+            # nel SAL: il SAL fotografa SOLO la struttura del GANTT. L'economia
+            # ha il suo archivio separato (Bollettino economico).
+            # Le fotografie salvate prima del passo B3 hanno in più `sede`,
+            # `scadenza_bando`, `motivo_sospensione`, `lezioni_apprese` (qui) e
+            # `motivo_blocco`, `note` (sui task): colonne tolte, che nessun
+            # lettore del SAL usa. Restano leggibili, le chiavi in più si ignorano.
+            "descrizione": p.descrizione,
         }
 
         # ore_consumate reali: SUM delle ore della vista `ore_settimanali` per
@@ -3079,7 +3080,6 @@ def _serializza_stato_progetto(pid):
                     "profilo_richiesto": t.profilo_richiesto,
                     "dipendente_id": t.dipendente_id,
                     "dipendente_nome": _nome_dip(session, t.dipendente_id),
-                    "motivo_blocco": t.motivo_blocco, "note": t.note,
                     "dipendenze": [
                         {"task_predecessore_id": d.task_predecessore_id,
                          "tipo_dipendenza": d.tipo_dipendenza}
