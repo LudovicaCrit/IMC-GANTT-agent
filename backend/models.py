@@ -75,7 +75,9 @@ CONVENZIONE_NOMI = {
     "fk": "fk_%(table_name)s_%(column_0_name)s_%(referred_table_name)s",
     "uq": "uq_%(table_name)s_%(column_0_N_name)s",
     "ck": "ck_%(table_name)s_%(constraint_name)s",
-    "ix": "ix_%(column_0_label)s",
+    # Gli indici come le UNIQUE, con TUTTE le colonne: con la sola prima, due
+    # indici diversi che cominciano dalla stessa colonna avrebbero lo stesso nome.
+    "ix": "ix_%(table_name)s_%(column_0_N_name)s",
 }
 Base = declarative_base(metadata=MetaData(naming_convention=CONVENZIONE_NOMI))
 
@@ -1118,7 +1120,7 @@ class Consuntivo(Base):
         UniqueConstraint("task_id", "dipendente_id", "settimana"),
         # La UNIQUE comincia dal task: le letture «la settimana di questa
         # persona» (/consuntivi/me, la Home) partono invece dal dipendente.
-        # Il nome lo dà la convenzione, dalla prima colonna.
+        # Il nome lo dà la convenzione, da tutte le colonne.
         Index(None, "dipendente_id", "settimana"),
     )
 

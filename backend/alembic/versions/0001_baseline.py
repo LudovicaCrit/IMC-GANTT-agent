@@ -9,7 +9,7 @@ cliente si modifica questo file invece di aggiungere migration (DECISIONI.md).
 I NOMI DEI VINCOLI E DEGLI INDICI seguono la convenzione del modello
 (`models.CONVENZIONE_NOMI`, passo B1): pk_<tabella>, fk_<tabella>_<colonna>_
 <tabella riferita>, uq_<tabella>_<colonne>, ck_<tabella>_<nome breve>,
-ix_<tabella>_<colonna>. Qui sono scritti per intero dentro `op.f()`, che li
+ix_<tabella>_<colonne>. Qui sono scritti per intero dentro `op.f()`, che li
 marca come già convertiti: alembic applica la convenzione di `target_metadata`
 anche agli oggetti di questa migration, e un nome di CHECK passato senza
 `op.f()` diventerebbe ck_<tabella>_ck_<tabella>_…. Il test di allineamento
@@ -470,7 +470,7 @@ def upgrade() -> None:
     op.create_index(op.f("ix_sottotask_dipendente_id"), "sottotask", ["dipendente_id"])
     op.create_index(op.f("ix_dipendenza_task_task_successore_id"), "dipendenza_task",
                     ["task_successore_id"])
-    op.create_index(op.f("ix_consuntivi_dipendente_id"), "consuntivi",
+    op.create_index(op.f("ix_consuntivi_dipendente_id_settimana"), "consuntivi",
                     ["dipendente_id", "settimana"])
 
     # ── Vista: le ore per settimana, sommate dai blocchi ──────────────────
