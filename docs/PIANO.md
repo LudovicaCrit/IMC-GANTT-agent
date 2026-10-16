@@ -24,12 +24,14 @@
 - ☐ B. Rifondazione dello schema: id numerici, codice dei progetti, famiglie delle attività interne in tabella, naming convention, tabelle morte via, indici, date con fuso, soldi in Numeric, ore che nessuna cascata può cancellare
 - ☐ C. Strato dati: sessioni sempre chiuse, una transazione per operazione, pool configurato, logging, gestore unico degli errori
 - ☐ D. Validazione e concorrenza: DTO con tipi e limiti, whitelist ovunque, transizioni di stato del progetto nel servizio, lock sul salvataggio delle ore
+- ☐ Registro dei cambi di stato di progetto, fase e task: chi, quando, da quale stato a quale, perché; motivo obbligatorio per Sospeso e Annullato; i cambi a cascata rimandano al cambio da cui partono (anticipato dalla fase 6)
+- ☐ Errori di validazione sempre 422, anche per l'urgenza del progetto che oggi risponde 400
 - ☐ E. Sicurezza: documentazione API chiusa in produzione, seed che rifiuta la produzione, token invalidato al logout, cookie Secure, host da env
 - ☐ F. Un solo orologio, con il fuso da configurazione
 - ☐ G. Frontend robusto: ErrorBoundary, chiamate con timeout e messaggi del server, stati di caricamento ed errore, niente doppi invii
 - ☐ H. Query che crescono coi dati: niente N+1, ore aggregate senza ricalcolare tutto, liste paginate
 - ☐ SAL: revisione completa di consolidamento, storico e confronto, dopo i blocchi C, D ed E
-- ☐ CI su GitHub Actions: pytest, build, test del disegno ed e2e su un Postgres di prova a ogni push
+- ✅ CI su GitHub Actions: pytest, build, test del disegno ed e2e su un Postgres di prova a ogni push
 - ☐ Optimistic locking: colonna versione su progetti, fasi e task; chi salva su dati cambiati riceve 409 (blocco D)
 - ☐ Log con un codice per ogni richiesta e la sua durata (blocco C)
 - ☐ Sicurezza mirata: CSRF sul cookie di sessione, XSS sul testo generato dall'IA mostrato a schermo, nessun SQL costruito con f-string (blocco E)
@@ -82,6 +84,7 @@
 - ☐ Configurazione: inquadramento base + ruoli aggiuntivi
 - ☐ Parametri di installazione in Configurazione: nome e logo dell'azienda, ore standard, giorni lavorativi e festività, soglie. Si svuota l'elenco dei valori cablati di INVENTARIO sezione 8
 - ☐ Da decidere: accesso con l'account Microsoft aziendale (Entra ID) accanto agli account locali
+- ☐ Bandi: ricognizione di come sono rappresentati oggi, domande a chi li gestisce in Innovation Plaza, poi il modello (ciclo candidatura, scadenza, esito, prima di diventare progetto)
 - ☐ 🖐 Account per tutti i dipendenti; pm_id assegnato ai progetti
 
 **Chiusura**: ogni ruolo vede e modifica esattamente ciò che la matrice prevede, verificato da e2e per ruolo.
@@ -94,6 +97,7 @@
 - ☐ Stima residua resa evidente; oltre soglia il PM ri-stanzia
 - ☐ Avanzamento da ore in GANTT, Cantiere e Home
 - ☐ Soccorso con conferma dell'aiutato
+- ☐ Segnalazioni: decidere se la tabella diventa la coda da ratificare o viene assorbita da quella
 
 **Chiusura**: un'assegnazione a voce arriva nel piano in meno di un minuto, e il PM la vede.
 
@@ -112,11 +116,11 @@
 - ☐ Estrazione da data_db_impl.py dei domini semaforo, scenari e SAL in moduli di servizio, a comportamento invariato
 - ☐ Infrastruttura comune: streaming, timeout lungo la catena, output strutturato con schema, retry
 - ☐ IA attivabile per installazione da configurazione; limite di chiamate contemporanee e tetto di spesa
-- ☐ Registro delle transizioni di stato
+- ☐ Registro delle decisioni sulle proposte dell'IA: chi ha deciso, cosa è stato applicato, con quale esito (era la tabella interventi)
 - ☐ Sintesi per il management nel cruscotto
 - ☐ Costruisci-GANTT nel Wizard del Cantiere (recupero dell'embrione di Pipeline)
 - ☐ task_competenze, semaforo strato 2, scenari con OR-Tools, capacità che tiene conto dei periodi di assenza approvati 🖐 (competenze da popolare)
-- ☐ Archivio: SAL consolidati, scheda di valutazione, lezioni
+- ☐ Archivio: SAL consolidati, scheda di valutazione, lezioni. Lezioni apprese e note di progetto in un'unica forma, con autore e data.
 - ☐ Compila-consuntivazione con avatar vocale, anche come ingresso dell'appunto al volo
 
 **Chiusura**: ogni IA ha streaming, timeout, test con fixture e passa la domanda AI Act. data_db_impl.py non esiste più.

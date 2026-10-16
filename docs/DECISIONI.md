@@ -51,6 +51,7 @@ Saturazione: si mostra sia sul piano sia sulle ore vere, affiancate; lo scarto �
 - Ritardabilità (semaforo) = piano contro calendario. Strato 1: verde, rosso e grigio da date e stati; scala dal sottotask al progetto col peggio dei figli. Strato 2 (prospettico): ore residue contro capacità residua, condivide il motore con l'IA-scenari.
 - Urgenza = priorità decisa dal management, 4 livelli, la fase la eredita dal progetto salvo un'urgenza propria, impostata come eccezione. Modula la ritardabilità, non la sostituisce.
 - Criticità = il piano contro se stesso (igiene del piano). Non guarda la data di oggi.
+- Cambi di stato: ogni cambio di stato di progetto, fase e task è registrato con chi, quando e perché. Sospeso e Annullato richiedono un motivo. Una sospensione a cascata registra anche fasi e task, rimandando al cambio del progetto, senza copiarne il motivo.
 
 ## 6. Persone, ruoli, competenze, permessi
 - Ruolo: un inquadramento base più eventuali ruoli funzionali aggiuntivi (multiruolo). Il PM è un ruolo funzionale; PM non è una competenza.
@@ -82,6 +83,7 @@ Saturazione: si mostra sia sul piano sia sulle ore vere, affiancate; lo scarto �
 - Consuntivazione.
 - Archivio: riusa il componente di dettaglio, con in più la scheda Lezioni.
 - Configurazione: fasi e task solo come modelli.
+- Descrizioni e note: ogni livello (progetto, fase, task, sottotask) ha una descrizione, scritta da chi pianifica, che dice cos'è e cosa va fatto. Il diario del lavoro (ritardi, intoppi, lavoro fuori programma) sta nelle note della Consuntivazione, per settimana e firmato. Le due cose non si mescolano.
 
 ## 9. Sicurezza
 - Autorizzazione su ogni scrittura: chi scrive e cosa può toccare. Nessun campo libero.
